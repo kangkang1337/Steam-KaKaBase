@@ -803,34 +803,6 @@
       text-align: center;
     }
 
-    .badge-grid {
-      display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: 12px;
-      padding: 14px;
-    }
-
-    .badge-item {
-      min-height: 116px;
-      border: 1px solid var(--line-soft);
-      border-radius: 8px;
-      background: #111820;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .badge-item img {
-      width: 64px;
-      height: 64px;
-      object-fit: contain;
-      image-rendering: auto;
-    }
-
     .toolbar {
       display: flex;
       align-items: center;
@@ -866,9 +838,6 @@
       .hero img {
         height: auto;
         aspect-ratio: 460 / 215;
-      }
-      .badge-grid {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
     }
 
@@ -941,9 +910,6 @@
       }
       .chart {
         height: 260px;
-      }
-      .badge-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
   </style>
@@ -1228,18 +1194,6 @@
           </div>
         </article>
 
-        <article v-if="selectedBadges.length" class="panel">
-          <div class="panel-head">
-            <span>Steam 徽章</span>
-            <span class="muted">{{ selectedBadges.length }} / 6</span>
-          </div>
-          <div class="badge-grid">
-            <div v-for="badge in selectedBadges" :key="badge.level" class="badge-item">
-              <img :src="badge.image" :alt="displayGameName(selected) + ' Lv.' + badge.level" loading="lazy" decoding="async">
-              <span>Lv. {{ badge.level }}</span>
-            </div>
-          </div>
-        </article>
       </section>
 
       <section v-else class="panel">
@@ -1369,9 +1323,6 @@
           if (!this.reviews) return '-';
           const suffix = this.reviews.review_score_desc ? ` ${this.reviews.review_score_desc}` : '';
           return `${this.reviews.review_score ?? '-'}%${suffix}`;
-        },
-        selectedBadges() {
-          return Array.isArray(this.selected?.badges) ? this.selected.badges : [];
         },
         dailyRecommendationCountdown() {
           const now = new Date(this.nowEpoch);

@@ -9,7 +9,6 @@ from . import _runtime
 ROOT = _runtime.ROOT
 DATA_DIR = _runtime.DATA_DIR
 IMAGE_CACHE_DIR = _runtime.IMAGE_CACHE_DIR
-BADGE_ASSETS_DIR = _runtime.BADGE_ASSETS_DIR
 DB_PATH = _runtime.DB_PATH
 LOG_PATH = _runtime.LOG_PATH
 PORT = _runtime.PORT

@@ -41,7 +41,6 @@ load_dotenv()
 
 DATA_DIR = ROOT / "data"
 IMAGE_CACHE_DIR = DATA_DIR / "image-cache"
-BADGE_ASSETS_DIR = ROOT / "assets" / "badges"
 DB_PATH = Path(os.getenv("STEAMKB_DB", str(DATA_DIR / "steamkb.sqlite3")))
 LOG_PATH = Path(os.getenv("STEAMKB_LOG", str(DATA_DIR / "steamkb.log")))
 LOG_RETENTION_DAYS = max(7, int(os.getenv("STEAMKB_LOG_RETENTION_DAYS", "30")))
@@ -160,7 +159,6 @@ SEEDED_DEFAULT_APPS = [
 DEFAULT_APPS = []
 UNKNOWN_GAME_NAME = "未命名游戏"
 PLACEHOLDER_NAME_RE = re.compile(r"^(?:Steam\s+)?App\s+\d+$", re.IGNORECASE)
-BADGE_ASSET_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".gif")
 ALLOWED_IMAGE_HOSTS = {
     "shared.akamai.steamstatic.com",
     "shared.cloudflare.steamstatic.com",
@@ -771,7 +769,7 @@ def ensure_schema(conn):
         UPDATE crawl_tasks
         SET status = 'skipped',
             locked_until = NULL,
-            last_error = 'screenshots disabled: Steam-KaKaBase now loads header images and optional local badges only',
+            last_error = 'screenshots disabled: Steam-KaKaBase now loads header images only',
             updated_at = ?
         WHERE task_type = 'screenshots' AND status IN ('pending', 'retry', 'running')
         """,
@@ -814,25 +812,6 @@ def clear_seeded_defaults(conn):
             (now_iso(), *default_appids),
         )
     set_crawl_state(conn, "default_apps_cleared_v1", now_iso())
-
-
-def list_badges(appid):
-    badge_dir = BADGE_ASSETS_DIR / str(int(appid))
-    if not badge_dir.is_dir():
-        return []
-    rows = []
-    for level in range(1, 7):
-        for suffix in BADGE_ASSET_EXTENSIONS:
-            path = badge_dir / f"level-{level}{suffix}"
-            if path.is_file():
-                rows.append(
-                    {
-                        "level": level,
-                        "image": f"/assets/badges/{int(appid)}/{path.name}",
-                    }
-                )
-                break
-    return rows
 
 
 def chunks(rows, size):
@@ -3836,7 +3815,6 @@ def clean_game(row, summary=False):
         "publisher": item.get("publisher"),
         "release_date": item.get("release_date"),
         "is_free": bool(item.get("is_free")),
-        "badges": list_badges(item.get("appid")),
         "updated_at": item.get("updated_at"),
         "tracked": bool(item.get("tracked")),
     }

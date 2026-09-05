@@ -1,0 +1,1975 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Steam-KaKaBase</title>
+  <link id="pageIcon" rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="apple-touch-icon" href="/assets/kakabase-bird-256.png">
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #12161b;
+      --panel: #171d24;
+      --panel-2: #1d252e;
+      --line: #2b3743;
+      --line-soft: #24303a;
+      --text: #dbe4ec;
+      --muted: #8d9ba8;
+      --faint: #5f6e7b;
+      --accent: #66c0f4;
+      --green: #8bc34a;
+      --yellow: #c7a53c;
+      --red: #e06c75;
+      --blue: #4ea3d8;
+      --shadow: rgba(0, 0, 0, .25);
+      --radius: 10px;
+      --radius-sm: 8px;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    button, input {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      background: #22303a;
+      color: var(--text);
+      height: 34px;
+      padding: 0 12px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); color: white; }
+    button:disabled { opacity: .55; cursor: wait; }
+
+    .topbar {
+      height: 52px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 22px;
+      background: #0f1419;
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      box-shadow: 0 8px 18px var(--shadow);
+    }
+
+    .nav-wrap {
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .menu-btn {
+      width: 36px;
+      padding: 0;
+      display: inline-grid;
+      place-items: center;
+      background: #18212a;
+    }
+
+    .menu-lines,
+    .menu-lines::before,
+    .menu-lines::after {
+      display: block;
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: #dbe4ec;
+      content: "";
+    }
+
+    .menu-lines {
+      position: relative;
+    }
+
+    .menu-lines::before,
+    .menu-lines::after {
+      position: absolute;
+      left: 0;
+    }
+
+    .menu-lines::before { top: -5px; }
+    .menu-lines::after { top: 5px; }
+
+    .app-menu {
+      position: absolute;
+      top: 42px;
+      left: 0;
+      width: 168px;
+      padding: 6px;
+      display: grid;
+      gap: 4px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, .42);
+      z-index: 20;
+    }
+
+    .app-menu button {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border-color: transparent;
+    }
+
+    .app-menu button.active {
+      background: #22303b;
+      border-color: var(--line-soft);
+      color: white;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 138px;
+      color: white;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .brand-icon {
+      width: 31px;
+      height: 31px;
+      object-fit: contain;
+      flex: 0 0 auto;
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .45));
+    }
+
+    .search {
+      flex: 1;
+      max-width: 620px;
+      position: relative;
+    }
+
+    .search input {
+      width: 100%;
+      height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: #0b1116;
+      color: var(--text);
+      outline: none;
+    }
+
+    .search input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(102, 192, 244, .22);
+    }
+
+    .suggestions {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 39px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, .38);
+    }
+
+    .suggestion {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      width: 100%;
+      height: 45px;
+      padding: 5px 9px;
+      border: 0;
+      border-bottom: 1px solid var(--line-soft);
+      background: transparent;
+      text-align: left;
+    }
+
+    .suggestion img {
+      width: 70px;
+      height: 26px;
+      object-fit: cover;
+      background: #0b1116;
+    }
+
+    .suggestion-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #eef6fb;
+      font-weight: 700;
+    }
+
+    .suggestion-meta {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+      gap: 18px;
+      padding: 18px 22px 24px;
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+
+    .shell.single {
+      grid-template-columns: 1fr;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      height: 39px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 0 12px;
+      background: #1a222b;
+      border-bottom: 1px solid var(--line);
+      color: #f0f5f9;
+      font-weight: 700;
+    }
+
+    .muted { color: var(--muted); }
+    .faint { color: var(--faint); }
+
+    .game-list {
+      display: grid;
+      max-height: calc(100vh - 108px);
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    .game-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 64px;
+      gap: 8px;
+      padding: 11px 12px;
+      min-height: 62px;
+      width: 100%;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--line-soft);
+      text-align: left;
+    }
+
+    .game-row.active {
+      background: #22303b;
+      border-left: 3px solid var(--accent);
+      padding-left: 9px;
+    }
+
+    .home-placeholder {
+      min-height: calc(100vh - 130px);
+      display: grid;
+      place-items: center;
+      padding: 32px;
+      color: var(--text);
+      text-align: center;
+    }
+
+    .home-card {
+      width: min(1180px, 100%);
+      display: grid;
+      justify-items: center;
+      gap: 24px;
+      position: relative;
+    }
+
+    .home-monitor {
+      position: absolute;
+      top: 0;
+      right: 0;
+      display: grid;
+      justify-items: end;
+      gap: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.3;
+      text-align: right;
+    }
+
+    .home-monitor strong {
+      color: #d9e8f2;
+      font-weight: 700;
+    }
+
+    .home-monitor.cooling strong {
+      color: #e7bd6b;
+    }
+
+    .home-logo {
+      width: 142px;
+      height: 142px;
+      object-fit: contain;
+      filter: drop-shadow(0 14px 28px rgba(0, 0, 0, .36));
+    }
+
+    .home-lines {
+      width: 100%;
+      display: grid;
+      gap: 10px;
+      color: #eef6fb;
+      font-size: 20px;
+      line-height: 1.45;
+      font-weight: 700;
+    }
+
+    .home-sign {
+      width: 100%;
+      margin-top: 4px;
+      color: var(--muted);
+      text-align: center;
+      transform: translateX(44px);
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .home-picks {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      text-align: left;
+    }
+
+    .pick-card {
+      min-height: 240px;
+      display: grid;
+      grid-template-rows: auto 112px minmax(0, 1fr);
+      gap: 12px;
+      padding: 14px;
+      background: #121920;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .pick-label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .pick-label-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .pick-refresh,
+    .pick-blurb {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .pick-blurb {
+      color: #aebdca;
+    }
+
+    .pick-image {
+      width: 100%;
+      height: 112px;
+      object-fit: cover;
+      border-radius: var(--radius-sm);
+      background: #0b1116;
+    }
+
+    .pick-content {
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .pick-title {
+      color: #eef6fb;
+      font-size: 17px;
+      line-height: 1.25;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .pick-meta {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .pick-empty {
+      height: 112px;
+      display: grid;
+      place-items: center;
+      padding: 12px;
+      background: #0b1116;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--faint);
+      text-align: center;
+    }
+
+    .meme-frame {
+      grid-row: 2 / span 2;
+      display: grid;
+      min-height: 188px;
+      place-items: center;
+      background: #0b1116;
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+
+    .meme-frame img {
+      width: 100%;
+      height: 100%;
+      max-height: 206px;
+      object-fit: contain;
+    }
+
+    .hot-page {
+      display: grid;
+      gap: 12px;
+    }
+
+    .hot-controls {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 12px;
+      background: #121920;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .toggle {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: #18212a;
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toggle input {
+      width: 14px;
+      height: 14px;
+      accent-color: var(--accent);
+    }
+
+    .hot-list {
+      display: grid;
+    }
+
+    .hot-row {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr) 86px 132px 96px;
+      gap: 12px;
+      align-items: center;
+      min-height: 60px;
+      padding: 8px 12px;
+      border: 0;
+      border-bottom: 1px solid var(--line-soft);
+      background: transparent;
+      text-align: left;
+    }
+
+    .hot-row:hover {
+      background: #1b2530;
+    }
+
+    .hot-row img {
+      width: 90px;
+      height: 34px;
+      object-fit: cover;
+      background: #0b1116;
+      border-radius: 4px;
+    }
+
+    .hot-title {
+      min-width: 0;
+    }
+
+    .hot-rank {
+      color: var(--faint);
+      font-size: 12px;
+      margin-right: 7px;
+    }
+
+    .hot-name {
+      color: #eef6fb;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .hot-meta {
+      display: block;
+      margin-top: 5px;
+      color: var(--faint);
+      font-size: 12px;
+      font-weight: 400;
+    }
+
+    .hot-review {
+      color: var(--muted);
+      font-weight: 700;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .hot-players {
+      color: #dbe4ec;
+      font-weight: 700;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .hot-price {
+      justify-self: end;
+    }
+
+
+    .game-name {
+      display: block;
+      font-weight: 700;
+      color: #eef6fb;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 7px;
+    }
+
+    .row-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .pill {
+      min-width: 54px;
+      min-height: 28px;
+      padding: 3px 6px;
+      border-radius: var(--radius-sm);
+      background: #10171d;
+      border: 1px solid var(--line-soft);
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .price-low {
+      background: #0f3a24;
+      border-color: #1f8f51;
+      color: #d7ffe8;
+      box-shadow: inset 0 0 0 1px rgba(139, 195, 74, .08);
+    }
+
+    .price-discount {
+      background: #0d2f4d;
+      border-color: #2479b8;
+      color: #d8efff;
+      box-shadow: inset 0 0 0 1px rgba(102, 192, 244, .1);
+    }
+
+    .detail {
+      display: grid;
+      gap: 18px;
+      min-width: 0;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(220px, 360px) minmax(0, 1fr);
+      min-height: 238px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .hero img {
+      width: 100%;
+      height: 238px;
+      object-fit: contain;
+      background: #0b1116;
+    }
+
+    .hero-body {
+      padding: 18px;
+      display: grid;
+      align-content: space-between;
+      gap: 16px;
+    }
+
+    .release-meta {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .hero-title-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .favorite-btn {
+      flex: 0 0 auto;
+      min-width: 78px;
+    }
+
+    .favorite-btn.active {
+      color: #c7a53c;
+      border-color: rgba(199, 165, 60, .65);
+      background: rgba(199, 165, 60, .12);
+    }
+
+    h1 {
+      margin: 0 0 9px;
+      font-size: 25px;
+      line-height: 1.18;
+      color: white;
+      letter-spacing: 0;
+    }
+
+    .desc {
+      color: #aab7c4;
+      line-height: 1.55;
+      max-width: 860px;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      min-height: 72px;
+      padding: 10px 12px;
+      background: #121920;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+    }
+
+    .stat.price-low {
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      text-align: center;
+      background: #0f3a24;
+      border-color: #1f8f51;
+    }
+
+    .stat.price-discount {
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      text-align: center;
+      background: #0d2f4d;
+      border-color: #2479b8;
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 7px;
+    }
+
+    .stat.price-low .stat-label {
+      color: #9edfb9;
+    }
+
+    .stat.price-discount .stat-label {
+      color: #95d6ff;
+    }
+
+    .stat-value {
+      color: #f4f8fb;
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.2;
+      overflow-wrap: anywhere;
+    }
+
+    .stat.price-low .stat-value {
+      color: #effff5;
+    }
+
+    .stat.price-discount .stat-value {
+      color: #f1f9ff;
+    }
+
+    .stat-note {
+      margin-top: 6px;
+      color: var(--faint);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+
+    .stat.price-low .stat-note {
+      display: none;
+    }
+
+    .stat.price-discount .stat-note {
+      display: none;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 18px;
+    }
+
+    .chart {
+      height: 306px;
+      width: 100%;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th, td {
+      height: 38px;
+      border-bottom: 1px solid var(--line-soft);
+      padding: 0 10px;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    th {
+      color: #a7b6c4;
+      background: #141b22;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    td { color: #dce6ef; }
+    .discount { color: var(--green); font-weight: 700; }
+    .error { color: var(--red); padding: 12px; }
+    .empty { padding: 24px; color: var(--muted); text-align: center; }
+    .empty-cell {
+      height: 64px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .badge-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .badge-item {
+      min-height: 116px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #111820;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .badge-item img {
+      width: 64px;
+      height: 64px;
+      object-fit: contain;
+      image-rendering: auto;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .status {
+      min-height: 22px;
+      padding: 0 22px;
+      max-width: 1440px;
+      margin: 10px auto 0;
+      color: var(--muted);
+    }
+
+    @media (max-width: 980px) {
+      .shell, .hero, .grid-2 {
+        grid-template-columns: 1fr;
+      }
+      .hot-row {
+        grid-template-columns: 84px minmax(0, 1fr) 76px 110px 86px;
+      }
+      .hot-row img {
+        width: 82px;
+        height: 31px;
+      }
+      .game-list {
+        max-height: 320px;
+      }
+      .stats {
+        grid-template-columns: repeat(2, minmax(120px, 1fr));
+      }
+      .hero img {
+        height: auto;
+        aspect-ratio: 460 / 215;
+      }
+      .badge-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 620px) {
+      .topbar {
+        height: auto;
+        align-items: stretch;
+        flex-direction: row;
+        flex-wrap: wrap;
+        padding: 12px;
+        gap: 10px;
+      }
+      .brand {
+        min-width: 0;
+      }
+      .shell {
+        padding: 12px;
+      }
+      .home-lines {
+        font-size: 17px;
+      }
+      .home-logo {
+        width: 112px;
+        height: 112px;
+      }
+      .home-picks {
+        grid-template-columns: 1fr;
+      }
+      .home-monitor {
+        position: static;
+        justify-items: center;
+        text-align: center;
+      }
+      .search {
+        order: 3;
+        flex-basis: 100%;
+        max-width: none;
+      }
+      .toolbar {
+        margin-left: auto;
+      }
+      .hot-row {
+        grid-template-columns: 74px minmax(0, 1fr) 70px 78px;
+        gap: 8px;
+      }
+      .hot-row img {
+        width: 72px;
+        height: 28px;
+      }
+      .hot-players {
+        text-align: right;
+        font-size: 12px;
+      }
+      .hot-price {
+        grid-column: 4;
+        grid-row: 2;
+      }
+      .hot-title {
+        grid-row: 1 / span 2;
+      }
+      .stats {
+        grid-template-columns: 1fr;
+      }
+      .panel-head {
+        height: auto;
+        min-height: 39px;
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 9px 12px;
+      }
+      .chart {
+        height: 260px;
+      }
+      .badge-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="nav-wrap">
+        <button class="menu-btn" @click="navOpen = !navOpen" aria-label="打开导航菜单">
+          <span class="menu-lines"></span>
+        </button>
+        <div v-if="navOpen" class="app-menu">
+          <button :class="{active: activePage === 'home'}" @click="switchPage('home')">主页</button>
+          <button :class="{active: activePage === 'tracker'}" @click="switchPage('tracker')">游戏详情</button>
+          <button :class="{active: activePage === 'hot'}" @click="switchPage('hot')">热门榜</button>
+          <button :class="{active: activePage === 'niche'}" @click="switchPage('niche')">小众池</button>
+        </div>
+      </div>
+      <div class="brand"><img class="brand-icon" :src="logoSrc" alt=""><span>Steam-KaKaBase</span></div>
+      <div class="search">
+        <input v-model.trim="query" @focus="onSearchFocus" @blur="onSearchBlur" @input="queueSearch" placeholder="搜索 Steam 游戏" aria-label="搜索 Steam 游戏">
+        <div v-if="dropdownItems.length" class="suggestions">
+          <button class="suggestion" v-for="item in dropdownItems" :key="item.appid" @mousedown.prevent @click="openSuggestion(item)">
+            <img :src="cachedImage(item.tiny_image) || placeholderImage" alt="" loading="lazy" decoding="async">
+            <span class="suggestion-title">{{ displayGameName(item) }}</span>
+            <span class="suggestion-meta">{{ item.current_players !== undefined ? formatPlayers(item.current_players) + ' 在线' : (item.tracked ? '已收藏' : '查看') }}</span>
+          </button>
+        </div>
+        <div v-else-if="searchFocused && query.length >= 2" class="suggestions search-empty">
+          {{ searching ? '正在搜索…' : '暂无结果，Steam 接口暂时不可用时会优先显示本地目录' }}
+        </div>
+      </div>
+      <div class="toolbar">
+        <button @click="loadGames" :disabled="busy">刷新列表</button>
+      </div>
+    </header>
+
+    <div class="status">
+      <span v-if="message">{{ message }}</span>
+      <span v-else-if="steamCooldownSeconds">Steam：冷却中，剩余 {{ Math.ceil(steamCooldownSeconds / 60) }} 分钟。</span>
+      <span v-else-if="backendProgress">{{ backendProgress }}</span>
+      <span v-else-if="refreshing">后台自动采集中，页面可正常使用。</span>
+      <span v-else>自动采集：在线人数每 {{ playerRefreshMinutes }} 分钟一次，价格/评价每 {{ priceRefreshHours }} 小时一次。</span>
+    </div>
+
+    <main v-if="activePage === 'home'" class="shell single">
+      <section class="panel home-placeholder">
+        <div class="home-card">
+          <div class="home-monitor" :class="{cooling: homeCooldownSeconds}">
+            <strong>{{ homeMonitorTitle }}</strong>
+            <span>{{ homeMonitorDetail }}</span>
+          </div>
+          <img class="home-logo" :src="logoSrc" alt="">
+          <div class="home-lines">
+            <div>Welcome to SteamKaKaBase!</div>
+            <div>Hope you can find what you want here!</div>
+            <div>Don't forget to have fun today!</div>
+          </div>
+          <div class="home-sign">——by KK</div>
+          <div class="home-picks">
+            <article class="pick-card">
+              <div class="pick-label">今日史低</div>
+              <template v-if="homePicks.historical_low">
+                <img class="pick-image" :src="cachedImage(homePicks.historical_low.header_image) || placeholderImage" alt="" loading="lazy" decoding="async">
+                <div class="pick-content">
+                  <div class="pick-title">{{ displayGameName(homePicks.historical_low) }}</div>
+                  <div class="pick-meta">
+                    <span>{{ formatPlayers(homePicks.historical_low.current_players) }} 在线</span>
+                    <span>{{ homePicks.historical_low.review_score ?? '-' }}% 好评</span>
+                    <span class="pill price-low">{{ displayCnPrice(homePicks.historical_low) }}</span>
+                  </div>
+                  <button @click="selectGame(homePicks.historical_low.appid)">查看详情</button>
+                </div>
+              </template>
+              <div v-else class="pick-empty">暂无国区史低数据</div>
+            </article>
+
+            <article class="pick-card">
+              <div class="pick-label-row">
+                <div class="pick-label">每日小众宝藏游戏</div>
+                <div class="pick-refresh">{{ dailyRecommendationCountdown }}</div>
+              </div>
+              <template v-if="homePicks.niche">
+                <img class="pick-image" :src="cachedImage(homePicks.niche.header_image) || placeholderImage" alt="" loading="lazy" decoding="async">
+                <div class="pick-content">
+                  <div class="pick-title">{{ displayGameName(homePicks.niche) }}</div>
+                  <div class="pick-blurb">{{ dailyNicheBlurb(homePicks.niche) }}</div>
+                  <div class="pick-meta">
+                    <span>{{ formatPlayers(homePicks.niche.current_players) }} 在线</span>
+                    <span>{{ homePicks.niche.review_score ?? '-' }}% 好评</span>
+                    <span class="pill" :class="{'price-low': homePicks.niche.cn_price_historical_low, 'price-discount': homePicks.niche.cn_price_discounted}">{{ displayCnPrice(homePicks.niche) }}</span>
+                  </div>
+                  <button @click="selectGame(homePicks.niche.appid)">查看详情</button>
+                </div>
+              </template>
+              <div v-else class="pick-empty">暂无符合条件的游戏</div>
+            </article>
+
+            <article class="pick-card">
+              <div class="pick-label">今日表情包</div>
+              <div class="meme-frame" v-if="homePicks.meme && homePicks.meme.url">
+                <img :src="homePicks.meme.url" alt="" loading="lazy" decoding="async">
+              </div>
+              <div v-else class="pick-empty">把 gif / webp / png 放进 assets/memes 后会显示</div>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <main v-else-if="activePage === 'niche'" class="shell single">
+      <section class="panel hot-page">
+        <div class="panel-head">
+          <span>小众池</span>
+          <span class="muted">{{ nichePoolSummary }}</span>
+        </div>
+        <div v-if="nicheGames.length" class="hot-list">
+          <button v-for="game in nicheGames" :key="game.appid" class="hot-row" @click="selectGame(game.appid)">
+            <img :src="cachedImage(game.header_image) || placeholderImage" alt="" loading="lazy" decoding="async">
+            <span class="hot-title">
+              <span class="hot-name"><span class="hot-rank">#{{ game.rank }}</span>{{ displayGameName(game) }}</span>
+              <span class="hot-meta">峰值 {{ formatPlayers(game.peak_players) }} · 更新于 {{ localTime(game.fetched_at, true) }}</span>
+            </span>
+            <span class="hot-review">{{ game.review_score ?? '-' }}% 好评</span>
+            <span class="hot-players">{{ formatPlayers(game.current_players) }} 在线</span>
+            <span class="pill hot-price" :class="{'price-low': game.cn_price_historical_low, 'price-discount': game.cn_price_discounted}">{{ displayCnPrice(game) }}</span>
+          </button>
+        </div>
+        <div v-else class="empty">小众池正在建立，满足条件的游戏会自动出现在这里。</div>
+      </section>
+    </main>
+
+    <main v-else-if="activePage === 'hot'" class="shell single">
+      <section class="panel hot-page">
+        <div class="panel-head">
+          <span>热门榜</span>
+          <span class="muted">{{ filteredHotPageGames.length }} / {{ hotPageGames.length }} apps · 更新于 {{ latestHotUpdatedAt }}</span>
+        </div>
+        <div class="hot-controls">
+          <label class="toggle">
+            <input type="checkbox" v-model="hotFilterPaid">
+            <span>仅查看付费游戏</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" v-model="hotFilterLow">
+            <span>仅查看史低游戏</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" v-model="hotSortReview">
+            <span>按好评率排序</span>
+          </label>
+          <button @click="refreshHotPage" :disabled="busy">刷新热门榜</button>
+        </div>
+        <div v-if="filteredHotPageGames.length" class="hot-list">
+          <button v-for="game in filteredHotPageGames" :key="game.appid" class="hot-row" @click="selectGame(game.appid)">
+            <img :src="cachedImage(game.header_image) || placeholderImage" alt="" loading="lazy" decoding="async">
+            <span class="hot-title">
+              <span class="hot-name"><span class="hot-rank">#{{ game.rank }}</span>{{ displayGameName(game) }}</span>
+              <span class="hot-meta">更新于 {{ localTime(game.fetched_at, true) }}</span>
+            </span>
+            <span class="hot-review">{{ game.review_score ?? '-' }}% 好评</span>
+            <span class="hot-players">{{ formatPlayers(game.current_players) }} 在线</span>
+            <span class="pill hot-price" :class="{'price-low': game.cn_price_historical_low, 'price-discount': game.cn_price_discounted}">{{ displayCnPrice(game) }}</span>
+          </button>
+          <div class="empty-cell">{{ hotPageLimit < 1000 ? '向下滚动继续加载' : '已加载到本地上限' }}</div>
+        </div>
+        <div v-else-if="!hotPageGames.length && hotRunning" class="empty">正在建立热门榜，稍后会自动显示本地缓存。</div>
+        <div v-else class="empty">{{ hotPageGames.length ? '暂无符合条件的热门游戏。' : '暂无本地热门榜，后台会自动建立。' }}</div>
+      </section>
+    </main>
+
+    <main v-else class="shell">
+      <aside class="panel">
+        <div class="panel-head">
+          <span>已跟踪游戏</span>
+          <span class="muted">{{ games.length }} apps</span>
+        </div>
+        <div v-if="games.length" class="game-list">
+          <button v-for="game in games" :key="game.appid" class="game-row" :class="{active: selected && selected.appid === game.appid}" @click="selectGame(game.appid)">
+            <span>
+              <span class="game-name">{{ displayGameName(game) }}</span>
+              <span class="row-meta">
+                <span>{{ formatPlayers(game.player_count) }} 在线</span>
+                <span>{{ game.review_score ?? '-' }}% 好评</span>
+              </span>
+            </span>
+            <span class="pill" :class="{'price-low': game.cn_price_historical_low, 'price-discount': game.cn_price_discounted}">{{ displayCnPrice(game) }}</span>
+          </button>
+        </div>
+        <div v-else class="empty">暂无数据，搜索游戏后加入跟踪。</div>
+      </aside>
+
+      <section class="detail" v-if="selected">
+        <article class="hero">
+          <img :src="cachedImage(selected.header_image) || placeholderImage" alt="" loading="eager" decoding="async">
+          <div class="hero-body">
+            <div>
+              <div class="hero-title-row">
+                <h1>{{ displayGameName(selected) }}</h1>
+                <button class="favorite-btn" :class="{active: selected.tracked}" @click="toggleFavorite" :disabled="busy">
+                  {{ selected.tracked ? '已收藏' : '收藏' }}
+                </button>
+              </div>
+              <div class="desc">{{ selected.short_description || '暂无简介。' }}</div>
+              <div v-if="selected.release_date" class="release-meta">发行日期：{{ selected.release_date }}</div>
+              <div class="release-meta">数据更新：在线 {{ relativeAge(playerHistory[playerHistory.length - 1]?.fetched_at) }}，价格 {{ relativeAge(selectedPrices.find(price => price.region === 'CN')?.fetched_at) }}，评价 {{ relativeAge(reviews?.fetched_at) }}</div>
+            </div>
+            <div class="stats">
+              <div class="stat">
+                <div class="stat-label">当前在线</div>
+                <div class="stat-value">{{ formatPlayers(latestPlayers) }}</div>
+              </div>
+              <div class="stat">
+                <div class="stat-label">本站历史峰值</div>
+                <div class="stat-value">{{ formatPlayers(selected.site_peak_players) }}</div>
+                <div v-if="selected.site_peak_recorded_since" class="stat-note">自 {{ localTime(selected.site_peak_recorded_since, true) }} 起记录</div>
+              </div>
+              <div class="stat">
+                <div class="stat-label">玩家评价</div>
+                <div class="stat-value">{{ latestReviewScore }}</div>
+              </div>
+              <div class="stat" :class="{'price-low': isHistoricalLow('CN'), 'price-discount': isDiscounted('CN')}">
+                <div class="stat-label">国区价格</div>
+                <div class="stat-value">{{ currentPrice('CN') }}</div>
+                <div class="stat-note">中国区史低：{{ historicalLowPrice('CN') }}<span v-if="historicalLowStatus('CN')"> · {{ historicalLowStatus('CN') }}</span></div>
+                <div v-if="historicalLowNote('CN')" class="stat-note">{{ historicalLowNote('CN') }}</div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <div class="grid-2">
+          <article class="panel">
+            <div class="panel-head">
+              <span>历史价格</span>
+              <span class="muted">人民币换算</span>
+            </div>
+            <div ref="priceChart" class="chart"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-head">
+              <span>在线人数</span>
+              <span class="muted">快照柱形图</span>
+            </div>
+            <div ref="playerChart" class="chart"></div>
+          </article>
+        </div>
+
+        <article class="panel">
+          <div class="panel-head">
+            <span>全区价格快照</span>
+            <span class="muted">{{ selectedPrices.length }} regions</span>
+          </div>
+          <div style="overflow:auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>地区</th>
+                  <th>价格</th>
+                  <th>原价</th>
+                  <th>折扣</th>
+                  <th>币种</th>
+                  <th>来源</th>
+                  <th>采集时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="price in selectedPrices" :key="price.region + price.fetched_at">
+                  <td>{{ price.region }}</td>
+                  <td>{{ price.final_formatted || cents(price.final, price.currency) }}</td>
+                  <td>{{ cents(price.initial, price.currency) }}</td>
+                  <td class="discount">{{ price.discount_percent ? '-' + price.discount_percent + '%' : '-' }}</td>
+                  <td>{{ price.currency || '-' }}</td>
+                  <td>{{ price.source }}</td>
+                  <td>{{ localTime(price.fetched_at) }}</td>
+                </tr>
+                <tr v-if="!selectedPrices.length">
+                  <td colspan="7" class="empty-cell">还没有价格快照，等待下一次自动采集。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article v-if="selectedBadges.length" class="panel">
+          <div class="panel-head">
+            <span>Steam 徽章</span>
+            <span class="muted">{{ selectedBadges.length }} / 6</span>
+          </div>
+          <div class="badge-grid">
+            <div v-for="badge in selectedBadges" :key="badge.level" class="badge-item">
+              <img :src="badge.image" :alt="displayGameName(selected) + ' Lv.' + badge.level" loading="lazy" decoding="async">
+              <span>Lv. {{ badge.level }}</span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section v-else class="panel">
+        <div class="empty">点击搜索栏查看热门榜，或选择左侧已收藏游戏。</div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const { createApp, nextTick } = Vue;
+
+    createApp({
+      data() {
+        const birdIcon = 'data:image/png;base64,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';
+        return {
+          games: [],
+          selected: null,
+          selectedPrices: [],
+          priceHistory: [],
+          playerHistory: [],
+          reviews: null,
+          homePicks: {
+            historical_low: null,
+            niche: null,
+            meme: null
+          },
+          nowEpoch: Date.now(),
+          dailyRefreshKey: '',
+          activePage: 'home',
+          navOpen: false,
+          query: '',
+          suggestions: [],
+          hotGames: [],
+          hotPageGames: [],
+          nicheGames: [],
+          nichePoolTotal: 0,
+          hotFilterPaid: false,
+          hotFilterLow: false,
+          hotSortReview: false,
+          hotPageLimit: 100,
+          hotLoadingMore: false,
+          hotLastAutoRefreshAt: 0,
+          hotVersion: '',
+          hotRunning: false,
+          searchFocused: false,
+          searchTimer: null,
+          searchSeq: 0,
+          searching: false,
+          busy: false,
+          refreshing: false,
+          wasRefreshing: false,
+          statusTimer: null,
+          message: '',
+          playerRefreshMinutes: 30,
+          priceRefreshHours: 24,
+          itadConfigured: false,
+          historicalLowCount: 0,
+          historylowRunning: false,
+          nichePoolCount: 0,
+          steamCooldownSeconds: 0,
+          steamCooldownObservedAt: Date.now(),
+          steamCatalogCount: 0,
+          steamCatalogEnrichedCount: 0,
+          catalogEnrichDailyLimit: 0,
+          backendProgress: '',
+          logoSrc: birdIcon,
+          cnyRates: {
+            CNY: 1,
+            USD: 7.2,
+            EUR: 7.8,
+            GBP: 9.1,
+            JPY: 0.049,
+            KRW: 0.0052,
+            HKD: 0.92,
+            TWD: 0.23,
+            BRL: 1.35,
+            RUB: 0.08,
+            TRY: 0.17,
+            ARS: 0.005
+          },
+          priceChart: null,
+          playerChart: null,
+          placeholderImage: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="460" height="215"><rect width="100%" height="100%" fill="#0b1116"/><text x="50%" y="50%" fill="#5f6e7b" font-family="Arial" font-size="22" text-anchor="middle">Steam-KaKaBase</text></svg>')
+        };
+      },
+      computed: {
+        nichePoolSummary() {
+          const formula = '加权：好评率 45% · 评测量 30% · 本站峰值 20% · 当前活跃度 5%';
+          if (this.nichePoolTotal <= 20) {
+            return `当前池未满，展示全部 ${this.nicheGames.length} 条 · ${formula}`;
+          }
+          return `从加权分前 50% 随机抽取，按分数排序 · ${formula}`;
+        },
+        dropdownItems() {
+          if (!this.searchFocused) return [];
+          return this.query.length >= 2 ? this.suggestions : this.hotGames;
+        },
+        filteredHotPageGames() {
+          let rows = [...this.hotPageGames];
+          if (this.hotFilterPaid) {
+            rows = rows.filter(game => game.is_paid);
+          }
+          if (this.hotFilterLow) {
+            rows = rows.filter(game => game.cn_price_historical_low);
+          }
+          if (this.hotSortReview) {
+            rows.sort((a, b) => {
+              const reviewDiff = Number(b.review_score ?? -1) - Number(a.review_score ?? -1);
+              if (reviewDiff) return reviewDiff;
+              return Number(b.current_players || 0) - Number(a.current_players || 0);
+            });
+          }
+          return rows;
+        },
+        latestHotUpdatedAt() {
+          const times = this.hotPageGames
+            .map(game => new Date(game.fetched_at).getTime())
+            .filter(value => Number.isFinite(value));
+          if (!times.length) return '-';
+          return this.localTime(Math.max(...times), true);
+        },
+        latestPlayers() {
+          const last = this.playerHistory[this.playerHistory.length - 1];
+          return last ? last.player_count : this.selected?.player_count;
+        },
+        latestReviewScore() {
+          if (!this.reviews) return '-';
+          const suffix = this.reviews.review_score_desc ? ` ${this.reviews.review_score_desc}` : '';
+          return `${this.reviews.review_score ?? '-'}%${suffix}`;
+        },
+        selectedBadges() {
+          return Array.isArray(this.selected?.badges) ? this.selected.badges : [];
+        },
+        dailyRecommendationCountdown() {
+          const now = new Date(this.nowEpoch);
+          const next = new Date(now);
+          next.setHours(0, 10, 0, 0);
+          if (next <= now) next.setDate(next.getDate() + 1);
+          const seconds = Math.max(0, Math.floor((next - now) / 1000));
+          const hours = Math.floor(seconds / 3600);
+          const minutes = Math.floor((seconds % 3600) / 60);
+          const remainder = seconds % 60;
+          return `距刷新 ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+        },
+        homeCooldownSeconds() {
+          const elapsed = Math.floor((this.nowEpoch - this.steamCooldownObservedAt) / 1000);
+          return Math.max(0, this.steamCooldownSeconds - Math.max(0, elapsed));
+        },
+        homeMonitorTitle() {
+          if (this.homeCooldownSeconds) return `Steam 冷却 ${this.formatDuration(this.homeCooldownSeconds)}`;
+          if (this.hotRunning) return 'Catalog 后台补全中';
+          return 'Steam 采集就绪';
+        },
+        homeMonitorDetail() {
+          const catalog = this.steamCatalogCount || 0;
+          const enriched = this.steamCatalogEnrichedCount || 0;
+          const quota = this.catalogEnrichDailyLimit || 0;
+          return `Catalog ${enriched.toLocaleString()} / ${catalog.toLocaleString()} · 每日配额 ${quota.toLocaleString()}`;
+        }
+      },
+      mounted() {
+        const pageIcon = document.getElementById('pageIcon');
+        if (pageIcon) pageIcon.href = this.logoSrc;
+        this.loadGames();
+        this.loadHomePicks();
+        this.loadStatus();
+        this.statusTimer = setInterval(this.loadStatus, 5000);
+        this.clockTimer = setInterval(() => {
+          const previousDate = new Date(this.nowEpoch).toDateString();
+          this.nowEpoch = Date.now();
+          if (new Date(this.nowEpoch).toDateString() !== previousDate) this.loadHomePicks();
+          const now = new Date(this.nowEpoch);
+          if (now.getHours() === 0 && now.getMinutes() === 10 && now.getSeconds() === 0) {
+            const key = now.toDateString();
+            if (this.dailyRefreshKey !== key) {
+              this.dailyRefreshKey = key;
+              this.loadHomePicks();
+            }
+          }
+        }, 1000);
+        window.addEventListener('resize', this.resizeCharts);
+        window.addEventListener('scroll', this.onWindowScroll, { passive: true });
+      },
+      beforeUnmount() {
+        clearInterval(this.statusTimer);
+        clearInterval(this.clockTimer);
+        window.removeEventListener('resize', this.resizeCharts);
+        window.removeEventListener('scroll', this.onWindowScroll);
+      },
+      methods: {
+        displayGameName(game) {
+          const name = String(game?.name || '').trim();
+          if (!name || name === '未命名游戏' || /^(Steam\s+)?App\s+\d+$/i.test(name)) return '名称待补全';
+          return name;
+        },
+        switchPage(page) {
+          this.activePage = page;
+          this.navOpen = false;
+          if (page === 'home') {
+            this.loadHomePicks();
+          }
+          if (page === 'hot' && !this.hotPageGames.length) {
+            this.hotPageLimit = 100;
+            this.loadHotPageGames();
+          }
+          if (page === 'niche') {
+            this.loadNichePool();
+          }
+          if (page === 'tracker') {
+            nextTick(this.resizeCharts);
+          }
+        },
+        cachedImage(url) {
+          if (!url || String(url).startsWith('data:')) return url || '';
+          return `/api/image-cache?url=${encodeURIComponent(url)}`;
+        },
+        async api(path, options) {
+          if (window.location.protocol === 'file:') {
+            throw new Error('请先运行 start.ps1 或 python steamkb.py，然后通过 http://127.0.0.1:8765 打开页面。不要直接双击 steamkb.html。');
+          }
+          let res;
+          try {
+            res = await fetch(path, {
+              headers: { 'Content-Type': 'application/json' },
+              ...options
+            });
+          } catch (err) {
+            throw new Error('无法连接本地后端。请确认 steamkb.py 正在运行，并且当前页面地址是 http://127.0.0.1:8765。');
+          }
+          let data = null;
+          try {
+            data = await res.json();
+          } catch (err) {
+            throw new Error('后端返回了非 JSON 响应，请确认访问的是 Steam-KaKaBase 后端端口。');
+          }
+          if (!res.ok) throw new Error(data.error || res.statusText);
+          return data;
+        },
+        async loadGames() {
+          this.busy = true;
+          try {
+            const data = await this.api('/api/games');
+            this.games = data.games;
+          } catch (err) {
+            this.message = err.message;
+          } finally {
+            this.busy = false;
+          }
+        },
+        async loadHomePicks() {
+          try {
+            this.homePicks = await this.api('/api/home-picks');
+          } catch (err) {
+            this.message = err.message;
+          }
+        },
+        async loadStatus() {
+          try {
+            const status = await this.api('/api/status');
+            const running = Boolean(status.running || status.hot_running || status.track_running || status.detail_running || status.historylow_running);
+            const completed = this.wasRefreshing && !running;
+            this.refreshing = running;
+            this.wasRefreshing = this.refreshing;
+            this.playerRefreshMinutes = status.player_refresh_minutes || this.playerRefreshMinutes;
+            this.priceRefreshHours = status.price_refresh_hours || this.priceRefreshHours;
+            this.itadConfigured = Boolean(status.itad_configured);
+            this.historicalLowCount = status.historical_low_count || 0;
+            const previousNicheCount = this.nichePoolCount;
+            this.nichePoolCount = Number(status.niche_pool_count || 0);
+            this.historylowRunning = Boolean(status.historylow_running);
+            this.hotRunning = Boolean(status.hot_running);
+            this.steamCooldownSeconds = Number(status.steam_cooldown_remaining_seconds || 0);
+            this.steamCooldownObservedAt = Date.now();
+            this.steamCatalogCount = Number(status.steam_catalog_count || 0);
+            this.steamCatalogEnrichedCount = Number(status.steam_catalog_enriched_count || 0);
+            this.catalogEnrichDailyLimit = Number(status.catalog_enrich_daily_limit || 0);
+            const progress = status.task_progress || {};
+            const players = progress.players || {};
+            const preview = progress.preview || {};
+            const reviews = progress.reviews || {};
+            const metadata = progress.metadata || {};
+            this.backendProgress = `玩家数：${players.done || 0}/${players.total || 0}，预览：${preview.done || 0}/${preview.total || 0}，评价：${reviews.done || 0}/${reviews.total || 0}，元数据：${metadata.done || 0}/${metadata.total || 0}`;
+            if (!this.message && status.last_errors?.length) {
+              this.message = `上次采集有 ${status.last_errors.length} 个错误：${status.last_errors[0]}`;
+            }
+            if (this.activePage === 'hot' && this.hotPageGames.length && status.hot_games_version && status.hot_games_version !== this.hotVersion) {
+              await this.loadHotPageGames({ ensure: false, silent: true });
+            }
+            if (this.activePage === 'niche' && previousNicheCount !== this.nichePoolCount) {
+              await this.loadNichePool();
+            }
+            if (completed) {
+              const currentAppid = this.selected?.appid;
+              await this.loadGames();
+              if (this.activePage === 'tracker' && currentAppid) {
+                await this.selectGame(currentAppid);
+              }
+              if (this.activePage === 'hot' && this.hotPageGames.length) {
+                await this.loadHotPageGames({ ensure: false, silent: true });
+                if (this.message === '热门榜正在后台同步，当前先显示本地已有数据。') {
+                  this.message = '';
+                }
+              }
+              if (this.activePage === 'home') {
+                await this.loadHomePicks();
+              }
+            }
+          } catch (err) {
+            if (!this.games.length && !this.selected) {
+              this.message = err.message;
+            }
+          }
+        },
+        async selectGame(appid) {
+          this.busy = true;
+          try {
+            const data = await this.api(`/api/games/${appid}?history_limit=500`);
+            this.selected = data.game;
+            this.activePage = 'tracker';
+            this.navOpen = false;
+            this.selectedPrices = data.prices || [];
+            this.priceHistory = data.priceHistory || [];
+            this.playerHistory = data.players || [];
+            this.reviews = data.reviews;
+            this.message = '';
+            await nextTick();
+            this.renderCharts();
+          } catch (err) {
+            this.message = err.message;
+          } finally {
+            this.busy = false;
+          }
+        },
+        onSearchFocus() {
+          this.searchFocused = true;
+          if (this.query.length >= 2) {
+            this.queueSearch();
+          } else {
+            this.loadHotGames();
+          }
+        },
+        onSearchBlur() {
+          window.setTimeout(() => {
+            this.searchFocused = false;
+          }, 120);
+        },
+        async loadHotGames() {
+          try {
+            const data = await this.api('/api/hot-games?limit=25');
+            this.hotGames = (data.games || []).map(item => ({
+              ...item,
+              tiny_image: item.header_image
+            }));
+          } catch (err) {
+            this.message = err.message;
+          }
+        },
+        async loadNichePool() {
+          try {
+            const data = await this.api('/api/niche-pool');
+            this.nicheGames = (data.games || []).map(item => ({
+              ...item,
+              tiny_image: item.header_image
+            }));
+            this.nichePoolTotal = Number(data.pool_count || this.nicheGames.length);
+          } catch (err) {
+            this.message = err.message;
+          }
+        },
+        async loadHotPageGames(options = {}) {
+          const ensure = options.ensure !== false;
+          const silent = Boolean(options.silent);
+          if (!silent) this.busy = true;
+          try {
+            const data = await this.api(`/api/hot-games?limit=${this.hotPageLimit}`);
+            this.hotPageGames = (data.games || []).map(item => ({
+              ...item,
+              tiny_image: item.header_image
+            }));
+            this.hotVersion = data.version || this.hotVersion;
+            if (!silent) this.message = '';
+            if (ensure) this.ensureHotGames();
+          } catch (err) {
+            this.message = err.message;
+          } finally {
+            if (!silent) this.busy = false;
+          }
+        },
+        async refreshHotPage() {
+          this.hotPageLimit = 100;
+          await this.loadHotPageGames();
+        },
+        async ensureHotGames() {
+          try {
+            const data = await this.api(`/api/hot-games/ensure?target=${this.hotPageLimit}`);
+            if (data.queued && !this.refreshing) {
+              this.message = '热门榜正在后台同步，当前先显示本地已有数据。';
+            }
+          } catch (err) {
+            this.message = err.message;
+          }
+        },
+        async onWindowScroll() {
+          if (this.activePage !== 'hot' || this.hotLoadingMore || this.busy) return;
+          if (this.hotPageLimit >= 1000) return;
+          const remaining = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+          if (remaining > 420) return;
+          this.hotLoadingMore = true;
+          this.hotPageLimit = Math.min(1000, this.hotPageLimit + 100);
+          try {
+            await this.loadHotPageGames({ silent: true });
+          } finally {
+            this.hotLoadingMore = false;
+          }
+        },
+        queueSearch() {
+          clearTimeout(this.searchTimer);
+          if (this.query.length < 2) {
+            this.suggestions = [];
+            this.loadHotGames();
+            return;
+          }
+          this.searchTimer = setTimeout(() => this.search(), 600);
+        },
+        async search() {
+          if (this.query.length < 2) {
+            this.suggestions = [];
+            return;
+          }
+          const seq = ++this.searchSeq;
+          this.searching = true;
+          try {
+            const data = await this.api(`/api/search?q=${encodeURIComponent(this.query)}`);
+            if (seq !== this.searchSeq) return;
+            this.suggestions = data.items;
+          } catch (err) {
+            if (seq !== this.searchSeq) return;
+            this.message = err.message;
+          } finally {
+            if (seq === this.searchSeq) this.searching = false;
+          }
+        },
+        async openSuggestion(item) {
+          this.query = '';
+          this.suggestions = [];
+          this.searchFocused = false;
+          this.searchSeq++;
+          await this.selectGame(item.appid);
+        },
+        async toggleFavorite() {
+          if (!this.selected) return;
+          if (this.selected.tracked) {
+            await this.untrackSelected();
+            return;
+          }
+          await this.track({
+            appid: this.selected.appid,
+            name: this.selected.name,
+            tiny_image: this.selected.header_image
+          }, { keepSelected: true });
+        },
+        async untrackSelected() {
+          if (!this.selected) return;
+          this.busy = true;
+          const itemName = this.displayGameName(this.selected);
+          this.message = `正在取消收藏：${itemName}...`;
+          try {
+            await this.api('/api/untrack', {
+              method: 'POST',
+              body: JSON.stringify({ appid: this.selected.appid })
+            });
+            this.selected.tracked = false;
+            this.games = this.games.filter(game => game.appid !== this.selected.appid);
+            this.hotGames = this.hotGames.map(game => game.appid === this.selected.appid ? { ...game, tracked: false } : game);
+            this.hotPageGames = this.hotPageGames.map(game => game.appid === this.selected.appid ? { ...game, tracked: false } : game);
+            this.suggestions = this.suggestions.map(game => game.appid === this.selected.appid ? { ...game, tracked: false } : game);
+            this.message = `已取消收藏：${itemName}。`;
+          } catch (err) {
+            this.message = err.message;
+          } finally {
+            this.busy = false;
+          }
+        },
+        async track(item, options = {}) {
+          this.busy = true;
+          const itemName = this.displayGameName(item);
+          this.message = `正在加入跟踪：${itemName}...`;
+          try {
+            const result = await this.api('/api/track', {
+              method: 'POST',
+              body: JSON.stringify({
+                appid: item.appid,
+                name: item.name,
+                header_image: item.tiny_image
+              })
+            });
+            this.query = '';
+            this.suggestions = [];
+            this.searchFocused = false;
+            this.searchSeq++;
+            await this.loadGames();
+            if (options.keepSelected && this.selected?.appid === item.appid) {
+              this.selected.tracked = true;
+              this.hotGames = this.hotGames.map(game => game.appid === item.appid ? { ...game, tracked: true } : game);
+              this.hotPageGames = this.hotPageGames.map(game => game.appid === item.appid ? { ...game, tracked: true } : game);
+              this.suggestions = this.suggestions.map(game => game.appid === item.appid ? { ...game, tracked: true } : game);
+            } else {
+              await this.selectGame(item.appid);
+            }
+            this.message = result.queued
+              ? `已加入跟踪：${this.displayGameName(this.selected || item)}，后台正在补数据。`
+              : `已加入跟踪：${this.displayGameName(this.selected || item)}。`;
+          } catch (err) {
+            this.message = err.message;
+          } finally {
+            this.busy = false;
+          }
+        },
+        renderCharts() {
+          this.renderPriceChart();
+          this.renderPlayerChart();
+        },
+        renderPriceChart() {
+          if (!window.echarts || !this.$refs.priceChart) return;
+          this.priceChart = this.priceChart || echarts.init(this.$refs.priceChart);
+          this.priceChart.clear();
+          const regions = [...new Set(this.priceHistory.map(row => row.region))];
+          const grouped = Object.fromEntries(regions.map(region => [region, []]));
+          this.priceHistory.forEach(row => {
+            const cny = this.toCny(row.final, row.currency, row.region);
+            grouped[row.region].push({
+              value: [new Date(row.fetched_at).getTime(), cny],
+              formatted: row.final_formatted || this.cents(row.final, row.currency),
+              currency: row.currency || '',
+              cny,
+              fetchedAt: row.fetched_at
+            });
+          });
+          this.priceChart.setOption({
+            backgroundColor: 'transparent',
+            title: {
+              show: this.priceHistory.length === 0,
+              text: '暂无价格快照',
+              subtext: '等待自动采集后生成折线图',
+              left: 'center',
+              top: 'middle',
+              textStyle: { color: '#8d9ba8', fontSize: 14 },
+              subtextStyle: { color: '#5f6e7b', fontSize: 12 }
+            },
+            tooltip: {
+              trigger: 'item',
+              confine: true,
+              axisPointer: { type: 'line', label: { show: false } },
+              backgroundColor: '#0b1116',
+              borderColor: '#2b3743',
+              textStyle: { color: '#dbe4ec' },
+              formatter: item => {
+                const data = item.data || {};
+                const time = data.fetchedAt ? this.localTime(data.fetchedAt) : this.localTime(item.value?.[0]);
+                const original = data.formatted || this.cents(item.value?.[1] * 100, data.currency);
+                return `${time}<br>${item.marker} ${item.seriesName}: ¥${Number(data.cny || 0).toFixed(2)}<br><span style="color:#8d9ba8">原始价格：${original}</span>`;
+              }
+            },
+            legend: { textStyle: { color: '#8d9ba8' }, top: 8 },
+            grid: { left: 48, right: 18, top: 46, bottom: 42 },
+            xAxis: {
+              type: 'time',
+              axisLine: { lineStyle: { color: '#2b3743' } },
+              axisLabel: { color: '#8d9ba8' }
+            },
+            yAxis: {
+              type: 'value',
+              axisLine: { lineStyle: { color: '#2b3743' } },
+              splitLine: { lineStyle: { color: '#24303a' } },
+              axisLabel: {
+                color: '#8d9ba8',
+                formatter: value => `¥${Number(value).toFixed(0)}`
+              }
+            },
+            series: regions.map(region => ({
+              name: region,
+              type: 'line',
+              smooth: true,
+              symbolSize: 5,
+              data: grouped[region]
+            }))
+          }, true);
+        },
+        renderPlayerChart() {
+          if (!window.echarts || !this.$refs.playerChart) return;
+          this.playerChart = this.playerChart || echarts.init(this.$refs.playerChart);
+          this.playerChart.clear();
+          this.playerChart.setOption({
+            backgroundColor: 'transparent',
+            title: {
+              show: this.playerHistory.length === 0,
+              text: '暂无在线人数快照',
+              subtext: '等待自动采集后生成柱形图',
+              left: 'center',
+              top: 'middle',
+              textStyle: { color: '#8d9ba8', fontSize: 14 },
+              subtextStyle: { color: '#5f6e7b', fontSize: 12 }
+            },
+            tooltip: {
+              trigger: 'item',
+              confine: true,
+              axisPointer: { type: 'shadow' },
+              backgroundColor: '#0b1116',
+              borderColor: '#2b3743',
+              textStyle: { color: '#dbe4ec' },
+              formatter: item => {
+                const data = item.data || {};
+                const value = Array.isArray(item.value) ? item.value[1] : item.value;
+                const time = data.fetchedAt || item.name || item.axisValue;
+                return `${time}<br>${item.marker} 在线人数: ${this.formatPlayers(value)}`;
+              }
+            },
+            grid: { left: 56, right: 18, top: 24, bottom: 42 },
+            xAxis: {
+              type: 'category',
+              data: this.playerHistory.map(row => this.localTime(row.fetched_at, true)),
+              axisLine: { lineStyle: { color: '#2b3743' } },
+              axisLabel: { color: '#8d9ba8' }
+            },
+            yAxis: {
+              type: 'value',
+              splitLine: { lineStyle: { color: '#24303a' } },
+              axisLabel: { color: '#8d9ba8' }
+            },
+            series: [{
+              name: 'Players',
+              type: 'bar',
+              barMaxWidth: 30,
+              itemStyle: { color: '#66c0f4' },
+              data: this.playerHistory.map(row => ({
+                value: row.player_count,
+                fetchedAt: this.localTime(row.fetched_at)
+              }))
+            }]
+          }, true);
+        },
+        resizeCharts() {
+          this.priceChart?.resize();
+          this.playerChart?.resize();
+        },
+        currentPrice(region) {
+          const row = this.selectedPrices.find(item => item.region === region);
+          if (row) return row.final_formatted || this.cents(row.final, row.currency);
+          return this.selected?.is_free ? '免费' : '国区暂无售价';
+        },
+        displayCnPrice(game) {
+          if (game?.cn_price_display) return game.cn_price_display;
+          if (game?.cn_price) return game.cn_price;
+          return game?.is_free ? '免费' : '国区暂无售价';
+        },
+        formatDuration(seconds) {
+          const total = Math.max(0, Math.floor(Number(seconds) || 0));
+          const minutes = Math.floor(total / 60);
+          const remainder = total % 60;
+          return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+        },
+        dailyNicheBlurb(game) {
+          const score = Number(game?.review_score || 0);
+          const reviews = Number(game?.total_reviews || 0);
+          if (score >= 95) return `推荐短评：${score.toFixed(0)}% 好评，玩家们几乎一致认为它值得被更多人发现。`;
+          if (reviews >= 10000) return `推荐短评：${reviews.toLocaleString()} 条评测撑起的口碑，不只是小圈子自嗨。`;
+          return `推荐短评：${score ? `${score.toFixed(0)}% 好评` : '口碑稳定'}，适合从热门榜之外挖到的一次惊喜。`;
+        },
+        isHistoricalLow(region) {
+          const row = this.selectedPrices.find(item => item.region === region);
+          return Boolean(row?.historical_low);
+        },
+        isDiscounted(region) {
+          const row = this.selectedPrices.find(item => item.region === region);
+          return Boolean(row && !row.historical_low && Number(row.discount_percent || 0) > 0);
+        },
+        historicalLowPrice(region) {
+          const row = this.selectedPrices.find(item => item.region === region);
+          if (!row || row.historical_low_cny === null || row.historical_low_cny === undefined) return '-';
+          return `¥${Number(row.historical_low_cny).toFixed(2)}`;
+        },
+        historicalLowStatus(region) {
+          const row = this.selectedPrices.find(item => item.region === region);
+          if (row?.historical_low_cny !== null && row?.historical_low_cny !== undefined) return '';
+          if (!this.itadConfigured) return '未配置 ITAD';
+          return this.historylowRunning ? '史低同步中' : '史低未入库';
+        },
+        historicalLowNote(region) {
+          const row = this.selectedPrices.find(item => item.region === region);
+          if (!row || row.final === null || row.final === undefined) return '';
+          if (row.historical_low) return '';
+          if (!this.itadConfigured) return '未配置 ITAD';
+          if (row.historical_low_cny === null || row.historical_low_cny === undefined) {
+            return this.historylowRunning ? '史低同步中' : '史低未入库';
+          }
+          return `史低约 ¥${Number(row.historical_low_cny).toFixed(2)}`;
+        },
+        toCny(value, currency, region) {
+          if (value === null || value === undefined) return 0;
+          const code = currency || (region === 'CN' ? 'CNY' : (region === 'US' || region === 'ITAD-US' ? 'USD' : ''));
+          const rate = this.cnyRates[code] || 1;
+          return (Number(value) / 100) * rate;
+        },
+        cents(value, currency) {
+          if (value === null || value === undefined) return '-';
+          if (Number(value) === 0) return 'Free';
+          return `${currency || ''} ${(Number(value) / 100).toFixed(2)}`.trim();
+        },
+        formatPlayers(value) {
+          if (value === null || value === undefined) return '-';
+          return Number(value).toLocaleString('zh-CN');
+        },
+        localTime(value, compact = false) {
+          if (!value) return '-';
+          const date = new Date(value);
+          return compact
+            ? date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+            : date.toLocaleString('zh-CN');
+        },
+        relativeAge(value) {
+          if (!value) return '待补全';
+          const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
+          if (minutes < 1) return '刚刚';
+          if (minutes < 60) return `${minutes} 分钟前`;
+          if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时前`;
+          return `${Math.floor(minutes / 1440)} 天前`;
+        }
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
+

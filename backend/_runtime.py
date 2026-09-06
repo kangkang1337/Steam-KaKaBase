@@ -14,6 +14,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -91,14 +92,22 @@ USE_PROXY = os.getenv("USE_PROXY", os.getenv("UNE_PROXY", "false")).strip().lowe
 # Local proxy applications often intercept HTTPS using a locally generated
 # certificate. Direct requests always verify TLS; this only affects fallback.
 STEAM_PROXY_VERIFY_TLS = os.getenv("STEAMKB_PROXY_VERIFY_TLS", "false").strip().lower() in {"1", "true", "yes", "on"}
+DIRECT_COOLDOWN_MINUTES = max(1, int(os.getenv("STEAMKB_DIRECT_COOLDOWN_MINUTES", "5")))
 STEAM_MAX_RETRIES = max(0, int(os.getenv("STEAMKB_HTTP_MAX_RETRIES", "2")))
 STEAM_RETRY_STATUSES = {429, 500, 502, 503}
 APP_VERSION = "2026.09.05-modular-backend"
 ITAD_MISSING_GAME_ID = "__itad_missing__"
 # Used only when restarting a rate-limited local service: cache reads remain
 # available while external Steam work stays paused for the supplied duration.
-STEAM_COOLDOWN_UNTIL = time.time() + max(0, int(os.getenv("STEAMKB_START_COOLDOWN_SECONDS", "0")))
-STEAM_COOLDOWN_LOCK = threading.Lock()
+EXTERNAL_SERVICES = ("steam_api", "steam_store", "itad", "image_cdn")
+START_COOLDOWN_UNTIL = time.time() + max(0, int(os.getenv("STEAMKB_START_COOLDOWN_SECONDS", "0")))
+SERVICE_COOLDOWN_UNTIL = {
+    "steam_api": START_COOLDOWN_UNTIL,
+    "steam_store": START_COOLDOWN_UNTIL,
+    "itad": 0.0,
+    "image_cdn": 0.0,
+}
+SERVICE_COOLDOWN_LOCK = threading.Lock()
 PROXY_STATUS = {
     "configured": bool(STEAM_PROXY_URL), "enabled": USE_PROXY, "reachable": None,
     "tls_verify": STEAM_PROXY_VERIFY_TLS, "fallback_successes": 0, "fallback_failures": 0,
@@ -106,6 +115,9 @@ PROXY_STATUS = {
 }
 PROXY_FALLBACK_LOCK = threading.Lock()
 PROXY_FALLBACK_LOGGED_AT = {}
+DIRECT_COOLDOWN_LOCK = threading.Lock()
+DIRECT_COOLDOWN_UNTIL = {service: 0.0 for service in EXTERNAL_SERVICES}
+DIRECT_FAILURE_COUNT = {service: 0 for service in EXTERNAL_SERVICES}
 REFRESH_LOCK = threading.Lock()
 HOT_REFRESH_LOCK = threading.Lock()
 STATUS_LOCK = threading.Lock()
@@ -166,6 +178,20 @@ ALLOWED_IMAGE_HOSTS = {
     "cdn.cloudflare.steamstatic.com",
     "steamcdn-a.akamaihd.net",
 }
+MEME_EXTENSIONS = {".gif", ".webp", ".png", ".apng", ".jpg", ".jpeg", ".jfif", ".avif", ".bmp"}
+
+
+@contextmanager
+def database_connection():
+    conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def now_iso():
@@ -206,6 +232,15 @@ def age_minutes(value):
     return (datetime.now(timezone.utc) - parsed).total_seconds() / 60
 
 
+def daily_refresh_key(moment=None):
+    """Use 00:10 local time as the boundary for all daily homepage picks."""
+    current = moment or datetime.now()
+    boundary = current.replace(hour=0, minute=10, second=0, microsecond=0)
+    if current < boundary:
+        current -= timedelta(days=1)
+    return current.strftime("%Y-%m-%d")
+
+
 def retry_delay(attempt):
     return min(8, (0.8 * (2**attempt)) + random.uniform(0, 0.35))
 
@@ -221,9 +256,27 @@ def safe_log_url(url):
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urllib.parse.urlencode(redacted), ""))
 
 
+def external_service_for_url(url):
+    host = (urllib.parse.urlsplit(str(url)).hostname or "").lower()
+    if host == "api.isthereanydeal.com" or host.endswith(".isthereanydeal.com"):
+        return "itad"
+    if host == "store.steampowered.com":
+        return "steam_store"
+    if host in ALLOWED_IMAGE_HOSTS or host.endswith("steamstatic.com"):
+        return "image_cdn"
+    return "steam_api"
+
+
+def service_cooldown_remaining_seconds(service):
+    with SERVICE_COOLDOWN_LOCK:
+        return max(0, int(SERVICE_COOLDOWN_UNTIL.get(service, 0) - time.time()))
+
+
 def steam_cooldown_remaining_seconds():
-    with STEAM_COOLDOWN_LOCK:
-        return max(0, int(STEAM_COOLDOWN_UNTIL - time.time()))
+    return max(
+        service_cooldown_remaining_seconds("steam_api"),
+        service_cooldown_remaining_seconds("steam_store"),
+    )
 
 
 def probe_proxy():
@@ -251,6 +304,46 @@ def probe_proxy():
 
 def proxy_fallback_enabled():
     return USE_PROXY and PROXY_STATUS.get("reachable") is True
+
+
+def direct_cooldown_remaining_seconds(service=None):
+    with DIRECT_COOLDOWN_LOCK:
+        if service:
+            return max(0, int(DIRECT_COOLDOWN_UNTIL.get(service, 0) - time.time()))
+        return max((max(0, int(value - time.time())) for value in DIRECT_COOLDOWN_UNTIL.values()), default=0)
+
+
+def reserve_direct_attempt(service):
+    """Allow one half-open direct probe after a cooldown expires."""
+    if not proxy_fallback_enabled():
+        return True
+    now = time.time()
+    with DIRECT_COOLDOWN_LOCK:
+        if DIRECT_COOLDOWN_UNTIL.get(service, 0) > now:
+            return False
+        if DIRECT_FAILURE_COUNT.get(service, 0):
+            DIRECT_COOLDOWN_UNTIL[service] = now + min(60, max(10, int(STEAM_TIMEOUT_SECONDS) + 5))
+        return True
+
+
+def record_direct_success(service):
+    with DIRECT_COOLDOWN_LOCK:
+        DIRECT_COOLDOWN_UNTIL[service] = 0.0
+        DIRECT_FAILURE_COUNT[service] = 0
+
+
+def set_direct_cooldown(service, reason=None):
+    if not proxy_fallback_enabled():
+        return
+    now = time.time()
+    until = now + (DIRECT_COOLDOWN_MINUTES * 60)
+    with DIRECT_COOLDOWN_LOCK:
+        was_active = DIRECT_COOLDOWN_UNTIL.get(service, 0) > now
+        DIRECT_COOLDOWN_UNTIL[service] = max(DIRECT_COOLDOWN_UNTIL.get(service, 0), until)
+        DIRECT_FAILURE_COUNT[service] = DIRECT_FAILURE_COUNT.get(service, 0) + 1
+    if not was_active:
+        suffix = f" reason={reason}" if reason else ""
+        log_event(f"direct connection cooldown enabled service={service} for {DIRECT_COOLDOWN_MINUTES} minutes{suffix}")
 
 
 def log_proxy_fallback_once(url, reason):
@@ -302,32 +395,44 @@ def cleanup_image_cache_once():
 
 
 class SteamRateLimited(Exception):
-    pass
+    def __init__(self, message, service="steam_api"):
+        super().__init__(message)
+        self.service = service
 
 
-def set_steam_cooldown(minutes=10):
-    global STEAM_COOLDOWN_UNTIL
+def set_service_cooldown(service, minutes=10):
+    now = time.time()
     until = time.time() + (minutes * 60)
-    with STEAM_COOLDOWN_LOCK:
-        extended = until > STEAM_COOLDOWN_UNTIL
-        STEAM_COOLDOWN_UNTIL = max(STEAM_COOLDOWN_UNTIL, until)
-    if extended:
-        log_event(f"steam cooldown enabled for {minutes} minutes")
+    with SERVICE_COOLDOWN_LOCK:
+        previous = SERVICE_COOLDOWN_UNTIL.get(service, 0)
+        was_active = previous > now
+        SERVICE_COOLDOWN_UNTIL[service] = max(previous, until)
+    if not was_active:
+        log_event(f"external service cooldown enabled service={service} for {minutes} minutes")
 
 
-def check_steam_cooldown():
-    with STEAM_COOLDOWN_LOCK:
-        remaining = STEAM_COOLDOWN_UNTIL - time.time()
+def set_steam_cooldown(minutes=10, service="steam_api"):
+    set_service_cooldown(service, minutes)
+
+
+def check_service_cooldown(service):
+    with SERVICE_COOLDOWN_LOCK:
+        remaining = SERVICE_COOLDOWN_UNTIL.get(service, 0) - time.time()
     if remaining > 0:
-        raise SteamRateLimited(f"Steam rate limited, retry after {int(remaining)}s")
+        raise SteamRateLimited(f"{service} rate limited, retry after {int(remaining)}s", service)
+
+
+def check_steam_cooldown(service="steam_api"):
+    check_service_cooldown(service)
 
 
 class ExternalDataUnavailable(Exception):
     pass
 
 
-def request_json(url, timeout=STEAM_TIMEOUT_SECONDS, headers=None, missing_statuses=None, max_retries=None):
-    check_steam_cooldown()
+def request_json(url, timeout=STEAM_TIMEOUT_SECONDS, headers=None, missing_statuses=None, max_retries=None, service=None):
+    service = service or external_service_for_url(url)
+    check_service_cooldown(service)
     missing_statuses = set(missing_statuses or [])
     base_headers = {
         "User-Agent": STEAM_USER_AGENT,
@@ -340,13 +445,26 @@ def request_json(url, timeout=STEAM_TIMEOUT_SECONDS, headers=None, missing_statu
     for attempt in range(retries + 1):
         req = urllib.request.Request(url, headers=base_headers)
         try:
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            try:
-                res = opener.open(req, timeout=timeout)
-            except urllib.error.URLError as direct_exc:
-                if not proxy_fallback_enabled():
-                    raise
-                log_proxy_fallback_once(url, type(direct_exc).__name__)
+            try_direct = reserve_direct_attempt(service)
+            if try_direct:
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                try:
+                    res = opener.open(req, timeout=timeout)
+                    record_direct_success(service)
+                except urllib.error.HTTPError as direct_http_exc:
+                    record_direct_success(service)
+                    if proxy_fallback_enabled() and (direct_http_exc.code >= 500 or direct_http_exc.code == 403):
+                        log_proxy_fallback_once(url, f"HTTP {direct_http_exc.code}")
+                        try_direct = False
+                    else:
+                        raise
+                except (urllib.error.URLError, TimeoutError, OSError) as direct_exc:
+                    if not proxy_fallback_enabled():
+                        raise
+                    set_direct_cooldown(service, type(direct_exc).__name__)
+                    log_proxy_fallback_once(url, type(direct_exc).__name__)
+                    try_direct = False
+            if not try_direct:
                 proxy_handler = urllib.request.ProxyHandler({"http": STEAM_PROXY_URL, "https": STEAM_PROXY_URL})
                 handlers = [proxy_handler]
                 if not STEAM_PROXY_VERIFY_TLS:
@@ -370,15 +488,15 @@ def request_json(url, timeout=STEAM_TIMEOUT_SECONDS, headers=None, missing_statu
             if exc.code in missing_statuses:
                 raise ExternalDataUnavailable(f"HTTP {exc.code}: external data unavailable")
             if exc.code == 429:
-                set_steam_cooldown(10)
-                raise SteamRateLimited("Steam HTTP 429")
-            if exc.code not in STEAM_RETRY_STATUSES or attempt >= STEAM_MAX_RETRIES:
+                set_service_cooldown(service, 10)
+                raise SteamRateLimited(f"{service} HTTP 429", service)
+            if exc.code not in STEAM_RETRY_STATUSES or attempt >= retries:
                 log_event(f"steam request failed status={exc.code} url={url}: {exc}")
                 raise
             log_event(f"steam request retry status={exc.code} attempt={attempt + 1} url={url}")
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             last_exc = exc
-            if attempt >= STEAM_MAX_RETRIES:
+            if attempt >= retries:
                 log_event(f"steam request failed url={url}: {exc}")
                 raise
             log_event(f"steam request retry attempt={attempt + 1} url={url}: {exc}")
@@ -387,6 +505,8 @@ def request_json(url, timeout=STEAM_TIMEOUT_SECONDS, headers=None, missing_statu
 
 
 def cache_image(url):
+    service = "image_cdn"
+    check_service_cooldown(service)
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https") or parsed.hostname not in ALLOWED_IMAGE_HOSTS:
         raise ValueError("unsupported image host")
@@ -407,11 +527,17 @@ def cache_image(url):
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
         },
     )
-    with urllib.request.urlopen(req, timeout=STEAM_TIMEOUT_SECONDS) as res:
-        content_type = res.headers.get_content_type()
-        if not content_type.startswith("image/"):
-            raise ValueError(f"unexpected content type: {content_type}")
-        body = res.read(IMAGE_CACHE_MAX_FILE_BYTES + 1)
+    try:
+        with urllib.request.urlopen(req, timeout=STEAM_TIMEOUT_SECONDS) as res:
+            content_type = res.headers.get_content_type()
+            if not content_type.startswith("image/"):
+                raise ValueError(f"unexpected content type: {content_type}")
+            body = res.read(IMAGE_CACHE_MAX_FILE_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            set_service_cooldown(service, 10)
+            raise SteamRateLimited("image_cdn HTTP 429", service) from exc
+        raise
     if len(body) > IMAGE_CACHE_MAX_FILE_BYTES:
         raise ValueError("image exceeds cache file limit")
     cache_path.write_bytes(body)
@@ -453,11 +579,11 @@ def infer_name_from_description(value):
     return None
 
 
-def is_recent_release(value, years=5):
+def parse_release_date(value):
     text = str(value or "").strip()
     match = re.search(r"\b(19\d{2}|20\d{2})\b", text)
     if not match:
-        return False
+        return None
     year, month, day = int(match.group(1)), 1, 1
     month_match = re.search(r"\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)", text, re.IGNORECASE)
     if month_match:
@@ -470,15 +596,35 @@ def is_recent_release(value, years=5):
             month = int(chinese_match.group(2))
             day = int(chinese_match.group(3) or 1)
     try:
-        released = datetime(year, month, day, tzinfo=timezone.utc)
+        return datetime(year, month, day, tzinfo=timezone.utc)
     except ValueError:
+        return None
+
+
+def is_recent_release(value, years=8):
+    released = parse_release_date(value)
+    if released is None:
         return False
     return released >= datetime.now(timezone.utc) - timedelta(days=365.25 * years)
 
 
+def release_recency_factor(value):
+    released = parse_release_date(value)
+    if released is None:
+        return 0.0
+    age_days = max(0.0, (datetime.now(timezone.utc) - released).total_seconds() / 86400)
+    if age_days <= 365.25 * 3:
+        return 1.0
+    if age_days <= 365.25 * 5:
+        return 0.95
+    if age_days <= 365.25 * 8:
+        return 0.85
+    return 0.0
+
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executescript(
             """
             PRAGMA journal_mode = WAL;
@@ -647,6 +793,13 @@ def init_db():
                 review_score REAL,
                 total_reviews INTEGER,
                 weighted_score REAL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS daily_home_snapshots (
+                recommendation_date TEXT PRIMARY KEY,
+                historical_low_appid INTEGER,
+                meme_url TEXT,
                 created_at TEXT NOT NULL
             );
 
@@ -865,14 +1018,14 @@ def enqueue_crawl_tasks_in_conn(conn, appids, task_type, priority, next_attempt_
 
 
 def enqueue_crawl_tasks(appids, task_type, priority, next_attempt_at=None, generation=None):
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         return enqueue_crawl_tasks_in_conn(conn, appids, task_type, priority, next_attempt_at, generation)
 
 
 def claim_crawl_tasks(task_type, limit, lock_minutes=15):
     stamp = now_iso()
     locked_until = (datetime.now(timezone.utc) + timedelta(minutes=lock_minutes)).replace(microsecond=0).isoformat()
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         current_generation = int(get_crawl_state(conn, "hotlist_generation") or 0)
         rows = conn.execute(
             """
@@ -908,7 +1061,7 @@ def complete_crawl_tasks(appids, task_type):
         return
     stamp = now_iso()
     placeholders = ",".join("?" for _ in appids)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.execute(
             f"""
             UPDATE crawl_tasks
@@ -925,7 +1078,7 @@ def mark_crawl_tasks_not_available(appids, task_type, reason):
         return
     stamp = now_iso()
     placeholders = ",".join("?" for _ in appids)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.execute(
             f"""
             UPDATE crawl_tasks
@@ -943,7 +1096,7 @@ def fail_crawl_tasks(appids, task_type, error, retry_minutes=60, terminal=False)
     stamp = now_iso()
     next_attempt = (datetime.now(timezone.utc) + timedelta(minutes=retry_minutes)).replace(microsecond=0).isoformat()
     placeholders = ",".join("?" for _ in appids)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.execute(
             f"""
             UPDATE crawl_tasks
@@ -1021,7 +1174,7 @@ def parse_hot_chart(payload):
 
 
 def hot_placeholder_appids(limit=200):
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             """
             SELECT h.appid
@@ -1040,7 +1193,7 @@ def hot_placeholder_appids(limit=200):
 
 
 def hot_preview_missing_appids(limit=100):
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             """
             SELECT h.appid
@@ -1079,7 +1232,7 @@ def upsert_steam_app_names(name_rows):
     ]
     if not rows:
         return 0
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             """
             INSERT INTO steam_app_names(appid, name, updated_at)
@@ -1115,18 +1268,18 @@ def refresh_steam_app_names_once(force=False):
     missing_appids = set(hot_placeholder_appids())
     if not missing_appids:
         return False
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         app_names_at = get_crawl_state(conn, "steam_app_names_at")
     if not (force or is_due(app_names_at, APP_NAME_REFRESH_HOURS * 60)):
         return False
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         name_rows = conn.execute(
             "SELECT appid, name FROM steam_catalog WHERE appid IN ({})".format(",".join("?" * len(missing_appids))),
             tuple(missing_appids),
         ).fetchall() if missing_appids else []
     updated_count = upsert_steam_app_names(name_rows)
     stamp = now_iso()
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         set_crawl_state(conn, "steam_app_names_at", stamp)
     log_event(f"steam app names refreshed matched={updated_count} missing={len(missing_appids)}")
     return True
@@ -1135,7 +1288,7 @@ def refresh_steam_app_names_once(force=False):
 def upsert_hot_games_batch(rows, stamp):
     if not rows:
         return
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             """
             INSERT INTO hot_games(appid, rank, name, current_players, peak_players, header_image, source, fetched_at)
@@ -1191,7 +1344,7 @@ def upsert_hot_games_batch(rows, stamp):
 def insert_player_batch(rows):
     if not rows:
         return
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             "INSERT INTO player_snapshots(appid, player_count, fetched_at) VALUES (?, ?, ?)",
             rows,
@@ -1205,7 +1358,7 @@ def insert_player_batch(rows):
 def upsert_hot_metadata_batch(rows, stamp):
     if not rows:
         return
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             """
             INSERT INTO games(appid, name, header_image, short_description, developer, publisher, release_date, is_free, screenshots_json, tracked, updated_at)
@@ -1282,20 +1435,28 @@ def upsert_hot_metadata_batch(rows, stamp):
 
 
 async def async_request_direct_then_proxy(client, method, url, params=None, json_body=None):
+    service = external_service_for_url(url)
     response = None
     fallback_reason = None
-    try:
-        response = await client.request(method, url, params=params, json=json_body)
-        if response.status_code < 500 and response.status_code != 403:
-            return response
-        fallback_reason = f"HTTP {response.status_code}"
-    except Exception as direct_exc:
-        if not proxy_fallback_enabled():
-            raise direct_exc
-        fallback_reason = type(direct_exc).__name__
+    try_direct = reserve_direct_attempt(service)
+    if try_direct:
+        try:
+            response = await client.request(method, url, params=params, json=json_body)
+            if response.status_code < 500 and response.status_code != 403:
+                record_direct_success(service)
+                return response
+            fallback_reason = f"HTTP {response.status_code}"
+        except Exception as direct_exc:
+            if not proxy_fallback_enabled():
+                raise direct_exc
+            fallback_reason = type(direct_exc).__name__
+            set_direct_cooldown(service, fallback_reason)
+    else:
+        fallback_reason = "direct cooldown active"
     if not proxy_fallback_enabled():
         return response
-    log_proxy_fallback_once(url, fallback_reason or "unavailable")
+    if try_direct:
+        log_proxy_fallback_once(url, fallback_reason or "unavailable")
     httpx = require_httpx()
     try:
         async with httpx.AsyncClient(timeout=STEAM_TIMEOUT_SECONDS, headers={"User-Agent": STEAM_USER_AGENT}, follow_redirects=True, **proxy_httpx_options()) as proxy_client:
@@ -1310,12 +1471,13 @@ async def async_request_direct_then_proxy(client, method, url, params=None, json
 
 
 async def async_get_json(client, semaphore, url, params=None):
-    check_steam_cooldown()
+    service = external_service_for_url(url)
+    check_service_cooldown(service)
     async with semaphore:
         last_exc = None
         for attempt in range(STEAM_MAX_RETRIES + 1):
             try:
-                check_steam_cooldown()
+                check_service_cooldown(service)
                 response = await async_request_direct_then_proxy(client, "GET", url, params=params)
                 response.raise_for_status()
                 return response.json()
@@ -1326,12 +1488,10 @@ async def async_get_json(client, semaphore, url, params=None):
                 last_exc = exc
                 status_code = getattr(getattr(exc, "response", None), "status_code", None)
                 if status_code == 429:
-                    set_steam_cooldown(10)
-                    raise SteamRateLimited("Steam HTTP 429")
+                    set_service_cooldown(service, 10)
+                    raise SteamRateLimited(f"{service} HTTP 429", service)
                 if status_code == 404:
-                    # Steam uses 404 for unreleased apps, DLC, tools and
-                    # titles without public concurrent-player statistics.
-                    raise ExternalDataUnavailable("Steam resource unavailable (HTTP 404)")
+                    raise ExternalDataUnavailable(f"{service} resource unavailable (HTTP 404)")
                 retryable = status_code in STEAM_RETRY_STATUSES or status_code is None
                 if not retryable or attempt >= STEAM_MAX_RETRIES:
                     log_event(f"http async request failed status={status_code} url={safe_log_url(url)}: {exc}")
@@ -1341,12 +1501,13 @@ async def async_get_json(client, semaphore, url, params=None):
 
 
 async def async_post_json(client, semaphore, url, params=None, json_body=None):
-    check_steam_cooldown()
+    service = external_service_for_url(url)
+    check_service_cooldown(service)
     async with semaphore:
         last_exc = None
         for attempt in range(STEAM_MAX_RETRIES + 1):
             try:
-                check_steam_cooldown()
+                check_service_cooldown(service)
                 response = await async_request_direct_then_proxy(client, "POST", url, params=params, json_body=json_body)
                 response.raise_for_status()
                 return response.json()
@@ -1356,10 +1517,10 @@ async def async_post_json(client, semaphore, url, params=None, json_body=None):
                 last_exc = exc
                 status_code = getattr(getattr(exc, "response", None), "status_code", None)
                 if status_code == 429:
-                    set_steam_cooldown(10)
-                    raise SteamRateLimited("HTTP 429")
+                    set_service_cooldown(service, 10)
+                    raise SteamRateLimited(f"{service} HTTP 429", service)
                 if status_code == 404:
-                    raise ExternalDataUnavailable("Steam resource unavailable (HTTP 404)")
+                    raise ExternalDataUnavailable(f"{service} resource unavailable (HTTP 404)")
                 retryable = status_code in STEAM_RETRY_STATUSES or status_code is None
                 if not retryable or attempt >= STEAM_MAX_RETRIES:
                     log_event(f"itad async post failed status={status_code} url={safe_log_url(url)}: {exc}")
@@ -1403,7 +1564,7 @@ def save_itad_game_ids(rows):
     rows = [(int(appid), gid, now_iso()) for appid, gid in rows if gid]
     if not rows:
         return
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             "UPDATE games SET itad_game_id = ?, updated_at = ? WHERE appid = ?",
             [(gid, stamp, appid) for appid, gid, stamp in rows],
@@ -1413,7 +1574,7 @@ def save_itad_game_ids(rows):
 def upsert_historical_lows(rows):
     if not rows:
         return
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             """
             INSERT INTO historical_lows(appid, itad_game_id, country, shop_id, shop_name, currency, amount, amount_int, amount_cny, regular_amount_int, cut, low_at, fetched_at)
@@ -1470,7 +1631,7 @@ async def fetch_itad_history_lows_async(appids, countries=("US", "CN")):
     if not appids:
         return now_iso()
     stamp = now_iso()
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         existing = {
             int(row[0]): row[1]
             for row in conn.execute(
@@ -1630,7 +1791,7 @@ async def fetch_players_for_appids_async(appids):
 def upsert_hot_price_batch(rows, stamp):
     if not rows:
         return
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             """
             UPDATE games
@@ -1687,7 +1848,7 @@ def upsert_hot_price_batch(rows, stamp):
 def upsert_release_date_batch(rows, stamp):
     if not rows:
         return
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             """
             UPDATE games
@@ -1715,7 +1876,7 @@ def upsert_release_date_batch(rows, stamp):
 def upsert_review_batch(rows, stamp):
     if not rows:
         return
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             """
             INSERT INTO review_snapshots(appid, review_score, review_score_desc, total_positive, total_negative, total_reviews, fetched_at)
@@ -1916,7 +2077,7 @@ def discover_niche_appids(limit=NICHE_POOL_BATCH_LIMIT):
     of apps that the local database has never seen.
     """
     selected = []
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             """
             SELECT g.appid
@@ -1937,7 +2098,7 @@ def discover_niche_appids(limit=NICHE_POOL_BATCH_LIMIT):
         seen_pool = {int(row[0]) for row in conn.execute("SELECT appid FROM niche_pool").fetchall()}
 
     if len(selected) < limit:
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             candidates = [
                 int(row[0]) for row in conn.execute(
                     "SELECT appid FROM steam_catalog WHERE appid NOT IN ({}) ORDER BY updated_at DESC LIMIT ?".format(
@@ -1960,7 +2121,7 @@ def known_peak_players(appids):
     if not appids:
         return {}
     placeholders = ",".join("?" for _ in appids)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             f"""
             SELECT p.appid, MAX(p.player_count) AS peak_players
@@ -2046,9 +2207,9 @@ def niche_weighted_score(row):
     peak_players = max(players, int(row.get("peak_players") or 0))
     review_part = max(0.0, min(1.0, (score - 85.0) / 15.0))
     review_count_part = min(1.0, math.log1p(reviews) / math.log1p(100000))
-    player_part = 1.0 / (1.0 + (max(0, players - 1000) / 1000.0))
     peak_part = min(1.0, math.log1p(peak_players) / math.log1p(2000))
-    return round((review_part * 0.45) + (review_count_part * 0.30) + (peak_part * 0.20) + (player_part * 0.05), 6)
+    release_part = release_recency_factor(row.get("release_date"))
+    return round((review_part * 0.45) + (review_count_part * 0.30) + (peak_part * 0.15) + (release_part * 0.10), 6)
 
 
 def upsert_niche_pool_rows(rows):
@@ -2065,7 +2226,7 @@ def upsert_niche_pool_rows(rows):
             and is_recent_release(row.get("release_date"))
         )
         prepared.append((row, niche_weighted_score(row) if eligible else 0.0, 1 if eligible else 0))
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             """
             INSERT INTO games(appid, name, header_image, release_date, is_free, tracked, updated_at)
@@ -2131,7 +2292,7 @@ def upsert_niche_pool_rows(rows):
 
 def seed_niche_pool_from_local(limit=NICHE_POOL_BATCH_LIMIT, scan_limit=None):
     """Promote already-collected server data into the independent pool."""
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -2169,7 +2330,7 @@ def seed_niche_pool_from_local(limit=NICHE_POOL_BATCH_LIMIT, scan_limit=None):
 
 
 def list_niche_pool_pick():
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM niche_pool WHERE eligible = 1 AND cn_price IS NOT NULL ORDER BY weighted_score DESC LIMIT 30"
@@ -2178,7 +2339,7 @@ def list_niche_pool_pick():
             return None
         # Keep the daily result server-side. A weighted draw from the top 30
         # avoids showing the same top-ranked game every day.
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = daily_refresh_key()
         state_key = "niche_pick_" + today
         saved = get_crawl_state(conn, state_key)
         chosen = None
@@ -2193,8 +2354,10 @@ def list_niche_pool_pick():
 
 def sync_steam_catalog_once(force=False):
     """Refresh the lightweight AppList catalog; no store details are fetched here."""
+    if service_cooldown_remaining_seconds("steam_api"):
+        return False
     today = datetime.now().strftime("%Y-%m-%d")
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         last_sync = get_crawl_state(conn, "steam_catalog_sync_date")
     if not force and last_sync == today:
         return False
@@ -2225,7 +2388,7 @@ def sync_steam_catalog_once(force=False):
     if not rows:
         log_event("steam catalog sync skipped: AppList returned no usable rows")
         return False
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             """
             INSERT INTO steam_catalog(appid, name, updated_at, enrich_status)
@@ -2265,20 +2428,22 @@ def fetch_store_catalog_page(last_appid=0, max_results=500):
 
 def catalog_enrich_quota():
     today = datetime.now().strftime("%Y-%m-%d")
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         saved_date = get_crawl_state(conn, "steam_catalog_enrich_date")
         saved_count = int(get_crawl_state(conn, "steam_catalog_enrich_count") or 0) if saved_date == today else 0
     return today, saved_count
 
 
 def run_catalog_enrich_task():
+    if service_cooldown_remaining_seconds("steam_store"):
+        return False
     today, used = catalog_enrich_quota()
     remaining = CATALOG_ENRICH_DAILY_LIMIT - used
     if remaining <= 0:
         return False
     limit = min(CATALOG_ENRICH_BATCH_LIMIT, remaining)
     now = now_iso()
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             """
             SELECT appid
@@ -2298,7 +2463,7 @@ def run_catalog_enrich_task():
     if not appids:
         return False
     try:
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             conn.executemany(
                 "UPDATE steam_catalog SET enrich_status='running', enrich_attempts=enrich_attempts+1 WHERE appid = ?",
                 [(appid,) for appid in appids],
@@ -2307,7 +2472,7 @@ def run_catalog_enrich_task():
         saved = upsert_niche_pool_rows(fetched)
         success_ids = {int(row["appid"]) for row in fetched}
         next_week = (datetime.now(timezone.utc) + timedelta(days=7)).replace(microsecond=0).isoformat()
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             conn.executemany(
                 """
                 UPDATE steam_catalog
@@ -2321,7 +2486,7 @@ def run_catalog_enrich_task():
         log_event(f"catalog enrich batch attempted={len(appids)} saved={saved} daily={used + len(appids)}/{CATALOG_ENRICH_DAILY_LIMIT}")
         return True
     except SteamRateLimited as exc:
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             conn.executemany(
                 "UPDATE steam_catalog SET enrich_status='retry', next_enrich_at=?, last_error=? WHERE appid=?",
                 [((datetime.now(timezone.utc) + timedelta(minutes=10)).replace(microsecond=0).isoformat(), str(exc), appid) for appid in appids],
@@ -2331,7 +2496,7 @@ def run_catalog_enrich_task():
     except sqlite3.Error:
         raise
     except Exception as exc:
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             conn.executemany(
                 "UPDATE steam_catalog SET enrich_status='retry', next_enrich_at=?, last_error=? WHERE appid=?",
                 [((datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat(), str(exc), appid) for appid in appids],
@@ -2341,16 +2506,14 @@ def run_catalog_enrich_task():
 
 
 def snapshot_daily_niche_recommendation():
-    today = datetime.now().strftime("%Y-%m-%d")
-    if datetime.now().hour == 0 and datetime.now().minute < 10:
-        return False
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    today = daily_refresh_key()
+    with database_connection() as conn:
         if conn.execute("SELECT 1 FROM niche_recommendation_snapshots WHERE recommendation_date = ?", (today,)).fetchone():
             return False
     chosen = list_niche_pool_pick()
     if not chosen:
         return False
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.execute(
             """
             INSERT OR IGNORE INTO niche_recommendation_snapshots
@@ -2364,8 +2527,8 @@ def snapshot_daily_niche_recommendation():
 
 
 def get_daily_niche_recommendation():
-    today = datetime.now().strftime("%Y-%m-%d")
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    today = daily_refresh_key()
+    with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT n.*, g.tracked FROM niche_recommendation_snapshots n LEFT JOIN games g ON g.appid=n.appid WHERE recommendation_date=?",
@@ -2375,7 +2538,7 @@ def get_daily_niche_recommendation():
             return None
         pool = conn.execute("SELECT * FROM niche_pool WHERE appid=?", (row["appid"],)).fetchone()
     if not pool or not pool["eligible"] or not pool["cn_price"]:
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             conn.execute("DELETE FROM niche_recommendation_snapshots WHERE recommendation_date = ?", (today,))
         snapshot_daily_niche_recommendation()
         return None
@@ -2387,7 +2550,7 @@ def get_daily_niche_recommendation():
 
 def refresh_niche_pool_scores_from_snapshots():
     """Apply the latest 30-minute player snapshots without refetching metadata."""
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         conn.execute(
             """
@@ -2418,6 +2581,7 @@ def refresh_niche_pool_scores_from_snapshots():
                 "peak_players": peak_players,
                 "review_score": row["review_score"],
                 "total_reviews": row["total_reviews"],
+                "release_date": row["release_date"],
             }) if eligible else 0.0
             updates.append((players, peak_players, score, eligible, now_iso(), row["appid"]))
         conn.executemany(
@@ -2429,7 +2593,7 @@ def refresh_niche_pool_scores_from_snapshots():
 
 
 def get_hot_appids(limit=HOTLIST_TARGET):
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             "SELECT appid FROM hot_games ORDER BY COALESCE(current_players, 0) DESC, COALESCE(rank, 999999) LIMIT ?",
             (limit,),
@@ -2439,7 +2603,7 @@ def get_hot_appids(limit=HOTLIST_TARGET):
 
 def get_due_hot_player_appids():
     """Refresh top games more often without turning lower ranks into a request storm."""
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             """
             SELECT h.appid, COALESCE(h.rank, 999999),
@@ -2459,7 +2623,7 @@ def get_due_hot_player_appids():
 
 
 def get_hot_price_due_appids(limit=HOT_PREVIEW_BATCH_LIMIT):
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             """
             SELECT h.appid,
@@ -2488,7 +2652,7 @@ def get_hot_price_due_appids(limit=HOT_PREVIEW_BATCH_LIMIT):
 
 
 def get_hot_review_due_appids(limit=HOT_PREVIEW_BATCH_LIMIT):
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             """
             SELECT h.appid,
@@ -2516,7 +2680,7 @@ def get_hot_review_due_appids(limit=HOT_PREVIEW_BATCH_LIMIT):
 
 
 def get_hot_static_due_appids(limit=HOT_PREVIEW_BATCH_LIMIT):
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             """
             SELECT h.appid,
@@ -2546,7 +2710,7 @@ def get_hot_preview_due_appids(limit=HOT_PREVIEW_BATCH_LIMIT):
 
 
 def get_hot_full_metadata_due_appids(limit=HOT_METADATA_BATCH_LIMIT):
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             """
             SELECT h.appid,
@@ -2573,7 +2737,7 @@ def get_hot_full_metadata_due_appids(limit=HOT_METADATA_BATCH_LIMIT):
 
 def enqueue_hot_work():
     top_appids = get_hot_appids(HOTLIST_TARGET)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         generation = int(get_crawl_state(conn, "hotlist_generation") or 0)
     enqueue_crawl_tasks(top_appids, "players", 20, generation=generation)
     enqueue_crawl_tasks(get_hot_preview_due_appids(HOT_PREVIEW_TOP_LIMIT), "preview", 50, generation=generation)
@@ -2583,7 +2747,9 @@ def enqueue_hot_work():
 
 
 def run_hotlist_task(force=False):
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    if service_cooldown_remaining_seconds("steam_api"):
+        return False
+    with database_connection() as conn:
         hotlist_at = get_crawl_state(conn, "hotlist_at")
     if not (force or is_due(hotlist_at, HOTLIST_REFRESH_HOURS * 60)):
         return False
@@ -2594,7 +2760,7 @@ def run_hotlist_task(force=False):
     stamp = now_iso()
     for batch in chunks(rows[:HOTLIST_TARGET], HOTLIST_BATCH_SIZE):
         upsert_hot_games_batch(batch, stamp)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         appids = [int(row["appid"]) for row in rows[:HOTLIST_TARGET]]
         if appids:
             conn.execute(
@@ -2617,20 +2783,22 @@ def run_hotlist_task(force=False):
 
 
 def run_players_task(force=False):
-    if steam_cooldown_remaining_seconds():
+    if service_cooldown_remaining_seconds("steam_api"):
         return False
     appids = get_hot_appids(HOTLIST_TARGET) if force else get_due_hot_player_appids()
     if not appids:
         return False
     report = asyncio.run(fetch_players_for_appids_async(appids))
     complete_crawl_tasks(report["success_appids"], "players")
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         set_crawl_state(conn, "hot_players_at", report["stamp"])
     log_event(f"hot players refreshed success={report['success']} failed={report['failed']} skipped={report['skipped']}")
     return True
 
 
 def run_price_task():
+    if service_cooldown_remaining_seconds("steam_store"):
+        return False
     enqueue_crawl_tasks(get_hot_price_due_appids(HOT_PREVIEW_BATCH_LIMIT), "price", 50)
     appids = claim_crawl_tasks("price", HOT_PREVIEW_BATCH_LIMIT)
     if not appids:
@@ -2655,7 +2823,7 @@ def run_price_task():
 
 
 def run_preview_task():
-    if steam_cooldown_remaining_seconds():
+    if service_cooldown_remaining_seconds("steam_store"):
         return False
     enqueue_crawl_tasks(get_hot_preview_due_appids(HOT_PREVIEW_BATCH_LIMIT), "preview", 50)
     appids = claim_crawl_tasks("preview", HOT_PREVIEW_BATCH_LIMIT)
@@ -2682,6 +2850,8 @@ def run_preview_task():
 
 
 def run_review_task():
+    if service_cooldown_remaining_seconds("steam_store"):
+        return False
     enqueue_crawl_tasks(get_hot_review_due_appids(HOT_PREVIEW_BATCH_LIMIT), "reviews", 50)
     appids = claim_crawl_tasks("reviews", HOT_PREVIEW_BATCH_LIMIT)
     if not appids:
@@ -2706,6 +2876,8 @@ def run_review_task():
 
 
 def run_static_task():
+    if service_cooldown_remaining_seconds("steam_store"):
+        return False
     enqueue_crawl_tasks(get_hot_static_due_appids(HOT_PREVIEW_BATCH_LIMIT), "static", 50)
     appids = claim_crawl_tasks("static", HOT_PREVIEW_BATCH_LIMIT)
     if not appids:
@@ -2730,6 +2902,8 @@ def run_static_task():
 
 
 def run_metadata_task():
+    if service_cooldown_remaining_seconds("steam_store"):
+        return False
     enqueue_crawl_tasks(get_hot_full_metadata_due_appids(HOT_METADATA_BATCH_LIMIT), "metadata", 80)
     appids = claim_crawl_tasks("metadata", HOT_METADATA_BATCH_LIMIT)
     if not appids:
@@ -2754,7 +2928,9 @@ def run_metadata_task():
 
 
 def run_historylow_task():
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    if service_cooldown_remaining_seconds("itad"):
+        return False
+    with database_connection() as conn:
         historylow_backfill_at = get_crawl_state(conn, "historylow_backfill_at")
     if not is_due(historylow_backfill_at, 30):
         return False
@@ -2765,7 +2941,7 @@ def run_historylow_task():
     try:
         refresh_itad_history_lows(appids)
         complete_crawl_tasks(appids, "historylow")
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             set_crawl_state(conn, "historylow_backfill_at", now_iso())
         log_event(f"itad historylow backfilled rows={len(appids)}")
         return True
@@ -2781,6 +2957,8 @@ def run_historylow_task():
 
 
 def run_niche_pool_task(force=False):
+    if service_cooldown_remaining_seconds("steam_store") or service_cooldown_remaining_seconds("steam_api"):
+        return False
     if not NICHE_POOL_LOCK.acquire(blocking=False):
         return False
     try:
@@ -2791,7 +2969,7 @@ def run_niche_pool_task(force=False):
             if pool_count < NICHE_POOL_DISPLAY_LIMIT
             else NICHE_POOL_REFRESH_MINUTES
         )
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             refreshed_at = get_crawl_state(conn, "niche_pool_at")
         if not force and not is_due(refreshed_at, refresh_minutes):
             return False
@@ -2814,7 +2992,7 @@ def run_niche_pool_task(force=False):
                 # Catalog candidates that fail validity/player checks should
                 # not be selected again by the next bootstrap batch.
                 next_week = (datetime.now(timezone.utc) + timedelta(days=7)).replace(microsecond=0).isoformat()
-                with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+                with database_connection() as conn:
                     conn.executemany(
                         """
                         UPDATE steam_catalog
@@ -2830,7 +3008,7 @@ def run_niche_pool_task(force=False):
             log_event(f"niche pool used local cache rows={local_count}")
             return bool(local_count)
         stamp = now_iso()
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             set_crawl_state(conn, "niche_pool_at", stamp)
         log_event(
             f"niche pool refreshed local={local_count} candidates={attempted} saved={saved} "
@@ -2851,12 +3029,12 @@ def run_niche_pool_task(force=False):
 
 
 def count_eligible_niche_pool():
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         return int(conn.execute("SELECT COUNT(*) FROM niche_pool WHERE eligible = 1").fetchone()[0] or 0)
 
 
 def compact_player_snapshots_once():
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         compacted_at = get_crawl_state(conn, "player_snapshot_compacted_at")
         if not is_due(compacted_at, 24 * 60):
             return False
@@ -2898,7 +3076,7 @@ def compact_player_snapshots_once():
 def rotate_logs_once():
     """Rotate the active log daily and retain only the configured window."""
     today = datetime.now().strftime("%Y-%m-%d")
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         if get_crawl_state(conn, "log_rotation_date") == today:
             return False
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -2915,14 +3093,14 @@ def rotate_logs_once():
                     archive.unlink()
             except OSError:
                 continue
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         set_crawl_state(conn, "log_rotation_date", today)
     return True
 
 
 def compact_price_snapshots_once():
     """Keep recent prices precise, then reduce old history to daily/monthly points."""
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         compacted_at = get_crawl_state(conn, "price_snapshot_compacted_at")
         if not is_due(compacted_at, 24 * 60):
             return False
@@ -2963,7 +3141,7 @@ def compact_price_snapshots_once():
 
 def cleanup_old_records_once():
     """Remove old terminal tasks and recommendation snapshots."""
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         cleanup_at = get_crawl_state(conn, "old_records_cleaned_at")
         if not is_due(cleanup_at, 24 * 60):
             return False
@@ -2981,6 +3159,10 @@ def cleanup_old_records_once():
             "DELETE FROM niche_recommendation_snapshots WHERE recommendation_date < ?",
             (recommendation_cutoff,),
         )
+        conn.execute(
+            "DELETE FROM daily_home_snapshots WHERE recommendation_date < ?",
+            (recommendation_cutoff,),
+        )
         set_crawl_state(conn, "old_records_cleaned_at", now_iso())
     log_event("old crawl tasks and recommendation snapshots cleaned")
     return True
@@ -2994,10 +3176,6 @@ def maintain_storage_once():
 
 
 def refresh_hot_database_once(force_hotlist=False, quick=False):
-    remaining = steam_cooldown_remaining_seconds()
-    if remaining:
-        log_event(f"hot refresh deferred: Steam cooldown remaining={remaining}s")
-        return ["Steam cooldown active"]
     if not HOT_REFRESH_LOCK.acquire(blocking=False):
         return ["hot refresh already running"]
     with STATUS_LOCK:
@@ -3020,6 +3198,7 @@ def refresh_hot_database_once(force_hotlist=False, quick=False):
                 log_event(f"steam catalog sync skipped: {exc}")
             run_catalog_enrich_task()
             snapshot_daily_niche_recommendation()
+            get_home_picks()
             compact_player_snapshots_once()
             maintain_storage_once()
     except Exception as exc:
@@ -3036,12 +3215,12 @@ def refresh_hot_database_once(force_hotlist=False, quick=False):
 
 
 def count_hot_games():
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         return int(conn.execute("SELECT COUNT(*) FROM hot_games").fetchone()[0] or 0)
 
 
 def hot_games_version():
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         row = conn.execute(
             """
             SELECT MAX(COALESCE(s.updated_at, h.fetched_at, ''))
@@ -3126,7 +3305,7 @@ def upsert_game(conn, appid, details=None, name=None, mark_tracked=True):
 
 def quick_track_game(appid, name=None, header_image=None):
     resolved_name = clean_name(name)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.execute(
             """
             INSERT INTO games(appid, name, header_image, tracked, updated_at)
@@ -3145,7 +3324,7 @@ def quick_track_game(appid, name=None, header_image=None):
 
 
 def untrack_game(appid):
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.execute(
             "UPDATE games SET tracked = 0, updated_at = ? WHERE appid = ?",
             (now_iso(), int(appid)),
@@ -3160,7 +3339,7 @@ def remember_search_games(items):
     ]
     if not rows:
         return
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.executemany(
             """
             INSERT INTO games(appid, name, header_image, tracked, updated_at)
@@ -3263,7 +3442,7 @@ def refresh_itad_history_lows(appids):
 def get_missing_historylow_appids(limit=ITAD_HISTORYLOW_BATCH_LIMIT):
     if not ITAD_API_KEY:
         return []
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         rows = conn.execute(
             """
             SELECT DISTINCT g.appid
@@ -3301,7 +3480,7 @@ def backfill_historylow_async(appid):
     if not ITAD_API_KEY:
         return
     appid = int(appid)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         if not is_due(get_crawl_state(conn, historylow_attempt_key(appid)), PRICE_REFRESH_HOURS * 60):
             return
         set_crawl_state(conn, historylow_attempt_key(appid), now_iso())
@@ -3327,7 +3506,7 @@ def backfill_historylow_async(appid):
 
 def backfill_preview_async(appid, name=None):
     appid = int(appid)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         if not is_due(get_crawl_state(conn, preview_attempt_key(appid)), 30):
             return False
         set_crawl_state(conn, preview_attempt_key(appid), now_iso())
@@ -3445,7 +3624,7 @@ def refresh_game(
                 log_event(f"itad historylow failed appid={appid}: {exc}")
                 errors.append(f"itad historylow: {exc}")
 
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             upsert_game(conn, appid, details, name, mark_tracked=mark_tracked)
 
             conn.executemany(
@@ -3507,7 +3686,7 @@ def refresh_game(
 
 def backfill_details_async(appid, name=None):
     appid = int(appid)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         if not is_due(get_crawl_state(conn, detail_attempt_key(appid)), PRICE_REFRESH_HOURS * 60):
             return
         set_crawl_state(conn, detail_attempt_key(appid), now_iso())
@@ -3606,7 +3785,7 @@ def refresh_tracked_once(force_all=False):
         REFRESH_STATUS["last_errors"] = []
     all_errors = []
     try:
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             rows = conn.execute(
                 "SELECT appid, name, short_description, developer, publisher, updated_at FROM games WHERE tracked = 1 ORDER BY name"
             ).fetchall()
@@ -3636,7 +3815,7 @@ def refresh_tracked_once(force_all=False):
             for error in result["errors"]:
                 all_errors.append(f"{name}: {error}")
             if include_details:
-                with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+                with database_connection() as conn:
                     set_crawl_state(conn, detail_attempt_key(appid), now_iso())
             if include_details or include_prices or include_reviews:
                 polite_store_delay()
@@ -3653,16 +3832,11 @@ def refresh_tracked_once(force_all=False):
 def scheduler_loop():
     time.sleep(SCHEDULER_CHECK_SECONDS)
     while True:
-        remaining = steam_cooldown_remaining_seconds()
-        if remaining:
-            # One scheduler tick is enough: do not wake every worker into the
-            # same cooldown exception while Steam is explicitly paused.
-            time.sleep(min(SCHEDULER_CHECK_SECONDS, max(1, remaining)))
-            continue
         try:
             snapshot_daily_niche_recommendation()
+            get_home_picks()
         except Exception as exc:
-            log_event(f"daily niche snapshot failed: {exc}")
+            log_event(f"daily homepage snapshot failed: {exc}")
         try:
             refresh_tracked_once()
         except Exception as exc:
@@ -3700,9 +3874,20 @@ def get_status():
     status["steam_api_key_configured"] = bool(STEAM_API_KEY)
     status["historical_low_tolerance_cny"] = HISTORICAL_LOW_TOLERANCE_CNY
     status["steam_cooldown_remaining_seconds"] = steam_cooldown_remaining_seconds()
+    status["direct_cooldown_remaining_seconds"] = direct_cooldown_remaining_seconds()
+    status["direct_cooldown_minutes"] = DIRECT_COOLDOWN_MINUTES
+    status["service_cooldowns"] = {
+        service: service_cooldown_remaining_seconds(service)
+        for service in EXTERNAL_SERVICES
+    }
+    status["direct_service_cooldowns"] = {
+        service: direct_cooldown_remaining_seconds(service)
+        for service in EXTERNAL_SERVICES
+    }
     status["proxy"] = dict(PROXY_STATUS)
+    status["proxy"]["direct_cooldown_remaining_seconds"] = status["direct_cooldown_remaining_seconds"]
     try:
-        with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+        with database_connection() as conn:
             status["historical_low_count"] = conn.execute("SELECT COUNT(*) FROM historical_lows").fetchone()[0]
             status["niche_pool_count"] = conn.execute("SELECT COUNT(*) FROM niche_pool WHERE eligible = 1").fetchone()[0]
             status["steam_catalog_count"] = conn.execute("SELECT COUNT(*) FROM steam_catalog").fetchone()[0]
@@ -3937,7 +4122,7 @@ def ensure_game_from_catalog(conn, appid):
 
 def get_game_payload(appid, history_limit=500):
     history_limit = normalized_history_limit(history_limit)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         game = conn.execute("SELECT * FROM games WHERE appid = ?", (appid,)).fetchone()
         if not game:
@@ -4016,7 +4201,7 @@ def get_game_payload(appid, history_limit=500):
 
 
 def list_games():
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -4038,7 +4223,7 @@ def list_games():
 
 def list_hot_games(limit=100):
     limit = min(max(1, int(limit)), HOTLIST_TARGET)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -4148,11 +4333,11 @@ def list_hot_games(limit=100):
     return games
 
 
-def daily_index(total):
+def daily_index(total, refresh_key=None):
     if total <= 0:
         return 0
-    today = datetime.now().strftime("%Y-%m-%d")
-    digest = hashlib.sha256(today.encode("utf-8")).hexdigest()
+    key = refresh_key or daily_refresh_key()
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
     return int(digest[:8], 16) % total
 
 
@@ -4160,13 +4345,44 @@ def list_local_memes():
     meme_dir = ROOT / "assets" / "memes"
     if not meme_dir.is_dir():
         return []
-    allowed = {".gif", ".webp", ".png", ".jpg", ".jpeg"}
     files = sorted(
         path
         for path in meme_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in allowed
+        if path.is_file() and path.suffix.lower() in MEME_EXTENSIONS
     )
     return [f"/assets/memes/{path.name}" for path in files]
+
+
+def ensure_daily_home_snapshot(historical_lows, memes):
+    refresh_key = daily_refresh_key()
+    lows_by_appid = {int(game["appid"]): game for game in historical_lows}
+    with database_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT historical_low_appid, meme_url FROM daily_home_snapshots WHERE recommendation_date = ?",
+            (refresh_key,),
+        ).fetchone()
+        selected_low = lows_by_appid.get(int(row["historical_low_appid"])) if row and row["historical_low_appid"] else None
+        selected_meme = row["meme_url"] if row and row["meme_url"] in memes else None
+        needs_update = row is None
+        if historical_lows and selected_low is None:
+            selected_low = historical_lows[0]
+            needs_update = True
+        if memes and selected_meme is None:
+            selected_meme = memes[daily_index(len(memes), refresh_key)]
+            needs_update = True
+        if needs_update:
+            conn.execute(
+                """
+                INSERT INTO daily_home_snapshots(recommendation_date, historical_low_appid, meme_url, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(recommendation_date) DO UPDATE SET
+                    historical_low_appid=excluded.historical_low_appid,
+                    meme_url=excluded.meme_url
+                """,
+                (refresh_key, selected_low["appid"] if selected_low else None, selected_meme, now_iso()),
+            )
+    return refresh_key, selected_low, selected_meme
 
 
 def clean_home_pick(row):
@@ -4195,7 +4411,7 @@ def clean_home_pick(row):
 
 
 def list_niche_candidates(limit=24):
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -4218,7 +4434,7 @@ def list_niche_candidates(limit=24):
 
 def list_niche_pool_games(limit=NICHE_POOL_DISPLAY_LIMIT):
     limit = min(max(1, int(limit)), NICHE_POOL_DISPLAY_LIMIT)
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -4300,9 +4516,10 @@ def get_home_picks():
             niche_games = [clean_home_pick(niche_dict)]
 
     memes = list_local_memes()
-    meme_url = memes[daily_index(len(memes))] if memes else None
+    refresh_key, historical_low, meme_url = ensure_daily_home_snapshot(historical_lows, memes)
     return {
-        "historical_low": historical_lows[0] if historical_lows else None,
+        "refresh_key": refresh_key,
+        "historical_low": historical_low,
         "niche": niche_games[0] if niche_games else None,
         "meme": {
             "url": meme_url,
@@ -4313,7 +4530,7 @@ def get_home_picks():
 
 def search_local_games(term):
     pattern = f"%{term}%"
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -4341,7 +4558,7 @@ def search_local_games(term):
 
 def search_catalog_games(term):
     pattern = f"%{term}%"
-    with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+    with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -4516,7 +4733,7 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     target = 100
                 hot_count = count_hot_games()
-                with sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT_SECONDS) as conn:
+                with database_connection() as conn:
                     hotlist_at = get_crawl_state(conn, "hotlist_at")
                 force_hotlist = hot_count < target and is_due(hotlist_at, 30)
                 queued = False

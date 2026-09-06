@@ -948,8 +948,9 @@
     </header>
 
     <div class="status">
-      <span v-if="message">{{ message }}</span>
-      <span v-else-if="steamCooldownSeconds">Steam：冷却中，剩余 {{ Math.ceil(steamCooldownSeconds / 60) }} 分钟。</span>
+      <span v-if="rateCooldownSeconds">{{ rateCooldownText }}。</span>
+      <span v-else-if="directCooldownSeconds">{{ directCooldownText }}<template v-if="proxyFallbackActive">，当前使用代理回退</template>。</span>
+      <span v-else-if="message">{{ message }}</span>
       <span v-else-if="backendProgress">{{ backendProgress }}</span>
       <span v-else-if="refreshing">后台自动采集中，页面可正常使用。</span>
       <span v-else>自动采集：在线人数每 {{ playerRefreshMinutes }} 分钟一次，价格/评价每 {{ priceRefreshHours }} 小时一次。</span>
@@ -958,7 +959,7 @@
     <main v-if="activePage === 'home'" class="shell single">
       <section class="panel home-placeholder">
         <div class="home-card">
-          <div class="home-monitor" :class="{cooling: homeCooldownSeconds}">
+          <div class="home-monitor" :class="{cooling: rateCooldownSeconds || directCooldownSeconds}">
             <strong>{{ homeMonitorTitle }}</strong>
             <span>{{ homeMonitorDetail }}</span>
           </div>
@@ -1255,6 +1256,9 @@
           nichePoolCount: 0,
           steamCooldownSeconds: 0,
           steamCooldownObservedAt: Date.now(),
+          serviceCooldowns: {},
+          directServiceCooldowns: {},
+          proxyStatus: {},
           steamCatalogCount: 0,
           steamCatalogEnrichedCount: 0,
           catalogEnrichDailyLimit: 0,
@@ -1281,7 +1285,7 @@
       },
       computed: {
         nichePoolSummary() {
-          const formula = '加权：好评率 45% · 评测量 30% · 本站峰值 20% · 当前活跃度 5%';
+          const formula = '加权：好评率 45% · 评测量 30% · 本站峰值 15% · 发行时间 10%（仅近 8 年）';
           if (this.nichePoolTotal <= 20) {
             return `当前池未满，展示全部 ${this.nicheGames.length} 条 · ${formula}`;
           }
@@ -1335,12 +1339,77 @@
           const remainder = seconds % 60;
           return `距刷新 ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
         },
-        homeCooldownSeconds() {
-          const elapsed = Math.floor((this.nowEpoch - this.steamCooldownObservedAt) / 1000);
-          return Math.max(0, this.steamCooldownSeconds - Math.max(0, elapsed));
+        rateCooldownState() {
+          const labels = {
+            steam_api: 'Steam API',
+            steam_store: 'Steam 商店',
+            itad: 'ITAD',
+            image_cdn: '图片 CDN'
+          };
+          const elapsed = Math.max(0, Math.floor((this.nowEpoch - this.steamCooldownObservedAt) / 1000));
+          const source = Object.keys(this.serviceCooldowns || {}).length
+            ? this.serviceCooldowns
+            : { steam_api: this.steamCooldownSeconds };
+          const active = Object.entries(source)
+            .map(([service, seconds]) => ({
+              service,
+              label: labels[service] || service,
+              seconds: Math.max(0, Number(seconds || 0) - elapsed)
+            }))
+            .filter(item => item.seconds > 0)
+            .sort((a, b) => b.seconds - a.seconds);
+          return {
+            active,
+            seconds: active.length ? active[0].seconds : 0
+          };
+        },
+        rateCooldownSeconds() {
+          return this.rateCooldownState.seconds;
+        },
+        rateCooldownText() {
+          const state = this.rateCooldownState;
+          if (!state.active.length) return '';
+          const services = state.active.map(item => item.label).join('、');
+          return `${services} 接口冷却中，剩余 ${this.formatDuration(state.seconds)}`;
+        },
+        directCooldownState() {
+          const labels = {
+            steam_api: 'Steam API',
+            steam_store: 'Steam 商店',
+            itad: 'ITAD',
+            image_cdn: '图片 CDN'
+          };
+          const elapsed = Math.max(0, Math.floor((this.nowEpoch - this.steamCooldownObservedAt) / 1000));
+          const active = Object.entries(this.directServiceCooldowns || {})
+            .map(([service, seconds]) => ({
+              service,
+              label: labels[service] || service,
+              seconds: Math.max(0, Number(seconds || 0) - elapsed)
+            }))
+            .filter(item => item.seconds > 0)
+            .sort((a, b) => b.seconds - a.seconds);
+          return {
+            active,
+            seconds: active.length ? active[0].seconds : 0
+          };
+        },
+        directCooldownSeconds() {
+          return this.directCooldownState.seconds;
+        },
+        directCooldownText() {
+          const state = this.directCooldownState;
+          if (!state.active.length) return '';
+          const services = state.active.map(item => item.label).join('、');
+          return `${services} 直连冷却中，剩余 ${this.formatDuration(state.seconds)}`;
+        },
+        proxyFallbackActive() {
+          return this.directCooldownSeconds > 0
+            && Boolean(this.proxyStatus?.enabled)
+            && this.proxyStatus?.reachable === true;
         },
         homeMonitorTitle() {
-          if (this.homeCooldownSeconds) return `Steam 冷却 ${this.formatDuration(this.homeCooldownSeconds)}`;
+          if (this.rateCooldownSeconds) return `${this.rateCooldownState.active[0].label} 接口冷却 ${this.formatDuration(this.rateCooldownSeconds)}`;
+          if (this.directCooldownSeconds) return `${this.directCooldownState.active[0].label} 直连冷却 ${this.formatDuration(this.directCooldownSeconds)}`;
           if (this.hotRunning) return 'Catalog 后台补全中';
           return 'Steam 采集就绪';
         },
@@ -1348,7 +1417,8 @@
           const catalog = this.steamCatalogCount || 0;
           const enriched = this.steamCatalogEnrichedCount || 0;
           const quota = this.catalogEnrichDailyLimit || 0;
-          return `Catalog ${enriched.toLocaleString()} / ${catalog.toLocaleString()} · 每日配额 ${quota.toLocaleString()}`;
+          const connection = this.proxyFallbackActive ? '当前使用代理回退 · ' : '';
+          return `${connection}Catalog ${enriched.toLocaleString()} / ${catalog.toLocaleString()} · 每日配额 ${quota.toLocaleString()}`;
         }
       },
       mounted() {
@@ -1359,16 +1429,10 @@
         this.loadStatus();
         this.statusTimer = setInterval(this.loadStatus, 5000);
         this.clockTimer = setInterval(() => {
-          const previousDate = new Date(this.nowEpoch).toDateString();
           this.nowEpoch = Date.now();
-          if (new Date(this.nowEpoch).toDateString() !== previousDate) this.loadHomePicks();
-          const now = new Date(this.nowEpoch);
-          if (now.getHours() === 0 && now.getMinutes() === 10 && now.getSeconds() === 0) {
-            const key = now.toDateString();
-            if (this.dailyRefreshKey !== key) {
-              this.dailyRefreshKey = key;
-              this.loadHomePicks();
-            }
+          const expectedKey = this.homeRefreshKey(new Date(this.nowEpoch));
+          if (this.dailyRefreshKey && this.dailyRefreshKey !== expectedKey) {
+            this.loadHomePicks();
           }
         }, 1000);
         window.addEventListener('resize', this.resizeCharts);
@@ -1381,6 +1445,16 @@
         window.removeEventListener('scroll', this.onWindowScroll);
       },
       methods: {
+        homeRefreshKey(moment) {
+          const current = new Date(moment || Date.now());
+          if (current.getHours() === 0 && current.getMinutes() < 10) {
+            current.setDate(current.getDate() - 1);
+          }
+          const year = current.getFullYear();
+          const month = String(current.getMonth() + 1).padStart(2, '0');
+          const day = String(current.getDate()).padStart(2, '0');
+          return `${year}-${month}-${day}`;
+        },
         displayGameName(game) {
           const name = String(game?.name || '').trim();
           if (!name || name === '未命名游戏' || /^(Steam\s+)?App\s+\d+$/i.test(name)) return '名称待补全';
@@ -1442,7 +1516,9 @@
         },
         async loadHomePicks() {
           try {
-            this.homePicks = await this.api('/api/home-picks');
+            const picks = await this.api('/api/home-picks');
+            this.homePicks = picks;
+            this.dailyRefreshKey = picks.refresh_key || this.homeRefreshKey(new Date());
           } catch (err) {
             this.message = err.message;
           }
@@ -1463,6 +1539,9 @@
             this.historylowRunning = Boolean(status.historylow_running);
             this.hotRunning = Boolean(status.hot_running);
             this.steamCooldownSeconds = Number(status.steam_cooldown_remaining_seconds || 0);
+            this.serviceCooldowns = status.service_cooldowns || {};
+            this.directServiceCooldowns = status.direct_service_cooldowns || {};
+            this.proxyStatus = status.proxy || {};
             this.steamCooldownObservedAt = Date.now();
             this.steamCatalogCount = Number(status.steam_catalog_count || 0);
             this.steamCatalogEnrichedCount = Number(status.steam_catalog_enriched_count || 0);

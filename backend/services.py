@@ -1,7 +1,7 @@
 """User-facing application operations consumed by the HTTP layer."""
 
 from . import _runtime
-from .db import connect
+from .db import transaction
 
 
 def list_games():
@@ -11,7 +11,7 @@ def list_games():
 def ensure_hot_games(target):
     target = min(max(100, int(target)), _runtime.HOTLIST_TARGET)
     hot_count = _runtime.count_hot_games()
-    with connect() as conn:
+    with transaction() as conn:
         hotlist_at = _runtime.get_crawl_state(conn, "hotlist_at")
     force_hotlist = hot_count < target and _runtime.is_due(hotlist_at, 30)
     queued = False

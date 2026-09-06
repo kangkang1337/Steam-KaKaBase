@@ -73,6 +73,28 @@ python -m backend.main
 http://127.0.0.1:8765
 ```
 
+## 测试
+
+开发环境首次安装测试依赖：
+
+```powershell
+python -m pip install -r requirements-dev.txt
+```
+
+运行全部测试：
+
+```powershell
+python -m pytest
+```
+
+查看后端覆盖率：
+
+```powershell
+python -m pytest --cov=backend --cov-report=term-missing
+```
+
+测试使用 `tests/.tmp` 中的独立临时数据库，并模拟 Steam 响应，不会请求真实 Steam 接口或修改 `data/steamkb.sqlite3`。
+
 如果页面显示 `failed to fetch`：
 
 - 不要直接双击 `steamkb.html`，必须先启动后端，再访问 `http://127.0.0.1:8765`。
@@ -118,6 +140,7 @@ $env:STEAMKB_TRACKED_REFRESH_BATCH_LIMIT="1"
 $env:STEAMKB_ITAD_HISTORYLOW_BATCH_LIMIT="50"
 $env:STEAMKB_STORE_DELAY_MIN_SECONDS="1.5"
 $env:STEAMKB_STORE_DELAY_MAX_SECONDS="4.0"
+$env:STEAMKB_DIRECT_COOLDOWN_MINUTES="5"
 $env:ITAD_API_KEY="你的 IsThereAnyDeal API Key"
 python -m backend.main
 ```
@@ -133,6 +156,8 @@ python -m backend.main
 - 配置 ITAD 后，后端会每 30 分钟批量补一次缺失史低，默认每轮最多 50 个游戏。
 - Steam 商店接口有地区、频率和风控限制；如果某些地区价格为空，通常是该区不可售、请求被限制或接口临时返回不完整。
 - Steam 商店详情/多地区价格抓取之间默认会随机等待 1.5 到 4 秒，避免单次批量刷新请求过密。
+- 启用代理回退后，直连失败会进入默认 5 分钟的独立冷却；冷却期间请求直接走代理，到期后仅用一个请求探测直连是否恢复。
+- Steam Web API、Steam Store、ITAD 和图片 CDN 分别维护限流冷却；使用统一代理回退层的请求也按服务维护直连冷却。任一服务返回 429 或连接失败都不会暂停其他服务。`/api/status` 的 `service_cooldowns` 和 `direct_service_cooldowns` 可查看各服务剩余秒数。
 - 旧数据库里没有截图的游戏，会在后台自动补一次 Steam 商店详情用于保存截图；失败后会按 24 小时间隔退避，不会反复重试。
 - 在线人数接口偶发失败时会跳过本次写入并记录到 `data\steamkb.log`，不会让整次刷新失败。
 - 自动采集会每分钟检查一次是否到期，但只有在线人数超过 30 分钟、价格/评价超过 24 小时才会访问外部接口并写入数据库。
@@ -145,10 +170,11 @@ python -m backend.main
 - SQLite 已开启 WAL 模式；热榜、在线人数、元数据写入都按批次提交，默认每批 200 条。
 - `/api/hot-games?limit=100` 可查看已保存的热榜数据；如果 Steam 热榜暂时不可用，会按本地玩家快照兜底返回。
 - 页面左上角菜单包含主页占位、游戏详情和热门榜；热门榜支持仅看付费游戏、仅看国区史低游戏、按好评率排序。
-- 主页会展示今日史低、今日小众推荐和今日表情包；表情包可放入 `assets\memes`，支持 gif、webp、png、jpg。
-- 小众推荐使用独立的 `niche_pool`，不依赖热门榜或浏览器缓存；服务端每天约 00:10 保存当天推荐快照。
+- 主页会展示今日史低、每日小众宝藏游戏和今日表情包，三者统一在本地时间每天 00:10 切换并保存当天选择。
+- 表情包可放入 `assets\memes`，支持 GIF、WebP、PNG/APNG、JPEG/JFIF、AVIF 和 BMP，扩展名不区分大小写。
+- 小众推荐使用独立的 `niche_pool`，不依赖热门榜或浏览器缓存；服务端每日快照保证刷新页面或重启后当天推荐不变。
 - `steam_catalog` 只保存 Steam AppList 的 AppID、名称和 enrich 状态，默认最多保存 20,000 条；详情按每日额度分批补全，默认每天 500 条、每批 100 条。
-- 目录 enrich 会过滤 Steam 返回的非 `game` 类型，候选池最多保留 500 个满足在线人数 20～800、好评率至少 85% 且评测数据有效的游戏。
+- 目录 enrich 会过滤 Steam 返回的非 `game` 类型；候选池最多保留 500 个近 8 年发行、当前在线至少 10、本站峰值不超过 2000、好评率至少 85% 且评测数据有效的游戏。加权分由好评率 45%、评测量 30%、本站峰值 15% 和发行时间 10% 构成。
 - 搜索结果会缓存 10 分钟；搜索/浏览不会自动加入跟踪，只有收藏按钮会写入或取消跟踪状态。
 - 搜索结果首次打开如果只有名称和封面，后端会自动轻量补全详情、在线人数、评价和国区价格；左侧关注栏显示国区当前价，详情页显示国区当前价和中国区史低价。
 - 详情接口默认只返回最新 500 条历史快照并按时间升序输出；可用 `history_limit` 参数调整，最大 2000。

@@ -4,6 +4,10 @@
 # Python
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+tests/.tmp/
 
 # Runtime data
 *.db

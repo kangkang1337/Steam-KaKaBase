@@ -8,6 +8,9 @@ from ._runtime import (
     async_request_direct_then_proxy,
     cache_image,
     check_steam_cooldown,
+    check_service_cooldown,
+    direct_cooldown_remaining_seconds,
+    external_service_for_url,
     fetch_appdetails,
     fetch_itad_game_ids_async,
     fetch_itad_history_lows_async,
@@ -20,6 +23,8 @@ from ._runtime import (
     probe_proxy,
     proxy_fallback_enabled,
     request_json,
+    service_cooldown_remaining_seconds,
+    set_service_cooldown,
     set_steam_cooldown,
     steam_cooldown_remaining_seconds,
 )

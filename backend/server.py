@@ -130,4 +130,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def create_server(host="127.0.0.1", port=None):
-    return ThreadingHTTPServer((host, int(port or config.PORT)), Handler)
+    selected_port = config.PORT if port is None else int(port)
+    return ThreadingHTTPServer((host, selected_port), Handler)

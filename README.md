@@ -1,190 +1,286 @@
-Steam-KaKaBase
-==============
+# Steam-KaKaBase
 
-一个轻量的 SteamDB 风格游戏数据面板，用于查看 Steam 游戏当前价格、历史价格快照、在线人数趋势和玩家评测概况。
+一个面向本地运行的 Steam 数据面板，设计参考 SteamDB。用于查看游戏价格与本地历史快照、在线人数趋势、玩家评价、热门榜和每日小众宝藏推荐。
+
+> 当前项目处于本地原型阶段。现有 HTTP 服务适合开发和个人使用，尚未按公网生产环境加固。
+
+## 当前功能
+
+- 搜索 Steam 全量轻量目录，也可以直接输入 App ID。
+- 查看中国区价格、多地区价格历史、折扣与 ITAD 中国区史低。
+- 查看当前在线人数、本站开始记录后的历史峰值和趋势图。
+- 查看 Steam 好评率、评测数量、简介、开发商、发行商和发售日期。
+- 在详情页收藏或取消收藏，状态持久化到 SQLite。
+- 热门榜默认展示 Steam Top 100，支持仅看付费、仅看史低和按好评率排序。
+- 独立维护小众游戏池，并从候选池较强的前 50% 随机抽取最多 20 款展示。
+- 首页展示今日史低、每日小众宝藏游戏和今日表情包，统一在本地时间每天 00:10 更新。
+- Vue 3 + ECharts 前端，价格折线图和在线人数柱形图支持悬停查看数据。
+
+详情页只加载游戏头图，不再批量下载 Steam 截图或徽章。
+
+## 数据策略
+
+后端采用分层缓存，页面访问只读取 SQLite，不等待外部 Steam 请求：
+
+1. 热门榜基础层：排名、App ID、名称、头图、玩家数和更新时间。
+2. 轻量预览层：为优先游戏补中国区价格、免费状态、折扣、好评率和发售日期。
+3. 详情层：仅为高优先级或用户打开的游戏补简介、开发商和发行商。
+4. 历史层：后台保存价格、玩家数和 ITAD 史低数据。
+
+主要刷新频率：
+
+| 数据 | 频率 |
+| --- | --- |
+| 在线人数 | 默认每 30 分钟 |
+| 价格和评价 | 默认每 24 小时 |
+| 热门榜 | 默认每天 |
+| Steam 轻量目录 | 每天增量同步 |
+| 首页三项推荐 | 每天 00:10 |
+
+Steam 目录 `steam_catalog` 默认最多保存 20,000 条 App ID 和名称。目录 enrich 按每日额度逐步补全，不要求首次启动时等待全部元数据。
+
+## 数据来源
+
+- Steam Web API：热门榜、AppList 轻量目录和当前在线人数。
+- Steam Store `appdetails`：名称、头图、简介、发行信息和地区价格。
+- Steam Store `appreviews`：好评率和评测数量。
+- IsThereAnyDeal `games/lookup/v1` 与 `games/historylow/v1`：Game ID 和地区史低。
+
+价格折线图使用本站按计划保存的 Steam 价格快照，不代表 Steam 官方提供完整历史价格。玩家历史峰值同样只统计本站开始记录后的快照。
+
+## 小众池规则
+
+候选必须满足：
+
+- Steam 返回类型为游戏，排除 DLC 等非游戏内容。
+- 近 8 年发行。
+- 当前在线人数至少 10。
+- 本站历史峰值不超过 2,000。
+- 好评率至少 85%，且评测数据有效。
+
+加权分由以下部分组成：
+
+| 指标 | 权重 |
+| --- | ---: |
+| 好评率 | 45% |
+| 评测数量 | 30% |
+| 本站历史峰值 | 15% |
+| 发行时间 | 10% |
+
+发行时间系数为：0～3 年 `1.00`、4～5 年 `0.95`、6～8 年 `0.85`。候选池最多保留 500 款；首页每日选择和小众池页面展示不会固定只取第一名。
 
 ## 后端结构
 
-正式入口为 `python -m backend.main`，原来的 `python steamkb.py` 仍作为兼容入口保留。
+```text
+backend/
+├── config.py          环境变量、常量和路径
+├── logging_utils.py   日志与轮转入口
+├── db.py              SQLite 连接、迁移和任务状态
+├── steam_client.py    Steam / ITAD 请求、代理、重试和冷却
+├── crawler.py         后台采集与任务编排入口
+├── services.py        搜索、详情、榜单、推荐和收藏
+├── server.py          HTTP 路由、静态文件、CORS 和 JSON
+├── main.py            服务与调度器启动入口
+└── _runtime.py        模块拆分期间的私有兼容实现
+```
 
-- `backend/config.py`：环境变量、路径和运行参数
-- `backend/logging_utils.py`：日志与日志轮转
-- `backend/db.py`：SQLite 初始化、事务、迁移和任务状态
-- `backend/steam_client.py`：Steam/ITAD 请求、代理、重试和冷却
-- `backend/crawler.py`：定时采集与任务编排
-- `backend/services.py`：搜索、详情、榜单、收藏等业务逻辑
-- `backend/server.py`：HTTP 路由、静态文件、CORS 和 JSON 响应
-- `backend/main.py`：进程启动及调度器生命周期
+正式入口为 `python -m backend.main`。`python steamkb.py` 作为兼容入口保留。新增后端代码应优先通过公开模块调用，不应继续扩大 `_runtime.py`。
 
-`backend/_runtime.py` 是拆分期间保留的私有兼容实现。新增代码应通过上述公开模块调用，不应直接依赖 `_runtime.py`。
+SQLite 开启 WAL 模式，读写可以并行；批量采集按批次提交，避免每抓取一个 App 就提交一次。
 
-## 功能
+## 环境要求
 
-- 点击搜索栏显示热门榜，输入关键词后搜索 Steam 游戏
-- 在游戏详情页点击“收藏”加入跟踪，再次点击可取消收藏
-- 拉取当前在线人数：`ISteamUserStats/GetNumberOfCurrentPlayers`
-- 拉取多地区价格：`store.steampowered.com/api/appdetails`
-- 拉取玩家评价：`store.steampowered.com/appreviews`
-- 拉取 Steam 商店截图并在详情页底部轮播展示
-- Steam 图片会通过本地后端缓存到 `data/image-cache`，重复打开时不再每次直连 Steam CDN
-- 异步拉取 Steam 官方热榜，默认目标最多 5000 个游戏
-- 可选拉取 IsThereAnyDeal 历史低价：`api.isthereanydeal.com/v01.game.prices`
-- 通过 IsThereAnyDeal `/games/lookup/v1` 和 `/games/historylow/v1` 拉取官方史低价
-- 使用 SQLite 定时保存快照：在线人数每 30 分钟，价格/评价每天
-- Vue3 + ECharts 前端，包含价格折线图和在线人数柱形图
+- Windows 10/11
+- Python 3.10 或更高版本
+- 可访问 Steam Web API、Steam Store 和所需图片 CDN 的网络
+- ITAD 史低功能需要 IsThereAnyDeal API Key
+- Steam AppList 目录同步需要 Steam Web API Key
 
-## 启动
+## 快速启动
 
-Windows PowerShell:
-
-首次启用异步热榜采集前安装依赖：
+安装运行依赖：
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
+启动后端并打开浏览器：
+
 ```powershell
 .\start.ps1
 ```
 
-也可以双击 `start.bat`。启动脚本会自动启动后端并打开浏览器到正确的本地地址。如果 8765 被旧后端占用且无法自动关闭，脚本会改用下一个空闲端口。
-
-关闭本地后端：
-
-```powershell
-.\end.ps1
-```
-
-如果要关闭指定端口：
-
-```powershell
-.\end.ps1 -Port 8771
-```
-
-或只启动后端：
-
-```powershell
-python -m backend.main
-```
-
-然后打开：
+也可以双击 `start.bat`。默认地址为：
 
 ```text
 http://127.0.0.1:8765
 ```
 
+彻底关闭本地服务：
+
+```powershell
+.\end.ps1
+```
+
+只启动后端：
+
+```powershell
+python -m backend.main
+```
+
+不要直接双击 `steamkb.html`。页面需要通过本地后端地址打开，否则浏览器无法访问 API。
+
+## 环境配置
+
+复制示例配置：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+然后在 `.env` 中填写需要的配置。不要提交 `.env`、真实 API Key、数据库或日志。
+
+常用变量：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `STEAM_API_KEY` | 空 | Steam AppList 使用的 Web API Key |
+| `ITAD_API_KEY` | 空 | ITAD lookup 和 historylow API Key |
+| `STEAMKB_PORT` | `8765` | 本地 HTTP 端口 |
+| `STEAMKB_DB` | `data/steamkb.sqlite3` | SQLite 文件路径 |
+| `STEAMKB_LOG` | `data/steamkb.log` | 日志路径 |
+| `STEAMKB_PLAYER_REFRESH_MINUTES` | `30` | 在线人数刷新间隔，最小 30 分钟 |
+| `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 价格刷新间隔，最小 24 小时 |
+| `STEAMKB_HOTLIST_TARGET` | `100` | 本地热门榜目标数量 |
+| `STEAMKB_CATALOG_LIMIT` | `20000` | Steam 轻量目录上限 |
+| `STEAMKB_CATALOG_ENRICH_DAILY_LIMIT` | `500` | 每日目录 enrich 尝试额度 |
+| `STEAMKB_CATALOG_ENRICH_BATCH_LIMIT` | `50` | 单轮 enrich 数量 |
+| `STEAMKB_NICHE_POOL_LIMIT` | `500` | 小众候选池上限 |
+| `STEAMKB_DIRECT_COOLDOWN_MINUTES` | `5` | 直连失败后的独立冷却时间 |
+| `STEAMKB_STORE_DELAY_MIN_SECONDS` | `1.5` | 商店请求随机延迟下限 |
+| `STEAMKB_STORE_DELAY_MAX_SECONDS` | `4.0` | 商店请求随机延迟上限 |
+| `STEAMKB_HISTORICAL_LOW_TOLERANCE_CNY` | `0.5` | 当前价判定史低时允许的人民币误差 |
+
+代理回退配置：
+
+```env
+USE_PROXY=true
+STEAMKB_PROXY_URL=http://127.0.0.1:7890
+```
+
+请求优先直连。只有明确开启代理且启动探测确认代理可连接时，直连失败或超时才会回退到代理。直连正常时不会经过代理；代理地址不可用时继续采用直连。
+
+## 冷却与重试
+
+以下服务分别维护限流冷却，不会因一个服务返回 `429` 而暂停其他服务：
+
+- `steam_api`：热门榜、AppList、在线人数。
+- `steam_store`：商店详情、价格和评价。
+- `itad`：Game ID 与史低。
+- `image_cdn`：后端图片缓存。
+
+使用统一代理回退层的请求还会按服务维护直连冷却。冷却期间直接使用已确认可用的代理；到期后只放行一次直连探测。前端状态栏和首页监控区会显示冷却服务、剩余时间以及是否正在使用代理回退。
+
+可以通过以下接口查看状态：
+
+```text
+GET /api/status
+```
+
+其中 `service_cooldowns` 表示接口限流冷却，`direct_service_cooldowns` 表示直连失败冷却。
+
+## 首页与图片
+
+首页三项内容共用 `00:10` 日界线，并保存 SQLite 每日快照。刷新页面或重启服务不会改变当天选择，快照默认保留两年。
+
+表情包放在 `assets/memes/`，支持以下浏览器图片格式，扩展名不区分大小写：
+
+```text
+GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
+```
+
+游戏头图通过 `/api/image-cache` 使用本地限量缓存。缓存默认最长保留 30 天、总量上限 512 MB、单张上限 2 MB，并采用最近最少使用方向清理。当前没有批量截图缓存。
+
+## 数据保留
+
+- 日志保留 30 天并按周期轮转。
+- 价格历史最多保留 2 年，较旧数据按时间粒度压缩。
+- 在线人数保留 7 天原始快照，之后按天压缩；1 年前按月压缩，2 年前删除。
+- 每日推荐快照保留 2 年。
+- 已完成或失败的 `crawl_tasks` 默认保留 60 天。
+
+历史图接口默认返回最新 500 条记录，再按时间升序交给前端；`history_limit` 最大可设置为 2,000。
+
+## 主要 API
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/api/status` | 后台任务、目录进度、代理和冷却状态 |
+| `GET` | `/api/games` | 已收藏游戏列表 |
+| `GET` | `/api/games/{appid}` | 游戏详情与历史数据 |
+| `GET` | `/api/search?q=...` | 搜索本地目录和 Steam |
+| `GET` | `/api/hot-games?limit=100` | 读取本地热门榜缓存 |
+| `GET` | `/api/hot-games/version` | 热门榜缓存版本 |
+| `GET` | `/api/hot-games/ensure` | 仅投递热门榜后台刷新 |
+| `GET` | `/api/niche-pool` | 小众池展示数据 |
+| `GET` | `/api/home-picks` | 首页三项每日快照 |
+| `POST` | `/api/track` | 收藏游戏 |
+| `POST` | `/api/untrack` | 取消收藏 |
+| `POST` | `/api/games/{appid}/refresh` | 提升并刷新指定游戏 |
+
+`/api/hot-games` 和普通页面访问只读取已有缓存，不应隐式等待大量 Steam 请求。
+
 ## 测试
 
-开发环境首次安装测试依赖：
+安装开发依赖：
 
 ```powershell
 python -m pip install -r requirements-dev.txt
 ```
 
-运行全部测试：
+运行测试：
 
 ```powershell
 python -m pytest
 ```
 
-查看后端覆盖率：
+查看覆盖率：
 
 ```powershell
 python -m pytest --cov=backend --cov-report=term-missing
 ```
 
-测试使用 `tests/.tmp` 中的独立临时数据库，并模拟 Steam 响应，不会请求真实 Steam 接口或修改 `data/steamkb.sqlite3`。
+测试使用 `tests/.tmp` 中的独立 SQLite 文件，并模拟外部响应，不会请求真实 Steam/ITAD 接口，也不会修改 `data/steamkb.sqlite3`。
 
-如果页面显示 `failed to fetch`：
+## 故障排查
 
-- 不要直接双击 `steamkb.html`，必须先启动后端，再访问 `http://127.0.0.1:8765`。
-- 如果 8765 被旧进程占用或表现异常，换一个可用端口：
+### 页面显示 `failed to fetch`
 
-```powershell
-$env:STEAMKB_PORT="8771"
-python -m backend.main
-```
-
-然后打开对应地址，例如 `http://127.0.0.1:8771`。
-- 如果按游戏名搜索没有结果，可以直接输入 Steam appid，例如 `730`、`570`。
-
-## 可选配置
-
-可以通过环境变量调整：
+确认已经运行 `start.ps1`，并通过 `http://127.0.0.1:8765` 访问。若端口被旧进程占用：
 
 ```powershell
-$env:STEAMKB_PORT="8765"
-$env:STEAMKB_DB="data\steamkb.sqlite3"
-$env:STEAMKB_LOG="data\steamkb.log"
-$env:STEAMKB_PLAYER_REFRESH_MINUTES="30"
-$env:STEAMKB_PRICE_REFRESH_HOURS="24"
-$env:STEAMKB_HOTLIST_TARGET="100"
-$env:STEAMKB_CATALOG_LIMIT="20000"
-$env:STEAMKB_CATALOG_ENRICH_DAILY_LIMIT="500"
-$env:STEAMKB_CATALOG_ENRICH_BATCH_LIMIT="100"
-$env:STEAMKB_NICHE_POOL_LIMIT="500"
-$env:STEAM_API_KEY="your_steam_web_api_key"
-$env:STEAMKB_LOG_RETENTION_DAYS="30"
-$env:STEAMKB_PRICE_RETENTION_DAYS="730"
-$env:STEAMKB_RECOMMENDATION_RETENTION_DAYS="730"
-$env:STEAMKB_CRAWL_TASK_RETENTION_DAYS="60"
-$env:STEAMKB_HOTLIST_CONCURRENCY="8"
-$env:STEAMKB_HOTLIST_BATCH_SIZE="200"
-$env:STEAMKB_HOTLIST_REFRESH_HOURS="24"
-$env:STEAMKB_HOT_METADATA_CONCURRENCY="2"
-$env:STEAMKB_HOT_PREVIEW_TOP_LIMIT="200"
-$env:STEAMKB_HOT_PREVIEW_BATCH_LIMIT="100"
-$env:STEAMKB_HOT_FULL_METADATA_TOP_LIMIT="50"
-$env:STEAMKB_HOT_METADATA_BATCH_LIMIT="50"
-$env:STEAMKB_TRACKED_REFRESH_BATCH_LIMIT="1"
-$env:STEAMKB_ITAD_HISTORYLOW_BATCH_LIMIT="50"
-$env:STEAMKB_STORE_DELAY_MIN_SECONDS="1.5"
-$env:STEAMKB_STORE_DELAY_MAX_SECONDS="4.0"
-$env:STEAMKB_DIRECT_COOLDOWN_MINUTES="5"
-$env:ITAD_API_KEY="你的 IsThereAnyDeal API Key"
-python -m backend.main
+.\end.ps1
+.\start.ps1
 ```
 
-也可以复制 `.env.example` 为 `.env`，在项目根目录里填写 `ITAD_API_KEY`，后端启动时会自动读取。
+### 搜索暂时没有结果
 
-说明：
+搜索优先读取本地 `steam_catalog`。目录仍在补充时可以直接输入 App ID，例如 `730` 或 `570`。页面访问不会等待整个目录 enrich 完成。
 
-- Steam 在线人数、商店价格、评价接口不需要 API Key。
-- IsThereAnyDeal 的历史价格接口通常需要 API Key；未配置时，系统仍会保存 Steam 当前价格快照，前端历史价格图会基于本地定时快照展示。
-- 史低高亮只基于 `historical_lows` 表中的 ITAD 史低记录；当前价换算成人民币后与史低差距不超过 0.5 元才会标记为史低。
-- 如果未配置 `ITAD_API_KEY`，价格块会显示“未配置 ITAD”；如果正在同步史低，会显示“史低同步中”；如果 ITAD 还没有入库记录，会显示“史低未入库”。
-- 配置 ITAD 后，后端会每 30 分钟批量补一次缺失史低，默认每轮最多 50 个游戏。
-- Steam 商店接口有地区、频率和风控限制；如果某些地区价格为空，通常是该区不可售、请求被限制或接口临时返回不完整。
-- Steam 商店详情/多地区价格抓取之间默认会随机等待 1.5 到 4 秒，避免单次批量刷新请求过密。
-- 启用代理回退后，直连失败会进入默认 5 分钟的独立冷却；冷却期间请求直接走代理，到期后仅用一个请求探测直连是否恢复。
-- Steam Web API、Steam Store、ITAD 和图片 CDN 分别维护限流冷却；使用统一代理回退层的请求也按服务维护直连冷却。任一服务返回 429 或连接失败都不会暂停其他服务。`/api/status` 的 `service_cooldowns` 和 `direct_service_cooldowns` 可查看各服务剩余秒数。
-- 旧数据库里没有截图的游戏，会在后台自动补一次 Steam 商店详情用于保存截图；失败后会按 24 小时间隔退避，不会反复重试。
-- 在线人数接口偶发失败时会跳过本次写入并记录到 `data\steamkb.log`，不会让整次刷新失败。
-- 自动采集会每分钟检查一次是否到期，但只有在线人数超过 30 分钟、价格/评价超过 24 小时才会访问外部接口并写入数据库。
-- 热门榜采用分层缓存：`/api/hot-games` 只返回本地缓存并快速渲染；`/api/hot-games/ensure` 只投递后台同步，不阻塞页面。
-- 热榜在线人数使用 `httpx` + `asyncio.Semaphore` 限制并发，默认并发 8；前 200 名慢慢补国区价格、免费状态、好评率和发售日，前 50 名再补完整简介、开发商和截图。
-- 后台任务已拆成 Hotlist、Players、Preview、Metadata、HistoryLow，并通过 `crawl_tasks` 记录优先级、下次重试、错误和完成状态。
-- 在线人数历史会自动压缩：保留 7 天内原始快照，7 天前按天保留，1 年前按月保留，2 年前删除。
-- 在线人数刷新会同时写入历史快照和热榜当前人数；热门榜会按最新人数动态排序。
-- 已跟踪游戏的后台刷新默认每轮只处理 1 个，避免本地调试时后台长期占用；搜索加入跟踪只先补详情、在线人数和评价，价格由后台定时慢慢补。
-- SQLite 已开启 WAL 模式；热榜、在线人数、元数据写入都按批次提交，默认每批 200 条。
-- `/api/hot-games?limit=100` 可查看已保存的热榜数据；如果 Steam 热榜暂时不可用，会按本地玩家快照兜底返回。
-- 页面左上角菜单包含主页占位、游戏详情和热门榜；热门榜支持仅看付费游戏、仅看国区史低游戏、按好评率排序。
-- 主页会展示今日史低、每日小众宝藏游戏和今日表情包，三者统一在本地时间每天 00:10 切换并保存当天选择。
-- 表情包可放入 `assets\memes`，支持 GIF、WebP、PNG/APNG、JPEG/JFIF、AVIF 和 BMP，扩展名不区分大小写。
-- 小众推荐使用独立的 `niche_pool`，不依赖热门榜或浏览器缓存；服务端每日快照保证刷新页面或重启后当天推荐不变。
-- `steam_catalog` 只保存 Steam AppList 的 AppID、名称和 enrich 状态，默认最多保存 20,000 条；详情按每日额度分批补全，默认每天 500 条、每批 100 条。
-- 目录 enrich 会过滤 Steam 返回的非 `game` 类型；候选池最多保留 500 个近 8 年发行、当前在线至少 10、本站峰值不超过 2000、好评率至少 85% 且评测数据有效的游戏。加权分由好评率 45%、评测量 30%、本站峰值 15% 和发行时间 10% 构成。
-- 搜索结果会缓存 10 分钟；搜索/浏览不会自动加入跟踪，只有收藏按钮会写入或取消跟踪状态。
-- 搜索结果首次打开如果只有名称和封面，后端会自动轻量补全详情、在线人数、评价和国区价格；左侧关注栏显示国区当前价，详情页显示国区当前价和中国区史低价。
-- 详情接口默认只返回最新 500 条历史快照并按时间升序输出；可用 `history_limit` 参数调整，最大 2000。
+### Steam 请求频繁失败
 
-## 文件
+先查看 `/api/status` 和 `data/steamkb.log`，确认失败属于 Steam API、Steam Store、ITAD、图片 CDN、直连还是代理。不要直接提高并发；持续出现 `429` 时应等待对应服务冷却结束。
 
-- `backend/`：模块化后端；入口为 `backend.main`
-- `steamkb.py`：兼容旧启动命令的轻量入口
-- `steamkb.html`：Vue3 前端页面
-- `data/steamkb.sqlite3`：运行后自动创建的数据库
-- `start.ps1` / `start.bat`：启动脚本
-- `end.ps1`：按端口关闭本地后端，默认关闭 8765
-- `requirements.txt`：异步热榜采集依赖
+## 项目文件
+
+- `steamkb.html`：Vue 3 单页前端。
+- `backend/`：Python 后端。
+- `steamkb.py`：兼容启动入口。
+- `start.ps1` / `start.bat`：Windows 启动脚本。
+- `end.ps1`：停止本地后端。
+- `requirements.txt`：运行依赖。
+- `requirements-dev.txt`：测试依赖。
+- `.env.example`：不含密钥的环境变量示例。
+- `kaka.md`：后续开发路线。
+
+运行时数据库、日志和图片缓存位于 `data/`，不应提交到 Git。

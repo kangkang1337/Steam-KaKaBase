@@ -166,6 +166,8 @@ Copy-Item .env.example .env
 | `STEAMKB_PORT` | `8765` | 本地 HTTP 端口 |
 | `STEAMKB_DB` | `data/steamkb.sqlite3` | SQLite 文件路径 |
 | `STEAMKB_LOG` | `data/steamkb.log` | 日志路径 |
+| `STEAMKB_DB_BACKUP_DIR` | `data/backups` | 迁移前备份和手动备份目录 |
+| `STEAMKB_DB_BACKUP_KEEP` | `10` | 自动保留的最近数据库备份数量 |
 | `STEAMKB_PLAYER_REFRESH_MINUTES` | `30` | 在线人数刷新间隔，最小 30 分钟 |
 | `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 价格刷新间隔，最小 24 小时 |
 | `STEAMKB_HOTLIST_TARGET` | `100` | 本地热门榜目标数量 |
@@ -175,6 +177,7 @@ Copy-Item .env.example .env
 | `STEAMKB_CATALOG_ENRICH_DAILY_LIMIT` | `1500` | 每日目录 enrich 尝试额度 |
 | `STEAMKB_CATALOG_ENRICH_BATCH_LIMIT` | `50` | 单轮 enrich 数量 |
 | `STEAMKB_NICHE_POOL_LIMIT` | `500` | 小众候选池上限 |
+| `STEAMKB_NICHE_MAX_REVIEWS` | `50000` | 小众候选游戏允许的最大 Steam 评测数 |
 | `STEAMKB_DIRECT_COOLDOWN_MINUTES` | `5` | 直连失败后的独立冷却时间 |
 | `STEAMKB_STORE_DELAY_MIN_SECONDS` | `1.5` | 商店请求随机延迟下限 |
 | `STEAMKB_STORE_DELAY_MAX_SECONDS` | `4.0` | 商店请求随机延迟上限 |
@@ -189,6 +192,30 @@ STEAMKB_PROXY_URL=http://127.0.0.1:7890
 
 请求优先直连。只有明确开启代理且启动探测确认代理可连接时，直连失败或超时才会回退到代理。直连正常时不会经过代理；代理地址不可用时继续采用直连。
 
+## 数据库迁移与备份
+
+SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。服务启动时只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
+
+迁移中任意一步失败时，事务会整体回滚，服务停止启动，并在错误中给出升级前备份路径。默认保留最近 10 份自动或手动备份，数据库和备份文件均被 Git 忽略。
+
+常用维护命令：
+
+```powershell
+# 查看当前版本
+python scripts/manage_database.py status
+
+# 手动创建一致性备份
+python scripts/manage_database.py backup
+
+# 单独执行待处理迁移（正常启动时会自动执行）
+python scripts/manage_database.py migrate
+
+# 恢复前必须先运行 .\end.ps1
+python scripts/manage_database.py restore data/backups/备份文件.sqlite3 --confirm
+```
+
+恢复操作会先额外保存一份当前数据库，再校验目标备份并替换数据库。新增结构变更时，应在 `backend/migrations.py` 追加更高版本的 `Migration`，不能修改已经发布的迁移，也不能重新把补列逻辑放回 `ensure_schema()`。
+
 ## 冷却与重试
 
 以下服务分别维护限流冷却，不会因一个服务返回 `429` 而暂停其他服务：
@@ -198,7 +225,7 @@ STEAMKB_PROXY_URL=http://127.0.0.1:7890
 - `itad`：Game ID 与史低。
 - `image_cdn`：后端图片缓存。
 
-使用统一代理回退层的请求还会按服务维护直连冷却。冷却期间直接使用已确认可用的代理；到期后只放行一次直连探测。前端状态栏和首页监控区会显示冷却服务、剩余时间以及是否正在使用代理回退。
+使用统一代理回退层的请求还会按服务维护直连冷却。冷却期间直接使用已确认可用的代理；到期后只放行一次直连探测。前端状态栏和首页监控区会显示冷却服务和剩余时间。
 
 可以通过以下接口查看状态：
 

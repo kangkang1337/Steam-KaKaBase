@@ -18,7 +18,7 @@ def test_health_and_readiness(api_client):
     assert client.get("/health").json() == {"status": "ok"}
     response = client.get("/ready")
     assert response.status_code == 200
-    assert response.json() == {"ready": True, "database": "ok"}
+    assert response.json() == {"ready": True, "database": "ok", "schema_version": 4}
 
 
 def test_status_endpoint(api_client):
@@ -33,6 +33,8 @@ def test_status_endpoint(api_client):
     assert set(payload["service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert set(payload["direct_service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert "proxy" in payload
+    assert payload["database_schema_version"] == 4
+    assert payload["niche_max_reviews"] == 50000
 
 
 def test_games_endpoint_reads_local_cache(api_client):

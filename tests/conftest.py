@@ -1,4 +1,5 @@
 import gc
+import shutil
 import sqlite3
 import time
 import uuid
@@ -18,6 +19,7 @@ def isolated_runtime(monkeypatch):
     test_id = uuid.uuid4().hex
     test_db = temp_dir / f"{test_id}.sqlite3"
     test_log = temp_dir / f"{test_id}.log"
+    test_backups = temp_dir / f"backups-{test_id}"
     opened_connections = []
     original_connect = sqlite3.connect
 
@@ -29,6 +31,7 @@ def isolated_runtime(monkeypatch):
     monkeypatch.setattr(sqlite3, "connect", tracked_connect)
     monkeypatch.setattr(_runtime, "DB_PATH", test_db)
     monkeypatch.setattr(_runtime, "LOG_PATH", test_log)
+    monkeypatch.setattr(_runtime, "DB_MIGRATION_BACKUP_DIR", test_backups)
     monkeypatch.setattr(config, "DB_PATH", test_db)
     monkeypatch.setattr(config, "LOG_PATH", test_log)
     monkeypatch.setattr(db, "DB_PATH", test_db)
@@ -55,6 +58,7 @@ def isolated_runtime(monkeypatch):
                         break
                     gc.collect()
                     time.sleep(0.05)
+        shutil.rmtree(test_backups, ignore_errors=True)
 
 
 @pytest.fixture

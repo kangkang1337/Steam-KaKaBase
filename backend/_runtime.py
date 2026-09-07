@@ -42,6 +42,10 @@ DATA_DIR = ROOT / "data"
 IMAGE_CACHE_DIR = DATA_DIR / "image-cache"
 DB_PATH = Path(os.getenv("STEAMKB_DB", str(DATA_DIR / "steamkb.sqlite3")))
 LOG_PATH = Path(os.getenv("STEAMKB_LOG", str(DATA_DIR / "steamkb.log")))
+DB_MIGRATION_BACKUP_DIR = Path(
+    os.getenv("STEAMKB_DB_BACKUP_DIR", str(DB_PATH.parent / "backups"))
+)
+DB_MIGRATION_BACKUP_KEEP = max(1, int(os.getenv("STEAMKB_DB_BACKUP_KEEP", "10")))
 LOG_RETENTION_DAYS = max(7, int(os.getenv("STEAMKB_LOG_RETENTION_DAYS", "30")))
 PRICE_RETENTION_DAYS = max(30, int(os.getenv("STEAMKB_PRICE_RETENTION_DAYS", "730")))
 RECOMMENDATION_RETENTION_DAYS = max(30, int(os.getenv("STEAMKB_RECOMMENDATION_RETENTION_DAYS", "730")))
@@ -78,6 +82,7 @@ CATALOG_RESCAN_DAYS = max(1, int(os.getenv("STEAMKB_CATALOG_RESCAN_DAYS", "7")))
 CATALOG_ENRICH_DAILY_LIMIT = max(100, int(os.getenv("STEAMKB_CATALOG_ENRICH_DAILY_LIMIT", "1500")))
 CATALOG_ENRICH_BATCH_LIMIT = max(20, int(os.getenv("STEAMKB_CATALOG_ENRICH_BATCH_LIMIT", "50")))
 NICHE_POOL_LIMIT = max(50, int(os.getenv("STEAMKB_NICHE_POOL_LIMIT", "500")))
+NICHE_MAX_REVIEWS = max(1, int(os.getenv("STEAMKB_NICHE_MAX_REVIEWS", "50000")))
 TRACKED_REFRESH_BATCH_LIMIT = max(1, int(os.getenv("STEAMKB_TRACKED_REFRESH_BATCH_LIMIT", "1")))
 ITAD_HISTORYLOW_BATCH_LIMIT = max(1, int(os.getenv("STEAMKB_ITAD_HISTORYLOW_BATCH_LIMIT", "50")))
 STORE_REQUEST_DELAY_MIN_SECONDS = max(0, float(os.getenv("STEAMKB_STORE_DELAY_MIN_SECONDS", "1.5")))
@@ -636,7 +641,20 @@ def release_recency_factor(value):
 
 
 def init_db():
+    from .migrations import migrate_database
+
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    migration_result = migrate_database(
+        DB_PATH,
+        timeout=DB_TIMEOUT_SECONDS,
+        backup_dir=DB_MIGRATION_BACKUP_DIR,
+        backup_keep=DB_MIGRATION_BACKUP_KEEP,
+    )
+    if migration_result["applied"]:
+        log_event(
+            f"database migrated v{migration_result['from_version']} -> "
+            f"v{migration_result['to_version']} backup={migration_result['backup_path'] or 'not-needed'}"
+        )
     with database_connection() as conn:
         conn.executescript(
             """
@@ -833,7 +851,6 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_catalog_enrich_queue ON steam_catalog(enrich_status, next_enrich_at, updated_at);
             """
         )
-        ensure_schema(conn)
         conn.executescript(
             """
             CREATE TRIGGER IF NOT EXISTS latest_player_snapshot AFTER INSERT ON player_snapshots BEGIN
@@ -937,111 +954,10 @@ def init_db():
 
 
 def ensure_schema(conn):
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(games)").fetchall()}
-    if "screenshots_json" not in columns:
-        conn.execute("ALTER TABLE games ADD COLUMN screenshots_json TEXT")
-    if "itad_game_id" not in columns:
-        conn.execute("ALTER TABLE games ADD COLUMN itad_game_id TEXT")
-    niche_columns = {row[1] for row in conn.execute("PRAGMA table_info(niche_pool)").fetchall()}
-    if niche_columns and "release_date" not in niche_columns:
-        conn.execute("ALTER TABLE niche_pool ADD COLUMN release_date TEXT")
-    if niche_columns and "peak_players" not in niche_columns:
-        conn.execute("ALTER TABLE niche_pool ADD COLUMN peak_players INTEGER")
-    # Niche-pool peaks are deliberately local observations, never Steam's
-    # transient chart peak. Rebuild them from this site's own snapshots.
-    conn.execute(
-        """
-        UPDATE niche_pool
-        SET peak_players = COALESCE(
-            (SELECT MAX(p.player_count) FROM player_snapshots p WHERE p.appid = niche_pool.appid),
-            current_players,
-            0
-        )
-        """
-    )
-    task_columns = {row[1] for row in conn.execute("PRAGMA table_info(crawl_tasks)").fetchall()}
-    if task_columns and "status" not in task_columns:
-        conn.execute("ALTER TABLE crawl_tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
-    if task_columns and "attempts" not in task_columns:
-        conn.execute("ALTER TABLE crawl_tasks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
-    if task_columns and "generation" not in task_columns:
-        conn.execute("ALTER TABLE crawl_tasks ADD COLUMN generation INTEGER")
-    catalog_columns = {row[1] for row in conn.execute("PRAGMA table_info(steam_catalog)").fetchall()}
-    if catalog_columns and "last_seen_at" not in catalog_columns:
-        conn.execute("ALTER TABLE steam_catalog ADD COLUMN last_seen_at TEXT")
-    if catalog_columns and "app_type" not in catalog_columns:
-        conn.execute("ALTER TABLE steam_catalog ADD COLUMN app_type TEXT NOT NULL DEFAULT 'unknown'")
-    if catalog_columns and "app_type_checked_at" not in catalog_columns:
-        conn.execute("ALTER TABLE steam_catalog ADD COLUMN app_type_checked_at TEXT")
-    if catalog_columns and "scan_generation" not in catalog_columns:
-        conn.execute("ALTER TABLE steam_catalog ADD COLUMN scan_generation INTEGER")
-    # Before app_type existed, a catalog row reached `done` only after
-    # AppDetails returned type=game and the candidate payload was accepted.
-    # Preserve that verified state during the one-time schema upgrade.
-    conn.execute(
-        """
-        UPDATE steam_catalog
-        SET app_type='game',
-            app_type_checked_at=COALESCE(app_type_checked_at, last_enriched_at, updated_at)
-        WHERE app_type='unknown' AND enrich_status='done'
-        """
-    )
-    # Legacy skipped rows mixed unavailable apps with non-games. Requeue this
-    # small set once so the new classifier can assign a terminal result.
-    conn.execute(
-        """
-        UPDATE steam_catalog
-        SET enrich_status='pending', next_enrich_at=?, last_error=NULL
-        WHERE app_type='unknown' AND enrich_status='skipped'
-          AND app_type_checked_at IS NULL
-        """,
-        (now_iso(),),
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_type_name ON steam_catalog(app_type, name)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_scan_generation ON steam_catalog(scan_generation, appid)")
-    conn.execute(
-        """
-        DELETE FROM niche_pool
-        WHERE appid IN (
-            SELECT appid FROM steam_catalog WHERE app_type NOT IN ('unknown', 'game')
-        )
-        """
-    )
-    conn.execute(
-        """
-        UPDATE crawl_tasks
-        SET status = 'skipped',
-            locked_until = NULL,
-            last_error = 'screenshots disabled: Steam-KaKaBase now loads header images only',
-            updated_at = ?
-        WHERE task_type = 'screenshots' AND status IN ('pending', 'retry', 'running')
-        """,
-        (now_iso(),),
-    )
-    conn.execute(
-        """
-        UPDATE crawl_tasks
-        SET status = 'not_available', completed_at = ?, locked_until = NULL,
-            last_error = 'merged into preview task', updated_at = ?
-        WHERE task_type IN ('price', 'static') AND status IN ('pending', 'retry', 'running')
-        """,
-        (now_iso(), now_iso()),
-    )
-    conn.execute(
-        """
-        UPDATE hot_games
-        SET name = NULL
-        WHERE name LIKE 'App %' OR name LIKE 'Steam App %'
-        """
-    )
-    conn.execute(
-        """
-        UPDATE games
-        SET name = ?, updated_at = ?
-        WHERE name LIKE 'App %' OR name LIKE 'Steam App %'
-        """,
-        (UNKNOWN_GAME_NAME, now_iso()),
-    )
+    """Compatibility validator; schema changes live in migrations.py."""
+    from .migrations import validate_schema
+
+    return validate_schema(conn)
 
 
 def clear_seeded_defaults(conn):
@@ -2361,7 +2277,7 @@ def upsert_niche_pool_rows(rows, persist_prices=False):
             and int(row.get("current_players") or 0) >= 10
             and 0 < int(row.get("peak_players") or 0) <= 2000
             and float(row.get("review_score") or 0) >= 85
-            and int(row.get("total_reviews") or 0) > 0
+            and 0 < int(row.get("total_reviews") or 0) <= NICHE_MAX_REVIEWS
             and is_recent_release(row.get("release_date"))
         )
         prepared.append((row, niche_weighted_score(row) if eligible else 0.0, 1 if eligible else 0))
@@ -2497,9 +2413,11 @@ def list_niche_pool_pick():
             SELECT n.* FROM niche_pool n
             LEFT JOIN steam_catalog c ON c.appid=n.appid
             WHERE n.eligible=1 AND n.cn_price IS NOT NULL
+              AND n.total_reviews BETWEEN 1 AND ?
               AND COALESCE(c.app_type, 'game')='game'
             ORDER BY n.weighted_score DESC LIMIT 60
-            """
+            """,
+            (NICHE_MAX_REVIEWS,),
         ).fetchall()
         rows = [row for row in rows if not is_obvious_non_game_name(row["name"])][:30]
         if not rows:
@@ -2777,6 +2695,7 @@ def get_daily_niche_recommendation():
             return None
         pool = conn.execute("SELECT * FROM niche_pool WHERE appid=?", (row["appid"],)).fetchone()
     if (not pool or not pool["eligible"] or not pool["cn_price"]
+            or not 0 < int(pool["total_reviews"] or 0) <= NICHE_MAX_REVIEWS
             or row["app_type"] != "game" or is_obvious_non_game_name(row["name"])):
         with database_connection() as conn:
             conn.execute("DELETE FROM niche_recommendation_snapshots WHERE recommendation_date = ?", (today,))
@@ -2824,7 +2743,7 @@ def refresh_niche_pool_scores_from_snapshots():
                 and players >= 10
                 and 0 < peak_players <= 2000
                 and float(row["review_score"] or 0) >= 85
-                and int(row["total_reviews"] or 0) > 0
+                and 0 < int(row["total_reviews"] or 0) <= NICHE_MAX_REVIEWS
                 and is_recent_release(row["release_date"])
             )
             score = niche_weighted_score({
@@ -3307,8 +3226,11 @@ def count_eligible_niche_pool():
             SELECT n.name
             FROM niche_pool n
             LEFT JOIN steam_catalog c ON c.appid=n.appid
-            WHERE n.eligible=1 AND COALESCE(c.app_type, 'game')='game'
-            """
+            WHERE n.eligible=1
+              AND n.total_reviews BETWEEN 1 AND ?
+              AND COALESCE(c.app_type, 'game')='game'
+            """,
+            (NICHE_MAX_REVIEWS,),
         ).fetchall()
     return sum(1 for row in rows if not is_obvious_non_game_name(row[0]))
 
@@ -4236,6 +4158,7 @@ def get_status():
             status["steam_catalog_scan_last_batch_at"] = get_crawl_state(conn, "steam_catalog_scan_last_batch_at")
             status["steam_catalog_scan_completed_at"] = get_crawl_state(conn, "steam_catalog_scan_completed_at") or None
             status["steam_catalog_scan_complete"] = bool(status["steam_catalog_scan_completed_at"])
+            status["database_schema_version"] = int(conn.execute("PRAGMA user_version").fetchone()[0])
             status["crawl_task_count"] = conn.execute(
                 "SELECT COUNT(*) FROM crawl_tasks WHERE status IN ('pending', 'retry', 'running')"
             ).fetchone()[0]
@@ -4273,6 +4196,7 @@ def get_status():
         status["steam_catalog_scan_last_batch_at"] = None
         status["steam_catalog_scan_completed_at"] = None
         status["steam_catalog_scan_complete"] = False
+        status["database_schema_version"] = 0
         status["crawl_task_count"] = 0
         status["crawl_task_counts"] = []
         status["hot_games_version"] = ""
@@ -4304,6 +4228,7 @@ def get_status():
     status["catalog_enrich_daily_limit"] = CATALOG_ENRICH_DAILY_LIMIT
     status["catalog_enrich_batch_limit"] = CATALOG_ENRICH_BATCH_LIMIT
     status["niche_pool_limit"] = NICHE_POOL_LIMIT
+    status["niche_max_reviews"] = NICHE_MAX_REVIEWS
     status["tracked_refresh_batch_limit"] = TRACKED_REFRESH_BATCH_LIMIT
     status["itad_historylow_batch_limit"] = ITAD_HISTORYLOW_BATCH_LIMIT
     with TRACK_BACKFILL_LOCK:
@@ -4802,11 +4727,12 @@ def list_niche_candidates(limit=24):
             LEFT JOIN games g ON g.appid = n.appid
             LEFT JOIN steam_catalog c ON c.appid = n.appid
             WHERE n.eligible = 1
+              AND n.total_reviews BETWEEN 1 AND ?
               AND COALESCE(c.app_type, 'game') = 'game'
             ORDER BY n.weighted_score DESC, n.total_reviews DESC
             LIMIT ?
             """,
-            (limit,),
+            (NICHE_MAX_REVIEWS, limit),
         ).fetchall()
     return [clean_home_pick(row) for row in rows if not is_obvious_non_game_name(row["name"])]
 
@@ -4832,9 +4758,11 @@ def list_niche_pool_games(limit=NICHE_POOL_DISPLAY_LIMIT):
             LEFT JOIN game_latest_state s ON s.appid = n.appid
             LEFT JOIN steam_catalog c ON c.appid = n.appid
             WHERE n.eligible = 1
+              AND n.total_reviews BETWEEN 1 AND ?
               AND COALESCE(c.app_type, 'game') = 'game'
             ORDER BY n.weighted_score DESC, n.total_reviews DESC
             """,
+            (NICHE_MAX_REVIEWS,),
         ).fetchall()
     rows = [row for row in rows if not is_obvious_non_game_name(row["name"])]
     # Keep a small pool fully visible while it is still being built. Once it
@@ -4927,12 +4855,20 @@ def search_local_games(term):
                    (SELECT player_count FROM player_snapshots WHERE appid = g.appid ORDER BY fetched_at DESC LIMIT 1) AS player_count
             FROM games g
             LEFT JOIN steam_catalog c ON c.appid=g.appid
-            WHERE g.name LIKE ? AND g.name != ?
+            WHERE (g.name LIKE ? OR c.name LIKE ? OR g.short_description LIKE ?)
+              AND g.name != ?
               AND COALESCE(c.app_type, 'game') = 'game'
-            ORDER BY g.tracked DESC, player_count DESC, g.name ASC
+            ORDER BY g.tracked DESC,
+                     CASE
+                       WHEN g.name LIKE ? THEN 0
+                       WHEN c.name LIKE ? THEN 1
+                       WHEN g.short_description LIKE ? THEN 2
+                       ELSE 3
+                     END,
+                     player_count DESC, g.name ASC
             LIMIT 12
             """,
-            (pattern, UNKNOWN_GAME_NAME),
+            (pattern, pattern, pattern, UNKNOWN_GAME_NAME, pattern, pattern, f"%《{term}》%"),
         ).fetchall()
     return [
         {
@@ -4954,7 +4890,8 @@ def search_catalog_games(term):
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
-            SELECT c.appid, c.name,
+            SELECT c.appid,
+                   CASE WHEN g.name IS NOT NULL AND g.name != ? THEN g.name ELSE c.name END AS name,
                    COALESCE(g.header_image, 'https://cdn.akamai.steamstatic.com/steam/apps/' || c.appid || '/header.jpg') AS header_image,
                    COALESCE(g.tracked, 0) AS tracked
             FROM steam_catalog c
@@ -4964,7 +4901,7 @@ def search_catalog_games(term):
             ORDER BY CASE c.app_type WHEN 'game' THEN 0 ELSE 1 END, c.name ASC
             LIMIT 36
             """,
-            (pattern,),
+            (UNKNOWN_GAME_NAME, pattern),
         ).fetchall()
     return [
         {
@@ -4997,7 +4934,7 @@ def search_steam(term):
         local_and_catalog.append(item)
         if len(local_and_catalog) >= 12:
             break
-    if local_and_catalog:
+    if len(local_and_catalog) >= 12:
         SEARCH_CACHE[cache_key] = {"at": time.time(), "items": local_and_catalog}
         return local_and_catalog
 
@@ -5032,7 +4969,7 @@ def search_steam(term):
     try:
         payload = request_json(f"https://store.steampowered.com/api/storesearch/?{qs}", timeout=3, max_retries=0)
     except Exception:
-        return []
+        return local_and_catalog
     items = payload.get("items") or []
     remote_items = [
         {

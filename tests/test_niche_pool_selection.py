@@ -77,6 +77,49 @@ def test_remote_candidate_price_survives_when_game_is_not_yet_eligible(isolated_
     assert latest[2] is not None
 
 
+@pytest.mark.parametrize(
+    ("total_reviews", "eligible"),
+    [(50000, True), (50001, False)],
+)
+def test_niche_pool_enforces_review_count_cap(isolated_runtime, total_reviews, eligible):
+    runtime = isolated_runtime
+    runtime.upsert_niche_pool_rows([{
+        "appid": 6000 + total_reviews,
+        "name": "Review Cap Candidate",
+        "current_players": 20,
+        "peak_players": 100,
+        "review_score": 90,
+        "total_reviews": total_reviews,
+        "release_date": "2026-01-01",
+    }])
+
+    assert (runtime.count_eligible_niche_pool() == 1) is eligible
+
+
+def test_score_refresh_removes_candidate_over_review_count_cap(isolated_runtime):
+    runtime = isolated_runtime
+    stamp = runtime.now_iso()
+    with sqlite3.connect(runtime.DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO niche_pool(
+                appid, name, current_players, peak_players, review_score,
+                total_reviews, release_date, weighted_score, eligible,
+                fetched_at, evaluated_at
+            ) VALUES (7001, 'Mainstream Candidate', 20, 100, 90, 50001,
+                      '2026-01-01', 1, 1, ?, ?)
+            """,
+            (stamp, stamp),
+        )
+
+    runtime.refresh_niche_pool_scores_from_snapshots()
+
+    with sqlite3.connect(runtime.DB_PATH) as conn:
+        assert conn.execute(
+            "SELECT 1 FROM niche_pool WHERE appid=7001"
+        ).fetchone() is None
+
+
 def test_new_price_state_updates_and_can_clear_niche_price(isolated_runtime, insert_game):
     runtime = isolated_runtime
     appid = insert_game(4343, "Price Sync")

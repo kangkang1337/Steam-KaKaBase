@@ -1254,6 +1254,7 @@
           historicalLowCount: 0,
           historylowRunning: false,
           nichePoolCount: 0,
+          nicheMaxReviews: 50000,
           steamCooldownSeconds: 0,
           steamCooldownObservedAt: Date.now(),
           serviceCooldowns: {},
@@ -1288,7 +1289,8 @@
       },
       computed: {
         nichePoolSummary() {
-          const formula = '加权：好评率 45% · 评测量 30% · 本站峰值 15% · 发行时间 10%（仅近 8 年）';
+          const reviewCap = this.nicheMaxReviews.toLocaleString();
+          const formula = `加权：好评率 45% · 评测量 30% · 本站峰值 15% · 发行时间 10%（近 8 年，评测不超过 ${reviewCap} 条）`;
           if (this.nichePoolTotal < 20) {
             return `当前池未满，展示全部 ${this.nicheGames.length} 条 · ${formula}`;
           }
@@ -1424,7 +1426,7 @@
           const excluded = this.steamCatalogExcludedCount || 0;
           const quota = this.catalogEnrichDailyLimit || 0;
           const scan = this.steamCatalogScanComplete ? '全量扫描完成' : '全量扫描推进中';
-          return `Catalog ${catalog.toLocaleString()} · 游戏 ${games.toLocaleString()} · 已排除 ${excluded.toLocaleString()} · ${scan} · 补全 ${enriched.toLocaleString()} · 每日配额 ${quota.toLocaleString()}`;
+          return `目录已收录 ${catalog.toLocaleString()} · 游戏 ${games.toLocaleString()} · 已排除 ${excluded.toLocaleString()} · ${scan} · 补全 ${enriched.toLocaleString()} · 每日配额 ${quota.toLocaleString()}`;
         }
       },
       mounted() {
@@ -1542,6 +1544,7 @@
             this.historicalLowCount = status.historical_low_count || 0;
             const previousNicheCount = this.nichePoolCount;
             this.nichePoolCount = Number(status.niche_pool_count || 0);
+            this.nicheMaxReviews = Number(status.niche_max_reviews || 50000);
             this.historylowRunning = Boolean(status.historylow_running);
             this.hotRunning = Boolean(status.hot_running);
             this.steamCooldownSeconds = Number(status.steam_cooldown_remaining_seconds || 0);

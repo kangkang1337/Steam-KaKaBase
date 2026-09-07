@@ -183,6 +183,76 @@ def test_search_excludes_classified_and_obvious_non_games(isolated_runtime):
     assert [row["appid"] for row in results] == [201]
 
 
+def test_local_search_matches_catalog_alias_but_displays_localized_name(isolated_runtime):
+    runtime = isolated_runtime
+    with sqlite3.connect(runtime.DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO games(appid, name, tracked, updated_at) VALUES (1245620, 'Localized Elden Ring', 0, ?)",
+            (runtime.now_iso(),),
+        )
+        conn.execute(
+            """
+            INSERT INTO steam_catalog(appid, name, app_type, updated_at)
+            VALUES (1245620, 'ELDEN RING', 'game', ?)
+            """,
+            (runtime.now_iso(),),
+        )
+
+    results = runtime.search_local_games("elden")
+
+    assert results[0]["appid"] == 1245620
+    assert results[0]["name"] == "Localized Elden Ring"
+
+
+def test_local_search_matches_localized_title_in_description(isolated_runtime):
+    runtime = isolated_runtime
+    with sqlite3.connect(runtime.DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO games(appid, name, short_description, tracked, updated_at)
+            VALUES (367520, 'Hollow Knight', 'Explore the localized title: 空洞骑士', 0, ?)
+            """,
+            (runtime.now_iso(),),
+        )
+
+    results = runtime.search_local_games("空洞骑士")
+
+    assert results[0]["appid"] == 367520
+    assert results[0]["name"] == "Hollow Knight"
+
+
+def test_search_uses_steam_to_complete_partial_local_results(isolated_runtime, monkeypatch):
+    runtime = isolated_runtime
+    runtime.SEARCH_CACHE.clear()
+    monkeypatch.setattr(runtime, "search_local_games", lambda _term: [
+        {"appid": 10, "name": "Elden Path", "tiny_image": None, "tracked": False}
+    ])
+    monkeypatch.setattr(runtime, "search_catalog_games", lambda _term: [])
+    monkeypatch.setattr(runtime, "remember_search_games", lambda _items: None)
+    monkeypatch.setattr(runtime, "request_json", lambda *_args, **_kwargs: {
+        "items": [{"id": 1245620, "type": "app", "name": "Localized Elden Ring"}]
+    })
+
+    results = runtime.search_steam("elden")
+
+    assert [row["appid"] for row in results] == [1245620, 10]
+
+
+def test_search_keeps_partial_local_results_when_steam_fails(isolated_runtime, monkeypatch):
+    runtime = isolated_runtime
+    runtime.SEARCH_CACHE.clear()
+    local = {"appid": 10, "name": "Elden Path", "tiny_image": None, "tracked": False}
+    monkeypatch.setattr(runtime, "search_local_games", lambda _term: [local])
+    monkeypatch.setattr(runtime, "search_catalog_games", lambda _term: [])
+
+    def fail(*_args, **_kwargs):
+        raise TimeoutError("store search unavailable")
+
+    monkeypatch.setattr(runtime, "request_json", fail)
+
+    assert runtime.search_steam("elden") == [local]
+
+
 def test_upsert_niche_pool_ignores_non_game_result(isolated_runtime):
     runtime = isolated_runtime
     assert runtime.upsert_niche_pool_rows([

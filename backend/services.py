@@ -3,7 +3,7 @@
 import urllib.parse
 
 from . import _runtime
-from .db import transaction
+from .db import CURRENT_SCHEMA_VERSION, get_schema_version, transaction
 
 
 def list_games():
@@ -104,4 +104,13 @@ def is_allowed_image_url(url):
 def readiness():
     with transaction() as conn:
         conn.execute("SELECT 1").fetchone()
-    return {"ready": True, "database": "ok"}
+        schema_version = get_schema_version(conn)
+    if schema_version != CURRENT_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"database schema v{schema_version} is not current v{CURRENT_SCHEMA_VERSION}"
+        )
+    return {
+        "ready": True,
+        "database": "ok",
+        "schema_version": schema_version,
+    }

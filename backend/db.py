@@ -4,6 +4,14 @@ import sqlite3
 from contextlib import contextmanager
 
 from .config import DB_PATH, DB_TIMEOUT_SECONDS
+from .migrations import (
+    CURRENT_SCHEMA_VERSION,
+    DatabaseMigrationError,
+    create_database_backup,
+    get_schema_version,
+    migrate_database,
+    restore_database_backup,
+)
 from ._runtime import (
     claim_crawl_tasks,
     cleanup_old_records_once,
@@ -47,4 +55,6 @@ __all__ = [
     "enqueue_crawl_tasks", "enqueue_crawl_tasks_in_conn", "ensure_schema",
     "fail_crawl_tasks", "get_crawl_state", "init_db",
     "mark_crawl_tasks_not_available", "set_crawl_state", "transaction",
+    "CURRENT_SCHEMA_VERSION", "DatabaseMigrationError", "create_database_backup",
+    "get_schema_version", "migrate_database", "restore_database_backup",
 ]

@@ -118,6 +118,12 @@ def mock_frontend_api(page):
                 "direct_service_cooldowns": {},
                 "proxy": {},
                 "task_progress": {},
+                "niche_max_reviews": 50000,
+                "steam_catalog_count": 30000,
+                "steam_catalog_game_count": 4000,
+                "steam_catalog_excluded_count": 1000,
+                "steam_catalog_enriched_count": 5000,
+                "catalog_enrich_daily_limit": 1500,
             })
         if path == "/api/games" and request.method == "GET":
             games = [{**detail["game"], "tracked": True}] if state["tracked"] else []
@@ -163,6 +169,7 @@ def test_navigation_hot_filters_and_niche_pool(browser, frontend_server):
     page, _, errors = open_test_page(browser, frontend_server)
     try:
         expect(page.locator(".home-lines")).to_contain_text("Welcome to SteamKaKaBase!")
+        expect(page.locator(".home-monitor span")).to_contain_text("目录已收录 30,000")
         page.get_by_role("button", name="打开导航菜单").click()
         page.locator(".app-menu").get_by_role("button", name="热门榜", exact=True).click()
         expect(page.locator(".hot-row")).to_have_count(2)

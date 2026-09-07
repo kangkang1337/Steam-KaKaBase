@@ -1,4 +1,5 @@
 import sqlite3
+import shutil
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,8 +27,10 @@ def test_init_db_migrates_legacy_schema_idempotently(monkeypatch):
     token = uuid4().hex
     database = TEST_TEMP / f"legacy-{token}.sqlite3"
     log_path = TEST_TEMP / f"legacy-{token}.log"
+    backup_dir = TEST_TEMP / f"legacy-backups-{token}"
     monkeypatch.setattr(runtime, "DB_PATH", database)
     monkeypatch.setattr(runtime, "LOG_PATH", log_path)
+    monkeypatch.setattr(runtime, "DB_MIGRATION_BACKUP_DIR", backup_dir)
     with closing(sqlite3.connect(database)) as conn:
         conn.executescript(
             """
@@ -116,6 +119,7 @@ def test_init_db_migrates_legacy_schema_idempotently(monkeypatch):
     assert catalog_type == "game"
     for path in (database, Path(f"{database}-wal"), Path(f"{database}-shm"), log_path):
         path.unlink(missing_ok=True)
+    shutil.rmtree(backup_dir, ignore_errors=True)
 
 
 def test_player_history_compaction_boundaries(isolated_runtime, monkeypatch, insert_game):

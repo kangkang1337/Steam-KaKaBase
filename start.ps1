@@ -9,7 +9,7 @@ $env:STEAMKB_PLAYER_REFRESH_MINUTES = "30"
 $env:STEAMKB_PRICE_REFRESH_HOURS = "24"
 $env:STEAMKB_TRACKED_REFRESH_BATCH_LIMIT = "1"
 $env:STEAMKB_HOTLIST_TARGET = "100"
-$env:STEAMKB_CATALOG_LIMIT = "20000"
+$env:STEAMKB_CATALOG_LIMIT = "30000"
 $env:STEAMKB_CATALOG_ENRICH_DAILY_LIMIT = "1500"
 $env:STEAMKB_CATALOG_ENRICH_BATCH_LIMIT = "50"
 $env:STEAMKB_NICHE_POOL_LIMIT = "500"
@@ -55,9 +55,10 @@ if (Test-Path $envPath) {
     Write-Host ".env not found at $envPath. ITAD historical lows will be disabled."
 }
 
-$httpxCheck = python -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('httpx') else 1)" 2>$null
+$dependencyCheck = python -c "import fastapi, httpx, uvicorn" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Optional async hotlist crawler needs httpx. Install it with: python -m pip install -r requirements.txt"
+    Write-Host "Backend dependencies are missing. Install them with: python -m pip install -r requirements.txt"
+    exit 1
 }
 
 function Test-PortInUse($candidatePort) {

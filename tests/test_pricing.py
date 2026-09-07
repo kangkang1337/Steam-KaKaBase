@@ -82,6 +82,29 @@ def test_daily_home_snapshot_keeps_the_same_available_picks(isolated_runtime):
     assert selected_meme_again == selected_meme == "/assets/memes/a.gif"
 
 
+def test_daily_historical_low_avoids_recent_repeats(isolated_runtime):
+    refresh_key = isolated_runtime.daily_refresh_key()
+    previous_key = (
+        datetime.strptime(refresh_key, "%Y-%m-%d") - timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+    with isolated_runtime.database_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO daily_home_snapshots(
+                recommendation_date, historical_low_appid, meme_url, created_at
+            ) VALUES (?, ?, NULL, ?)
+            """,
+            (previous_key, 10, isolated_runtime.now_iso()),
+        )
+
+    _, selected_low, _ = isolated_runtime.ensure_daily_home_snapshot(
+        [{"appid": 10}, {"appid": 20}],
+        [],
+    )
+
+    assert selected_low["appid"] == 20
+
+
 def test_meme_extensions_cover_common_browser_formats():
     assert {".gif", ".webp", ".png", ".apng", ".jpg", ".jpeg", ".jfif", ".avif", ".bmp"} <= _runtime.MEME_EXTENSIONS
 
@@ -96,3 +119,62 @@ def test_niche_score_rewards_reviews_and_quality():
     }
     stronger = {**baseline, "review_score": 95, "total_reviews": 5000}
     assert _runtime.niche_weighted_score(stronger) > _runtime.niche_weighted_score(baseline)
+
+
+def test_refresh_game_skips_store_requests_during_existing_cooldown(
+    isolated_runtime, monkeypatch, insert_game
+):
+    runtime = isolated_runtime
+    appid = insert_game(7001, "Cooldown Game")
+    monkeypatch.setattr(
+        runtime,
+        "service_cooldown_remaining_seconds",
+        lambda service: 300 if service == "steam_store" else 0,
+    )
+    monkeypatch.setattr(runtime, "fetch_appdetails", lambda *_args: pytest.fail("store request attempted"))
+    monkeypatch.setattr(runtime, "fetch_reviews", lambda *_args: pytest.fail("review request attempted"))
+    monkeypatch.setattr(runtime, "fetch_itad_prices", lambda *_args: pytest.fail("ITAD request attempted"))
+    monkeypatch.setattr(runtime, "refresh_itad_history_lows", lambda *_args: pytest.fail("ITAD request attempted"))
+    monkeypatch.setattr(runtime, "fetch_players", lambda _appid: 42)
+
+    result = runtime.refresh_game(appid, include_details=True, mark_tracked=False)
+
+    assert result["store_deferred"] is True
+    assert result["errors"] == []
+    with runtime.database_connection() as conn:
+        assert conn.execute(
+            "SELECT player_count FROM player_snapshots WHERE appid=?", (appid,)
+        ).fetchone()[0] == 42
+
+
+def test_refresh_game_stops_all_regions_after_first_rate_limit(
+    isolated_runtime, monkeypatch, insert_game
+):
+    runtime = isolated_runtime
+    appid = insert_game(7002, "Rate Limited Game")
+    regions = []
+    logs = []
+
+    def fetch_details(_appid, region):
+        regions.append(region)
+        raise runtime.SteamRateLimited("steam_store rate limited, retry after 300s", "steam_store")
+
+    monkeypatch.setattr(runtime, "service_cooldown_remaining_seconds", lambda _service: 0)
+    monkeypatch.setattr(runtime, "fetch_appdetails", fetch_details)
+    monkeypatch.setattr(runtime, "fetch_players", lambda _appid: 0)
+    monkeypatch.setattr(runtime, "log_event", logs.append)
+
+    result = runtime.refresh_game(
+        appid,
+        include_details=True,
+        include_prices=True,
+        include_players=True,
+        include_reviews=True,
+        mark_tracked=False,
+        price_regions=["US", "CN", "JP"],
+    )
+
+    assert regions == ["US"]
+    assert result["store_deferred"] is True
+    assert len(result["errors"]) == 1
+    assert len([line for line in logs if "steam store work deferred" in line]) == 1

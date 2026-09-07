@@ -949,7 +949,7 @@
 
     <div class="status">
       <span v-if="rateCooldownSeconds">{{ rateCooldownText }}。</span>
-      <span v-else-if="directCooldownSeconds">{{ directCooldownText }}<template v-if="proxyFallbackActive">，当前使用代理回退</template>。</span>
+      <span v-else-if="directCooldownSeconds">{{ directCooldownText }}。</span>
       <span v-else-if="message">{{ message }}</span>
       <span v-else-if="backendProgress">{{ backendProgress }}</span>
       <span v-else-if="refreshing">后台自动采集中，页面可正常使用。</span>
@@ -1261,6 +1261,9 @@
           proxyStatus: {},
           steamCatalogCount: 0,
           steamCatalogEnrichedCount: 0,
+          steamCatalogGameCount: 0,
+          steamCatalogExcludedCount: 0,
+          steamCatalogScanComplete: false,
           catalogEnrichDailyLimit: 0,
           backendProgress: '',
           logoSrc: birdIcon,
@@ -1286,8 +1289,14 @@
       computed: {
         nichePoolSummary() {
           const formula = '加权：好评率 45% · 评测量 30% · 本站峰值 15% · 发行时间 10%（仅近 8 年）';
-          if (this.nichePoolTotal <= 20) {
+          if (this.nichePoolTotal < 20) {
             return `当前池未满，展示全部 ${this.nicheGames.length} 条 · ${formula}`;
+          }
+          if (this.nichePoolTotal === 20) {
+            return `当前池 20 条，展示全部 · ${formula}`;
+          }
+          if (this.nichePoolTotal < 40) {
+            return `当前池 ${this.nichePoolTotal} 条，展示加权前 20 · 满 40 条后从前 50% 随机抽取 · ${formula}`;
           }
           return `从加权分前 50% 随机抽取，按分数排序 · ${formula}`;
         },
@@ -1402,11 +1411,6 @@
           const services = state.active.map(item => item.label).join('、');
           return `${services} 直连冷却中，剩余 ${this.formatDuration(state.seconds)}`;
         },
-        proxyFallbackActive() {
-          return this.directCooldownSeconds > 0
-            && Boolean(this.proxyStatus?.enabled)
-            && this.proxyStatus?.reachable === true;
-        },
         homeMonitorTitle() {
           if (this.rateCooldownSeconds) return `${this.rateCooldownState.active[0].label} 接口冷却 ${this.formatDuration(this.rateCooldownSeconds)}`;
           if (this.directCooldownSeconds) return `${this.directCooldownState.active[0].label} 直连冷却 ${this.formatDuration(this.directCooldownSeconds)}`;
@@ -1416,9 +1420,11 @@
         homeMonitorDetail() {
           const catalog = this.steamCatalogCount || 0;
           const enriched = this.steamCatalogEnrichedCount || 0;
+          const games = this.steamCatalogGameCount || 0;
+          const excluded = this.steamCatalogExcludedCount || 0;
           const quota = this.catalogEnrichDailyLimit || 0;
-          const connection = this.proxyFallbackActive ? '当前使用代理回退 · ' : '';
-          return `${connection}Catalog ${enriched.toLocaleString()} / ${catalog.toLocaleString()} · 每日配额 ${quota.toLocaleString()}`;
+          const scan = this.steamCatalogScanComplete ? '全量扫描完成' : '全量扫描推进中';
+          return `Catalog ${catalog.toLocaleString()} · 游戏 ${games.toLocaleString()} · 已排除 ${excluded.toLocaleString()} · ${scan} · 补全 ${enriched.toLocaleString()} · 每日配额 ${quota.toLocaleString()}`;
         }
       },
       mounted() {
@@ -1545,6 +1551,9 @@
             this.steamCooldownObservedAt = Date.now();
             this.steamCatalogCount = Number(status.steam_catalog_count || 0);
             this.steamCatalogEnrichedCount = Number(status.steam_catalog_enriched_count || 0);
+            this.steamCatalogGameCount = Number(status.steam_catalog_game_count || 0);
+            this.steamCatalogExcludedCount = Number(status.steam_catalog_excluded_count || 0);
+            this.steamCatalogScanComplete = Boolean(status.steam_catalog_scan_complete);
             this.catalogEnrichDailyLimit = Number(status.catalog_enrich_daily_limit || 0);
             const progress = status.task_progress || {};
             const players = progress.players || {};

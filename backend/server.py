@@ -1,134 +1,173 @@
-"""HTTP transport only; business operations live in services."""
+"""FastAPI transport layer; business operations live in services."""
 
-import json
 import mimetypes
-import urllib.parse
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+
 from . import config, services
+from .crawler import cleanup_image_cache_once, scheduler_loop, startup_prewarm_async
+from .db import init_db
 from .logging_utils import log_event
+from .schemas import TrackRequest, UntrackRequest
+from .steam_client import probe_proxy
 
 
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):
-        print("[%s] %s" % (self.log_date_time_string(), fmt % args))
+def _file_response(path: Path, *, media_type=None, max_age=3600):
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(
+        path,
+        media_type=media_type or mimetypes.guess_type(str(path))[0],
+        headers={"Cache-Control": f"public, max-age={int(max_age)}"},
+    )
 
-    def send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
-    def send_json(self, payload, status=200):
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_cors_headers()
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+def create_app(*, start_background=False):
+    """Build an application, optionally enabling production background jobs."""
 
-    def send_file(self, path, content_type=None, max_age=3600):
-        if not path.is_file():
-            self.send_response(404)
-            self.send_cors_headers()
-            self.end_headers()
-            return
-        body = path.read_bytes()
-        self.send_response(200)
-        self.send_cors_headers()
-        self.send_header("Content-Type", content_type or mimetypes.guess_type(str(path))[0] or "application/octet-stream")
-        self.send_header("Cache-Control", f"public, max-age={int(max_age)}")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    @asynccontextmanager
+    async def lifespan(_app):
+        init_db()
+        if start_background:
+            probe_proxy()
+            cleanup_image_cache_once()
+            startup_prewarm_async()
+            threading.Thread(
+                target=scheduler_loop,
+                daemon=True,
+                name="steamkb-scheduler",
+            ).start()
+        yield
 
-    def read_json_body(self):
-        length = int(self.headers.get("Content-Length") or "0")
-        return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+    application = FastAPI(
+        title="Steam-KaKaBase API",
+        version=config.APP_VERSION,
+        lifespan=lifespan,
+    )
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type"],
+    )
 
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_cors_headers()
-        self.send_header("Content-Length", "0")
-        self.end_headers()
+    @application.middleware("http")
+    async def cache_policy(request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/api/") or request.url.path in {"/", "/steamkb.html", "/health", "/ready"}:
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
-    def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        query = urllib.parse.parse_qs(parsed.query)
+    @application.exception_handler(Exception)
+    async def unhandled_exception(request, exc):
+        log_event(f"http request failed path={request.url.path}: {exc}")
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @application.get("/health")
+    def health():
+        return {"status": "ok"}
+
+    @application.get("/ready")
+    def ready():
         try:
-            if path == "/favicon.ico":
-                return self.send_file(config.ROOT / "assets" / "favicon.png", "image/png")
-            if path.startswith("/assets/"):
-                relative = Path(urllib.parse.unquote(path.removeprefix("/assets/")))
-                if relative.is_absolute() or ".." in relative.parts:
-                    return self.send_json({"error": "not found"}, 404)
-                return self.send_file(config.ROOT / "assets" / relative)
-            if path == "/api/image-cache":
-                url = (query.get("url") or [""])[0].strip()
-                if not url:
-                    return self.send_json({"error": "missing url"}, 400)
-                try:
-                    image_path = services.cache_remote_image(url)
-                    return self.send_file(image_path, mimetypes.guess_type(str(image_path))[0] or "image/jpeg", 604800)
-                except Exception as exc:
-                    log_event(f"image cache failed url={url}: {exc}")
-                    self.send_response(302)
-                    self.send_cors_headers()
-                    self.send_header("Location", url)
-                    self.send_header("Cache-Control", "no-store")
-                    self.end_headers()
-                    return
-            if path == "/api/games":
-                return self.send_json({"games": services.list_games()})
-            if path == "/api/hot-games/ensure":
-                return self.send_json(services.ensure_hot_games((query.get("target") or ["100"])[0]))
-            if path == "/api/hot-games":
-                return self.send_json(services.list_hot_games((query.get("limit") or ["100"])[0]))
-            if path == "/api/hot-games/version":
-                return self.send_json(services.hot_games_version())
-            if path == "/api/niche-pool":
-                return self.send_json(services.list_niche_pool())
-            if path == "/api/home-picks":
-                return self.send_json(services.get_home_picks())
-            if path == "/api/status":
-                return self.send_json(services.get_status())
-            if path == "/api/search":
-                return self.send_json(services.search((query.get("q") or [""])[0].strip()))
-            if path.startswith("/api/games/"):
-                payload = services.get_game(path.rsplit("/", 1)[-1], (query.get("history_limit") or ["500"])[0])
-                return self.send_json(payload or {"error": "not found"}, 200 if payload else 404)
-            if path in ("/", "/steamkb.html"):
-                return self.send_file(config.ROOT / "steamkb.html", "text/html; charset=utf-8", 0)
-            self.send_json({"error": "not found"}, 404)
-        except (TypeError, ValueError):
-            self.send_json({"error": "invalid request"}, 400)
+            return services.readiness()
         except Exception as exc:
-            log_event(f"http GET failed path={path}: {exc}")
-            self.send_json({"error": str(exc)}, 500)
+            log_event(f"readiness check failed: {exc}")
+            return JSONResponse({"ready": False, "database": "unavailable"}, status_code=503)
 
-    def do_POST(self):
-        parsed = urllib.parse.urlparse(self.path)
+    @application.get("/")
+    @application.get("/steamkb.html")
+    def index():
+        return _file_response(config.ROOT / "steamkb.html", media_type="text/html; charset=utf-8", max_age=0)
+
+    @application.get("/favicon.ico")
+    def favicon():
+        return _file_response(config.ROOT / "assets" / "favicon.png", media_type="image/png")
+
+    @application.get("/assets/{asset_path:path}")
+    def asset(asset_path: str):
+        assets_root = (config.ROOT / "assets").resolve()
+        requested = (assets_root / asset_path).resolve()
+        if requested != assets_root and assets_root not in requested.parents:
+            raise HTTPException(status_code=404, detail="not found")
+        return _file_response(requested)
+
+    @application.get("/api/image-cache")
+    def image_cache(url: str = Query(min_length=1, max_length=2048)):
         try:
-            if parsed.path == "/api/track":
-                body = self.read_json_body()
-                return self.send_json(services.track_game(body.get("appid"), body.get("name"), body.get("header_image") or body.get("tiny_image")))
-            if parsed.path == "/api/untrack":
-                return self.send_json(services.untrack_game(self.read_json_body().get("appid")))
-            if parsed.path == "/api/refresh-all":
-                return self.send_json(services.refresh_all())
-            if parsed.path.startswith("/api/games/") and parsed.path.endswith("/refresh"):
-                return self.send_json(services.refresh_game(parsed.path.split("/")[3]))
-            self.send_json({"error": "not found"}, 404)
-        except (TypeError, ValueError):
-            self.send_json({"error": "invalid request"}, 400)
+            image_path = services.cache_remote_image(url)
+            return _file_response(image_path, max_age=604800)
         except Exception as exc:
-            log_event(f"http POST failed path={parsed.path}: {exc}")
-            self.send_json({"error": str(exc)}, 500)
+            log_event(f"image cache failed url={url}: {exc}")
+            if services.is_allowed_image_url(url):
+                return RedirectResponse(url=url, status_code=302, headers={"Cache-Control": "no-store"})
+            raise HTTPException(status_code=400, detail="unsupported image URL") from exc
+
+    @application.get("/api/games")
+    def games():
+        return {"games": services.list_games()}
+
+    @application.get("/api/games/{appid}")
+    def game(appid: int, history_limit: int = Query(default=500, ge=1, le=5000)):
+        if appid <= 0:
+            raise HTTPException(status_code=422, detail="invalid appid")
+        payload = services.get_game(appid, history_limit)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="not found")
+        return payload
+
+    @application.get("/api/hot-games")
+    def hot_games(limit: int = Query(default=100, ge=1)):
+        return services.list_hot_games(limit)
+
+    @application.get("/api/hot-games/version")
+    def hot_games_version():
+        return services.hot_games_version()
+
+    @application.get("/api/hot-games/ensure")
+    def ensure_hot_games(target: int = Query(default=100, ge=1)):
+        return services.ensure_hot_games(target)
+
+    @application.get("/api/niche-pool")
+    def niche_pool():
+        return services.list_niche_pool()
+
+    @application.get("/api/home-picks")
+    def home_picks():
+        return services.get_home_picks()
+
+    @application.get("/api/status")
+    def status():
+        return services.get_status()
+
+    @application.get("/api/search")
+    def search(q: str = Query(default="", max_length=300)):
+        return services.search(q.strip())
+
+    @application.post("/api/track")
+    def track(body: TrackRequest):
+        return services.track_game(body.appid, body.name, body.header_image or body.tiny_image)
+
+    @application.post("/api/untrack")
+    def untrack(body: UntrackRequest):
+        return services.untrack_game(body.appid)
+
+    @application.post("/api/refresh-all")
+    def refresh_all():
+        return services.refresh_all()
+
+    @application.post("/api/games/{appid}/refresh")
+    def refresh_game(appid: int):
+        if appid <= 0:
+            raise HTTPException(status_code=422, detail="invalid appid")
+        return services.refresh_game(appid)
+
+    return application
 
 
-def create_server(host="127.0.0.1", port=None):
-    selected_port = config.PORT if port is None else int(port)
-    return ThreadingHTTPServer((host, selected_port), Handler)
+app = create_app(start_background=True)

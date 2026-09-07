@@ -1,5 +1,7 @@
 """User-facing application operations consumed by the HTTP layer."""
 
+import urllib.parse
+
 from . import _runtime
 from .db import transaction
 
@@ -92,3 +94,14 @@ def refresh_game(appid):
 
 def cache_remote_image(url):
     return _runtime.cache_image(url)
+
+
+def is_allowed_image_url(url):
+    parsed = urllib.parse.urlparse(str(url or ""))
+    return parsed.scheme in {"http", "https"} and parsed.hostname in _runtime.ALLOWED_IMAGE_HOSTS
+
+
+def readiness():
+    with transaction() as conn:
+        conn.execute("SELECT 1").fetchone()
+    return {"ready": True, "database": "ok"}

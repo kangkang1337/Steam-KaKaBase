@@ -37,7 +37,7 @@
 | Steam 轻量目录 | 每天增量同步 |
 | 首页三项推荐 | 每天 00:10 |
 
-Steam 目录 `steam_catalog` 默认最多保存 20,000 条 App ID 和名称。目录 enrich 按每日额度逐步补全，不要求首次启动时等待全部元数据。
+Steam 目录 `steam_catalog` 使用持久化游标按日推进，最终完成 AppList 全量扫描，并在完整扫描后每周校验。目录 enrich 按每日 1,500 条的额度逐步分类和补全，不要求首次启动时等待全部元数据。
 
 ## 数据来源
 
@@ -79,12 +79,15 @@ backend/
 ├── steam_client.py    Steam / ITAD 请求、代理、重试和冷却
 ├── crawler.py         后台采集与任务编排入口
 ├── services.py        搜索、详情、榜单、推荐和收藏
-├── server.py          HTTP 路由、静态文件、CORS 和 JSON
-├── main.py            服务与调度器启动入口
+├── schemas.py         FastAPI 请求模型与参数校验
+├── server.py          FastAPI 路由、静态文件、CORS 和生命周期
+├── main.py            Uvicorn 进程入口
 └── _runtime.py        模块拆分期间的私有兼容实现
 ```
 
 正式入口为 `python -m backend.main`。`python steamkb.py` 作为兼容入口保留。新增后端代码应优先通过公开模块调用，不应继续扩大 `_runtime.py`。
+
+API 由 FastAPI 提供，并包含 `/health`、`/ready` 和自动生成的 `/docs`。后台调度器只在正式应用生命周期中启动；测试应用不会启动采集任务。
 
 SQLite 开启 WAL 模式，读写可以并行；批量采集按批次提交，避免每抓取一个 App 就提交一次。
 
@@ -128,6 +131,20 @@ http://127.0.0.1:8765
 python -m backend.main
 ```
 
+## 测试与 CI
+
+安装开发依赖并执行本地检查：
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m playwright install chromium
+python scripts/check_secrets.py
+python -m pytest -q
+python scripts/check_frontend.py
+```
+
+GitHub Actions 会在每次 push 和 pull request 时安装 Chromium，并重复执行密钥/运行时文件检查、Python 编译、pytest、Playwright 前端流程和 JavaScript 语法检查。CI 不读取本地 `.env`，也不会访问正式 SQLite 数据库。
+
 不要直接双击 `steamkb.html`。页面需要通过本地后端地址打开，否则浏览器无法访问 API。
 
 ## 环境配置
@@ -152,8 +169,10 @@ Copy-Item .env.example .env
 | `STEAMKB_PLAYER_REFRESH_MINUTES` | `30` | 在线人数刷新间隔，最小 30 分钟 |
 | `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 价格刷新间隔，最小 24 小时 |
 | `STEAMKB_HOTLIST_TARGET` | `100` | 本地热门榜目标数量 |
-| `STEAMKB_CATALOG_LIMIT` | `20000` | Steam 轻量目录上限 |
-| `STEAMKB_CATALOG_ENRICH_DAILY_LIMIT` | `500` | 每日目录 enrich 尝试额度 |
+| `STEAMKB_CATALOG_LIMIT` | `0` | 兼容旧配置；非零时仅作为旧版扫描批量回退值，不再限制目录总量 |
+| `STEAMKB_CATALOG_SCAN_BATCH_LIMIT` | `10000` | 每天推进的轻量 AppList 条目上限 |
+| `STEAMKB_CATALOG_RESCAN_DAYS` | `7` | 全量扫描完成后的校验周期 |
+| `STEAMKB_CATALOG_ENRICH_DAILY_LIMIT` | `1500` | 每日目录 enrich 尝试额度 |
 | `STEAMKB_CATALOG_ENRICH_BATCH_LIMIT` | `50` | 单轮 enrich 数量 |
 | `STEAMKB_NICHE_POOL_LIMIT` | `500` | 小众候选池上限 |
 | `STEAMKB_DIRECT_COOLDOWN_MINUTES` | `5` | 直连失败后的独立冷却时间 |
@@ -191,7 +210,7 @@ GET /api/status
 
 ## 首页与图片
 
-首页三项内容共用 `00:10` 日界线，并保存 SQLite 每日快照。刷新页面或重启服务不会改变当天选择，快照默认保留两年。
+首页三项内容共用 `00:10` 日界线，并保存 SQLite 每日快照。刷新页面或重启服务不会改变当天选择，快照默认保留两年。今日史低优先排除过去 7 天已经推荐过的游戏，只有候选不足时才允许重复。
 
 表情包放在 `assets/memes/`，支持以下浏览器图片格式，扩展名不区分大小写：
 

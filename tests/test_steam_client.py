@@ -122,7 +122,7 @@ def test_429_starts_global_cooldown_without_retry(monkeypatch, isolated_runtime)
     assert itad_client.calls == 1
 
 
-def test_direct_failure_uses_proxy_and_starts_direct_cooldown(monkeypatch):
+def test_direct_failure_uses_proxy_and_starts_direct_cooldown(monkeypatch, isolated_runtime):
     monkeypatch.setattr(_runtime, "DIRECT_COOLDOWN_UNTIL", {service: 0 for service in _runtime.EXTERNAL_SERVICES})
     monkeypatch.setattr(_runtime, "DIRECT_FAILURE_COUNT", {service: 0 for service in _runtime.EXTERNAL_SERVICES})
     monkeypatch.setattr(_runtime, "proxy_fallback_enabled", lambda: True)

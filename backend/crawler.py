@@ -1,6 +1,7 @@
 """Background scheduling and data-refresh orchestration."""
 
 from ._runtime import (
+    cleanup_image_cache_once,
     enqueue_hot_work,
     maintain_storage_once,
     refresh_hot_database_async,

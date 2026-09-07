@@ -9,14 +9,12 @@ import socket
 import ssl
 import threading
 import time
-import mimetypes
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
@@ -71,8 +69,13 @@ NICHE_POOL_DISPLAY_LIMIT = 20
 # A small pool needs a little extra attention, but probing Steam too often is
 # counterproductive. Once the display target is met, normal daily upkeep wins.
 NICHE_POOL_BOOTSTRAP_REFRESH_MINUTES = max(60, int(os.getenv("STEAMKB_NICHE_POOL_BOOTSTRAP_REFRESH_MINUTES", "180")))
-STEAM_CATALOG_LIMIT = max(1000, int(os.getenv("STEAMKB_CATALOG_LIMIT", "20000")))
-CATALOG_ENRICH_DAILY_LIMIT = max(100, int(os.getenv("STEAMKB_CATALOG_ENRICH_DAILY_LIMIT", "500")))
+STEAM_CATALOG_LIMIT = max(0, int(os.getenv("STEAMKB_CATALOG_LIMIT", "0")))
+CATALOG_SCAN_BATCH_LIMIT = max(
+    500,
+    int(os.getenv("STEAMKB_CATALOG_SCAN_BATCH_LIMIT", str(STEAM_CATALOG_LIMIT or 10000))),
+)
+CATALOG_RESCAN_DAYS = max(1, int(os.getenv("STEAMKB_CATALOG_RESCAN_DAYS", "7")))
+CATALOG_ENRICH_DAILY_LIMIT = max(100, int(os.getenv("STEAMKB_CATALOG_ENRICH_DAILY_LIMIT", "1500")))
 CATALOG_ENRICH_BATCH_LIMIT = max(20, int(os.getenv("STEAMKB_CATALOG_ENRICH_BATCH_LIMIT", "50")))
 NICHE_POOL_LIMIT = max(50, int(os.getenv("STEAMKB_NICHE_POOL_LIMIT", "500")))
 TRACKED_REFRESH_BATCH_LIMIT = max(1, int(os.getenv("STEAMKB_TRACKED_REFRESH_BATCH_LIMIT", "1")))
@@ -570,6 +573,16 @@ def clean_name(value):
     return UNKNOWN_GAME_NAME if is_placeholder_name(value) else str(value).strip()
 
 
+def is_obvious_non_game_name(value):
+    """Hide obvious non-games while AppDetails classification is pending."""
+    text = str(value or "").strip().lower()
+    return bool(re.search(
+        r"(?:\bdemo\b|\bdlc\b|soundtrack|dedicated server|\bserver tool\b|"
+        r"sdk\b|editor\b|benchmark\b|artbook|wallpaper)",
+        text,
+    ))
+
+
 def infer_name_from_description(value):
     if not value:
         return None
@@ -778,6 +791,10 @@ def init_db():
                 name TEXT NOT NULL,
                 source TEXT NOT NULL DEFAULT 'steam_applist',
                 updated_at TEXT NOT NULL,
+                last_seen_at TEXT,
+                app_type TEXT NOT NULL DEFAULT 'unknown',
+                app_type_checked_at TEXT,
+                scan_generation INTEGER,
                 last_enriched_at TEXT,
                 next_enrich_at TEXT,
                 enrich_status TEXT NOT NULL DEFAULT 'pending',
@@ -877,6 +894,21 @@ def init_db():
             FROM games g
             """
         )
+        conn.execute(
+            """
+            UPDATE niche_pool
+            SET cn_price = (SELECT s.cn_price FROM game_latest_state s WHERE s.appid = niche_pool.appid),
+                cn_price_final = (SELECT s.cn_price_final FROM game_latest_state s WHERE s.appid = niche_pool.appid),
+                cn_price_currency = (SELECT s.cn_price_currency FROM game_latest_state s WHERE s.appid = niche_pool.appid),
+                cn_discount_percent = COALESCE((SELECT s.cn_discount_percent FROM game_latest_state s WHERE s.appid = niche_pool.appid), 0)
+            WHERE EXISTS (
+                SELECT 1 FROM game_latest_state s
+                WHERE s.appid = niche_pool.appid
+                  AND s.price_updated_at IS NOT NULL
+                  AND s.price_updated_at >= niche_pool.fetched_at
+            )
+            """
+        )
         for item in DEFAULT_APPS:
             conn.execute(
                 "INSERT OR IGNORE INTO games(appid, name, tracked, updated_at) VALUES (?, ?, 1, ?)",
@@ -884,6 +916,23 @@ def init_db():
             )
         clear_seeded_defaults(conn)
         repair_placeholder_names(conn)
+        niche_price_cutoff = (datetime.now(timezone.utc) - timedelta(hours=PRICE_REFRESH_HOURS)).replace(microsecond=0).isoformat()
+        due_niche_prices = [
+            int(row[0])
+            for row in conn.execute(
+                """
+                SELECT n.appid
+                FROM niche_pool n
+                LEFT JOIN game_latest_state s ON s.appid = n.appid
+                WHERE n.eligible = 1
+                  AND (s.price_updated_at IS NULL OR s.price_updated_at < ?)
+                ORDER BY n.weighted_score DESC, n.total_reviews DESC
+                LIMIT 50
+                """,
+                (niche_price_cutoff,),
+            ).fetchall()
+        ]
+        enqueue_crawl_tasks_in_conn(conn, due_niche_prices, "preview", 60)
         conn.execute("PRAGMA optimize")
 
 
@@ -917,6 +966,47 @@ def ensure_schema(conn):
         conn.execute("ALTER TABLE crawl_tasks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
     if task_columns and "generation" not in task_columns:
         conn.execute("ALTER TABLE crawl_tasks ADD COLUMN generation INTEGER")
+    catalog_columns = {row[1] for row in conn.execute("PRAGMA table_info(steam_catalog)").fetchall()}
+    if catalog_columns and "last_seen_at" not in catalog_columns:
+        conn.execute("ALTER TABLE steam_catalog ADD COLUMN last_seen_at TEXT")
+    if catalog_columns and "app_type" not in catalog_columns:
+        conn.execute("ALTER TABLE steam_catalog ADD COLUMN app_type TEXT NOT NULL DEFAULT 'unknown'")
+    if catalog_columns and "app_type_checked_at" not in catalog_columns:
+        conn.execute("ALTER TABLE steam_catalog ADD COLUMN app_type_checked_at TEXT")
+    if catalog_columns and "scan_generation" not in catalog_columns:
+        conn.execute("ALTER TABLE steam_catalog ADD COLUMN scan_generation INTEGER")
+    # Before app_type existed, a catalog row reached `done` only after
+    # AppDetails returned type=game and the candidate payload was accepted.
+    # Preserve that verified state during the one-time schema upgrade.
+    conn.execute(
+        """
+        UPDATE steam_catalog
+        SET app_type='game',
+            app_type_checked_at=COALESCE(app_type_checked_at, last_enriched_at, updated_at)
+        WHERE app_type='unknown' AND enrich_status='done'
+        """
+    )
+    # Legacy skipped rows mixed unavailable apps with non-games. Requeue this
+    # small set once so the new classifier can assign a terminal result.
+    conn.execute(
+        """
+        UPDATE steam_catalog
+        SET enrich_status='pending', next_enrich_at=?, last_error=NULL
+        WHERE app_type='unknown' AND enrich_status='skipped'
+          AND app_type_checked_at IS NULL
+        """,
+        (now_iso(),),
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_type_name ON steam_catalog(app_type, name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_scan_generation ON steam_catalog(scan_generation, appid)")
+    conn.execute(
+        """
+        DELETE FROM niche_pool
+        WHERE appid IN (
+            SELECT appid FROM steam_catalog WHERE app_type NOT IN ('unknown', 'game')
+        )
+        """
+    )
     conn.execute(
         """
         UPDATE crawl_tasks
@@ -1831,17 +1921,51 @@ def upsert_hot_price_batch(rows, stamp):
                 if row.get("has_price")
             ],
         )
-        # An AppDetails response without a CN price is still a successful
-        # daily check, such as a title not sold in China.
         conn.executemany(
             """
-            INSERT INTO game_latest_state(appid, price_updated_at, updated_at)
-            VALUES (?, ?, ?)
+            INSERT INTO game_latest_state(
+                appid, cn_price, cn_price_final, cn_price_currency,
+                cn_discount_percent, price_updated_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(appid) DO UPDATE SET
+                cn_price = excluded.cn_price,
+                cn_price_final = excluded.cn_price_final,
+                cn_price_currency = excluded.cn_price_currency,
+                cn_discount_percent = excluded.cn_discount_percent,
                 price_updated_at = excluded.price_updated_at,
                 updated_at = excluded.updated_at
             """,
-            [(row["appid"], stamp, stamp) for row in rows],
+            [
+                (
+                    row["appid"],
+                    row.get("final_formatted") if row.get("has_price") else None,
+                    row.get("final") if row.get("has_price") else None,
+                    row.get("currency") if row.get("has_price") else None,
+                    row.get("discount_percent", 0) if row.get("has_price") else 0,
+                    stamp,
+                    stamp,
+                )
+                for row in rows
+            ],
+        )
+        conn.executemany(
+            """
+            UPDATE niche_pool
+            SET cn_price = ?, cn_price_final = ?, cn_price_currency = ?,
+                cn_discount_percent = ?, is_free = ?
+            WHERE appid = ?
+            """,
+            [
+                (
+                    row.get("final_formatted") if row.get("has_price") else None,
+                    row.get("final") if row.get("has_price") else None,
+                    row.get("currency") if row.get("has_price") else None,
+                    row.get("discount_percent", 0) if row.get("has_price") else 0,
+                    row.get("is_free", 0),
+                    row["appid"],
+                )
+                for row in rows
+            ],
         )
 
 
@@ -2083,7 +2207,9 @@ def discover_niche_appids(limit=NICHE_POOL_BATCH_LIMIT):
             SELECT g.appid
             FROM games g
             LEFT JOIN niche_pool n ON n.appid = g.appid
+            LEFT JOIN steam_catalog c ON c.appid = g.appid
             WHERE n.appid IS NULL
+              AND COALESCE(c.app_type, 'unknown') IN ('unknown', 'game')
               AND g.name IS NOT NULL
               AND g.name != ?
               AND g.header_image IS NOT NULL
@@ -2101,14 +2227,14 @@ def discover_niche_appids(limit=NICHE_POOL_BATCH_LIMIT):
         with database_connection() as conn:
             candidates = [
                 int(row[0]) for row in conn.execute(
-                    "SELECT appid FROM steam_catalog WHERE appid NOT IN ({}) ORDER BY updated_at DESC LIMIT ?".format(
+                    "SELECT appid FROM steam_catalog WHERE app_type IN ('unknown', 'game') AND appid NOT IN ({}) ORDER BY CASE app_type WHEN 'game' THEN 0 ELSE 1 END, updated_at ASC LIMIT ?".format(
                         ",".join("?" * max(1, len(known | seen_pool)))
                     ),
                     tuple(known | seen_pool) + (max(0, limit - len(selected)),),
                 ).fetchall()
             ] if known | seen_pool else [
                 int(row[0]) for row in conn.execute(
-                    "SELECT appid FROM steam_catalog ORDER BY updated_at DESC LIMIT ?",
+                    "SELECT appid FROM steam_catalog WHERE app_type IN ('unknown', 'game') ORDER BY CASE app_type WHEN 'game' THEN 0 ELSE 1 END, updated_at ASC LIMIT ?",
                     (max(0, limit - len(selected)),),
                 ).fetchall()
             ]
@@ -2151,22 +2277,34 @@ async def fetch_niche_candidates_async(appids):
                     client, semaphore, details_url,
                     {"appids": appid, "cc": "CN", "l": "schinese"},
                 )
-                data = (details_payload.get(str(appid)) or {}).get("data") or {}
-                if data.get("type") != "game" or not data.get("name") or not data.get("header_image"):
-                    return None
-                review_payload = await async_get_json(
-                    client, semaphore, f"https://store.steampowered.com/appreviews/{appid}",
-                    {"json": 1, "language": "all", "purchase_type": "all", "num_per_page": 0, "filter": "summary"},
-                )
+                app_payload = details_payload.get(str(appid)) or {}
+                data = app_payload.get("data") or {}
+                if not app_payload.get("success") or not data:
+                    return {"appid": int(appid), "catalog_result": "not_available", "app_type": "unknown"}
+                app_type = str(data.get("type") or "unknown").strip().lower()
+                if app_type != "game":
+                    return {"appid": int(appid), "catalog_result": "excluded", "app_type": app_type}
+                try:
+                    review_payload = await async_get_json(
+                        client, semaphore, f"https://store.steampowered.com/appreviews/{appid}",
+                        {"json": 1, "language": "all", "purchase_type": "all", "num_per_page": 0, "filter": "summary"},
+                    )
+                except ExternalDataUnavailable:
+                    review_payload = {}
                 summary = review_payload.get("query_summary") or {}
                 positive = int(summary.get("total_positive") or 0)
                 negative = int(summary.get("total_negative") or 0)
                 total = positive + negative
-                player_payload = await async_get_json(client, semaphore, players_url, {"appid": appid})
+                try:
+                    player_payload = await async_get_json(client, semaphore, players_url, {"appid": appid})
+                except ExternalDataUnavailable:
+                    player_payload = {}
                 players = int((player_payload.get("response") or {}).get("player_count") or 0)
                 price = data.get("price_overview") or {}
                 return {
                     "appid": int(appid),
+                    "catalog_result": "game",
+                    "app_type": "game",
                     "name": data.get("name") or UNKNOWN_GAME_NAME,
                     "header_image": data.get("header_image"),
                     "current_players": players,
@@ -2174,6 +2312,7 @@ async def fetch_niche_candidates_async(appids):
                     "review_score": round((positive / total) * 100, 2) if total else None,
                     "total_reviews": total,
                     "cn_price": price.get("final_formatted", "Free") if price or data.get("is_free") else None,
+                    "cn_price_initial": price.get("initial", 0) if price or data.get("is_free") else None,
                     "cn_price_final": price.get("final", 0) if price or data.get("is_free") else None,
                     "cn_price_currency": price.get("currency") or ("CNY" if data.get("is_free") else None),
                     "cn_discount_percent": price.get("discount_percent", 0),
@@ -2183,19 +2322,17 @@ async def fetch_niche_candidates_async(appids):
                 }
             except SteamRateLimited:
                 raise
-            except ExternalDataUnavailable:
-                # Valid catalog entries can still lack player statistics. The
-                # caller marks them skipped without creating error-log noise.
-                return None
+            except ExternalDataUnavailable as exc:
+                return {"appid": int(appid), "catalog_result": "not_available", "app_type": "unknown", "error": str(exc)}
             except Exception as exc:
                 log_event(f"niche candidate skipped appid={appid}: {exc}")
-                return None
+                return {"appid": int(appid), "catalog_result": "retry", "app_type": "unknown", "error": str(exc)}
 
         results = await asyncio.gather(*(fetch_one(appid) for appid in appids), return_exceptions=True)
         if any(isinstance(result, SteamRateLimited) for result in results):
             raise SteamRateLimited("Steam niche requests paused by global cooldown")
         for result in results:
-            if result:
+            if isinstance(result, dict):
                 rows.append(result)
     return rows
 
@@ -2212,14 +2349,16 @@ def niche_weighted_score(row):
     return round((review_part * 0.45) + (review_count_part * 0.30) + (peak_part * 0.15) + (release_part * 0.10), 6)
 
 
-def upsert_niche_pool_rows(rows):
+def upsert_niche_pool_rows(rows, persist_prices=False):
+    rows = [row for row in rows if row.get("catalog_result", "game") == "game"]
     if not rows:
         return 0
     evaluated_at = now_iso()
     prepared = []
     for row in rows:
         eligible = bool(
-            int(row.get("current_players") or 0) >= 10
+            not is_obvious_non_game_name(row.get("name"))
+            and int(row.get("current_players") or 0) >= 10
             and 0 < int(row.get("peak_players") or 0) <= 2000
             and float(row.get("review_score") or 0) >= 85
             and int(row.get("total_reviews") or 0) > 0
@@ -2287,6 +2426,25 @@ def upsert_niche_pool_rows(rows):
             """,
             (NICHE_POOL_LIMIT,),
         )
+    if persist_prices:
+        upsert_hot_price_batch(
+            [
+                {
+                    "appid": row["appid"],
+                    "name": row.get("name"),
+                    "header_image": row.get("header_image"),
+                    "is_free": row.get("is_free", 0),
+                    "currency": row.get("cn_price_currency"),
+                    "initial": row.get("cn_price_initial"),
+                    "final": row.get("cn_price_final"),
+                    "discount_percent": row.get("cn_discount_percent", 0),
+                    "final_formatted": row.get("cn_price"),
+                    "has_price": row.get("cn_price_final") is not None or bool(row.get("is_free")),
+                }
+                for row in rows
+            ],
+            evaluated_at,
+        )
     return len(prepared)
 
 
@@ -2318,9 +2476,11 @@ def seed_niche_pool_from_local(limit=NICHE_POOL_BATCH_LIMIT, scan_limit=None):
                     ORDER BY p.fetched_at DESC LIMIT 1) AS cn_discount_percent,
                    g.release_date
             FROM games g
+            LEFT JOIN steam_catalog c ON c.appid = g.appid
             WHERE g.header_image IS NOT NULL
               AND g.name IS NOT NULL
               AND g.name != ?
+              AND COALESCE(c.app_type, 'game') = 'game'
             ORDER BY g.updated_at DESC
             LIMIT ?
             """,
@@ -2333,8 +2493,15 @@ def list_niche_pool_pick():
     with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT * FROM niche_pool WHERE eligible = 1 AND cn_price IS NOT NULL ORDER BY weighted_score DESC LIMIT 30"
+            """
+            SELECT n.* FROM niche_pool n
+            LEFT JOIN steam_catalog c ON c.appid=n.appid
+            WHERE n.eligible=1 AND n.cn_price IS NOT NULL
+              AND COALESCE(c.app_type, 'game')='game'
+            ORDER BY n.weighted_score DESC LIMIT 60
+            """
         ).fetchall()
+        rows = [row for row in rows if not is_obvious_non_game_name(row["name"])][:30]
         if not rows:
             return None
         # Keep the daily result server-side. A weighted draw from the top 30
@@ -2353,24 +2520,53 @@ def list_niche_pool_pick():
 
 
 def sync_steam_catalog_once(force=False):
-    """Refresh the lightweight AppList catalog; no store details are fetched here."""
+    """Advance the persistent lightweight AppList scan by one bounded batch."""
     if service_cooldown_remaining_seconds("steam_api"):
         return False
     today = datetime.now().strftime("%Y-%m-%d")
+    stamp = now_iso()
     with database_connection() as conn:
         last_sync = get_crawl_state(conn, "steam_catalog_sync_date")
+        cursor_value = get_crawl_state(conn, "steam_catalog_scan_cursor")
+        generation = int(get_crawl_state(conn, "steam_catalog_scan_generation") or 1)
+        completed_at = get_crawl_state(conn, "steam_catalog_scan_completed_at")
     if not force and last_sync == today:
         return False
-    rows = []
-    stamp = now_iso()
-    last_appid = 0
-    while len(rows) < STEAM_CATALOG_LIMIT:
-        payload = fetch_store_catalog_page(last_appid, min(500, STEAM_CATALOG_LIMIT - len(rows)))
+
+    if completed_at and not force and not is_due(completed_at, CATALOG_RESCAN_DAYS * 24 * 60):
+        return False
+    if completed_at:
+        last_appid = 0
+        generation += 1
+        completed_at = None
+        with database_connection() as conn:
+            set_crawl_state(conn, "steam_catalog_scan_cursor", "0")
+            set_crawl_state(conn, "steam_catalog_scan_generation", str(generation))
+            set_crawl_state(conn, "steam_catalog_scan_started_at", stamp)
+            set_crawl_state(conn, "steam_catalog_scan_completed_at", "")
+    elif cursor_value is None:
+        # Upgrade existing prefix catalogs without rereading them from zero.
+        with database_connection() as conn:
+            last_appid = int(conn.execute("SELECT COALESCE(MAX(appid), 0) FROM steam_catalog").fetchone()[0] or 0)
+            set_crawl_state(conn, "steam_catalog_scan_cursor", str(last_appid))
+            set_crawl_state(conn, "steam_catalog_scan_generation", str(generation))
+            set_crawl_state(conn, "steam_catalog_scan_started_at", stamp)
+    else:
+        last_appid = int(cursor_value or 0)
+
+    scanned = 0
+    saved = 0
+    scan_complete = False
+    while scanned < CATALOG_SCAN_BATCH_LIMIT:
+        page_size = min(500, CATALOG_SCAN_BATCH_LIMIT - scanned)
+        payload = fetch_store_catalog_page(last_appid, page_size)
         response = (payload or {}).get("response") or payload or {}
         apps = response.get("apps") or response.get("items") or []
         if not apps:
+            scan_complete = not bool(response.get("have_more_results"))
             break
         previous_last = last_appid
+        rows = []
         for item in apps:
             try:
                 appid = int(item.get("appid") or item.get("id"))
@@ -2379,30 +2575,46 @@ def sync_steam_catalog_once(force=False):
             name = clean_hot_name(item.get("name"))
             if appid <= 0 or not name:
                 continue
-            rows.append((appid, name, stamp))
-            if len(rows) >= STEAM_CATALOG_LIMIT:
-                break
+            rows.append((appid, name, stamp, stamp, generation))
         last_appid = int(response.get("last_appid") or response.get("lastAppId") or 0)
-        if not response.get("have_more_results") or not last_appid or last_appid <= previous_last or len(apps) < 500:
+        if not last_appid:
+            last_appid = max((row[0] for row in rows), default=previous_last)
+        if last_appid <= previous_last:
+            raise ExternalDataUnavailable("Steam AppList cursor did not advance")
+        with database_connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO steam_catalog(appid, name, updated_at, last_seen_at, scan_generation, enrich_status)
+                VALUES (?, ?, ?, ?, ?, 'pending')
+                ON CONFLICT(appid) DO UPDATE SET
+                    name=excluded.name,
+                    updated_at=excluded.updated_at,
+                    last_seen_at=excluded.last_seen_at,
+                    scan_generation=excluded.scan_generation,
+                    enrich_status=CASE
+                        WHEN steam_catalog.app_type IN ('unknown', 'game') AND steam_catalog.last_enriched_at IS NULL THEN 'pending'
+                        ELSE steam_catalog.enrich_status
+                    END
+                """,
+                rows,
+            )
+            set_crawl_state(conn, "steam_catalog_scan_cursor", str(last_appid))
+            set_crawl_state(conn, "steam_catalog_scan_generation", str(generation))
+            set_crawl_state(conn, "steam_catalog_scan_last_batch_at", stamp)
+        scanned += len(apps)
+        saved += len(rows)
+        if not response.get("have_more_results"):
+            scan_complete = True
             break
-    if not rows:
-        log_event("steam catalog sync skipped: AppList returned no usable rows")
-        return False
     with database_connection() as conn:
-        conn.executemany(
-            """
-            INSERT INTO steam_catalog(appid, name, updated_at, enrich_status)
-            VALUES (?, ?, ?, 'pending')
-            ON CONFLICT(appid) DO UPDATE SET
-                name=excluded.name,
-                updated_at=excluded.updated_at,
-                enrich_status=CASE WHEN steam_catalog.last_enriched_at IS NULL THEN 'pending' ELSE steam_catalog.enrich_status END
-            """,
-            rows,
-        )
         set_crawl_state(conn, "steam_catalog_sync_date", today)
-    log_event(f"steam catalog synced rows={len(rows)} limit={STEAM_CATALOG_LIMIT}")
-    return True
+        if scan_complete:
+            set_crawl_state(conn, "steam_catalog_scan_completed_at", stamp)
+    log_event(
+        f"steam catalog scan generation={generation} cursor={last_appid} "
+        f"scanned={scanned} saved={saved} complete={scan_complete}"
+    )
+    return bool(scanned or scan_complete)
 
 
 def fetch_store_catalog_page(last_appid=0, max_results=500):
@@ -2452,6 +2664,7 @@ def run_catalog_enrich_task():
                 enrich_status IN ('pending', 'retry')
                 OR (enrich_status = 'done' AND next_enrich_at <= ?)
             )
+              AND app_type IN ('unknown', 'game')
             ORDER BY
               CASE WHEN last_enriched_at IS NULL THEN 0 ELSE 1 END,
               enrich_attempts ASC, updated_at ASC
@@ -2469,21 +2682,41 @@ def run_catalog_enrich_task():
                 [(appid,) for appid in appids],
             )
         fetched = asyncio.run(fetch_niche_candidates_async(appids))
-        saved = upsert_niche_pool_rows(fetched)
-        success_ids = {int(row["appid"]) for row in fetched}
+        game_rows = [row for row in fetched if row.get("catalog_result") == "game"]
+        saved = upsert_niche_pool_rows(game_rows, persist_prices=True)
+        results = {int(row["appid"]): row for row in fetched}
         next_week = (datetime.now(timezone.utc) + timedelta(days=7)).replace(microsecond=0).isoformat()
+        next_hour = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat()
         with database_connection() as conn:
-            conn.executemany(
-                """
-                UPDATE steam_catalog
-                SET enrich_status = ?, last_enriched_at = ?, next_enrich_at = ?, last_error = NULL
-                WHERE appid = ?
-                """,
-                [("done" if appid in success_ids else "skipped", now, next_week, appid) for appid in appids],
-            )
+            for appid in appids:
+                result = results.get(appid) or {"catalog_result": "retry", "error": "missing async result"}
+                outcome = result.get("catalog_result")
+                if outcome == "game":
+                    conn.execute(
+                        "UPDATE steam_catalog SET app_type='game', app_type_checked_at=?, enrich_status='done', last_enriched_at=?, next_enrich_at=?, last_error=NULL WHERE appid=?",
+                        (now, now, next_week, appid),
+                    )
+                elif outcome == "excluded":
+                    conn.execute(
+                        "UPDATE steam_catalog SET app_type=?, app_type_checked_at=?, enrich_status='excluded', last_enriched_at=?, next_enrich_at=NULL, last_error=NULL WHERE appid=?",
+                        (result.get("app_type") or "other", now, now, appid),
+                    )
+                    conn.execute("DELETE FROM niche_pool WHERE appid=?", (appid,))
+                elif outcome == "not_available":
+                    conn.execute(
+                        "UPDATE steam_catalog SET app_type_checked_at=?, enrich_status='not_available', last_enriched_at=?, next_enrich_at=NULL, last_error=? WHERE appid=?",
+                        (now, now, result.get("error") or "Steam AppDetails unavailable", appid),
+                    )
+                    conn.execute("DELETE FROM niche_pool WHERE appid=?", (appid,))
+                else:
+                    conn.execute(
+                        "UPDATE steam_catalog SET enrich_status='retry', next_enrich_at=?, last_error=? WHERE appid=?",
+                        (next_hour, result.get("error") or "temporary enrich failure", appid),
+                    )
             set_crawl_state(conn, "steam_catalog_enrich_date", today)
             set_crawl_state(conn, "steam_catalog_enrich_count", str(used + len(appids)))
-        log_event(f"catalog enrich batch attempted={len(appids)} saved={saved} daily={used + len(appids)}/{CATALOG_ENRICH_DAILY_LIMIT}")
+        excluded = sum(1 for row in fetched if row.get("catalog_result") == "excluded")
+        log_event(f"catalog enrich batch attempted={len(appids)} games={len(game_rows)} excluded={excluded} saved={saved} daily={used + len(appids)}/{CATALOG_ENRICH_DAILY_LIMIT}")
         return True
     except SteamRateLimited as exc:
         with database_connection() as conn:
@@ -2531,13 +2764,20 @@ def get_daily_niche_recommendation():
     with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT n.*, g.tracked FROM niche_recommendation_snapshots n LEFT JOIN games g ON g.appid=n.appid WHERE recommendation_date=?",
+            """
+            SELECT n.*, g.tracked, COALESCE(c.app_type, 'game') AS app_type
+            FROM niche_recommendation_snapshots n
+            LEFT JOIN games g ON g.appid=n.appid
+            LEFT JOIN steam_catalog c ON c.appid=n.appid
+            WHERE recommendation_date=?
+            """,
             (today,),
         ).fetchone()
         if not row:
             return None
         pool = conn.execute("SELECT * FROM niche_pool WHERE appid=?", (row["appid"],)).fetchone()
-    if not pool or not pool["eligible"] or not pool["cn_price"]:
+    if (not pool or not pool["eligible"] or not pool["cn_price"]
+            or row["app_type"] != "game" or is_obvious_non_game_name(row["name"])):
         with database_connection() as conn:
             conn.execute("DELETE FROM niche_recommendation_snapshots WHERE recommendation_date = ?", (today,))
         snapshot_daily_niche_recommendation()
@@ -2563,8 +2803,11 @@ def refresh_niche_pool_scores_from_snapshots():
         )
         rows = conn.execute(
             """
-            SELECT n.appid, n.review_score, n.total_reviews, n.current_players, n.peak_players, n.release_date
+            SELECT n.appid, n.name, n.review_score, n.total_reviews, n.current_players,
+                   n.peak_players, n.release_date, COALESCE(c.app_type, 'game') AS app_type
             FROM niche_pool n
+            LEFT JOIN steam_catalog c ON c.appid=n.appid
+            WHERE c.appid IS NULL OR c.app_type='game'
             """
         ).fetchall()
         updates = []
@@ -2575,7 +2818,15 @@ def refresh_niche_pool_scores_from_snapshots():
             ).fetchone()
             players = int(latest[0]) if latest else int(row["current_players"] or 0)
             peak_players = max(players, int(row["peak_players"] or 0))
-            eligible = int(players >= 10 and 0 < peak_players <= 2000 and float(row["review_score"] or 0) >= 85 and int(row["total_reviews"] or 0) > 0 and is_recent_release(row["release_date"]))
+            eligible = int(
+                row["app_type"] == "game"
+                and not is_obvious_non_game_name(row["name"])
+                and players >= 10
+                and 0 < peak_players <= 2000
+                and float(row["review_score"] or 0) >= 85
+                and int(row["total_reviews"] or 0) > 0
+                and is_recent_release(row["release_date"])
+            )
             score = niche_weighted_score({
                 "current_players": players,
                 "peak_players": peak_players,
@@ -2975,7 +3226,7 @@ def run_niche_pool_task(force=False):
             return False
         local_count = seed_niche_pool_from_local(
             NICHE_POOL_BATCH_LIMIT,
-            scan_limit=1000 if force and pool_count < NICHE_POOL_DISPLAY_LIMIT else None,
+            scan_limit=5000 if force and pool_count < NICHE_POOL_DISPLAY_LIMIT else None,
         )
         batches = 2 if force and count_eligible_niche_pool() < NICHE_POOL_DISPLAY_LIMIT else 1
         saved, attempted = 0, 0
@@ -2985,7 +3236,28 @@ def run_niche_pool_task(force=False):
                 break
             attempted += len(appids)
             rows = asyncio.run(fetch_niche_candidates_async(appids))
-            saved += upsert_niche_pool_rows(rows)
+            game_rows = [row for row in rows if row.get("catalog_result") == "game"]
+            saved += upsert_niche_pool_rows(game_rows, persist_prices=True)
+            with database_connection() as conn:
+                for result in rows:
+                    appid = int(result["appid"])
+                    outcome = result.get("catalog_result")
+                    if outcome == "game":
+                        conn.execute(
+                            "UPDATE steam_catalog SET app_type='game', app_type_checked_at=?, enrich_status='done', last_enriched_at=?, last_error=NULL WHERE appid=?",
+                            (now_iso(), now_iso(), appid),
+                        )
+                    elif outcome == "excluded":
+                        conn.execute(
+                            "UPDATE steam_catalog SET app_type=?, app_type_checked_at=?, enrich_status='excluded', last_enriched_at=?, next_enrich_at=NULL, last_error=NULL WHERE appid=?",
+                            (result.get("app_type") or "other", now_iso(), now_iso(), appid),
+                        )
+                        conn.execute("DELETE FROM niche_pool WHERE appid=?", (appid,))
+                    elif outcome == "not_available":
+                        conn.execute(
+                            "UPDATE steam_catalog SET app_type_checked_at=?, enrich_status='not_available', last_enriched_at=?, next_enrich_at=NULL, last_error=? WHERE appid=?",
+                            (now_iso(), now_iso(), result.get("error") or "Steam AppDetails unavailable", appid),
+                        )
             fetched_ids = {int(row["appid"]) for row in rows}
             unavailable_ids = [appid for appid in appids if appid not in fetched_ids]
             if unavailable_ids:
@@ -3030,7 +3302,15 @@ def run_niche_pool_task(force=False):
 
 def count_eligible_niche_pool():
     with database_connection() as conn:
-        return int(conn.execute("SELECT COUNT(*) FROM niche_pool WHERE eligible = 1").fetchone()[0] or 0)
+        rows = conn.execute(
+            """
+            SELECT n.name
+            FROM niche_pool n
+            LEFT JOIN steam_catalog c ON c.appid=n.appid
+            WHERE n.eligible=1 AND COALESCE(c.app_type, 'game')='game'
+            """
+        ).fetchall()
+    return sum(1 for row in rows if not is_obvious_non_game_name(row[0]))
 
 
 def compact_player_snapshots_once():
@@ -3366,6 +3646,27 @@ def fetch_appdetails(appid, region="US"):
     return record.get("data") or {}
 
 
+def record_catalog_app_type(appid, app_type, stamp=None):
+    app_type = str(app_type or "unknown").strip().lower()
+    if app_type == "unknown":
+        return
+    stamp = stamp or now_iso()
+    with database_connection() as conn:
+        conn.execute(
+            """
+            UPDATE steam_catalog
+            SET app_type=?, app_type_checked_at=?,
+                enrich_status=CASE WHEN ?='game' THEN enrich_status ELSE 'excluded' END,
+                next_enrich_at=CASE WHEN ?='game' THEN next_enrich_at ELSE NULL END,
+                last_error=CASE WHEN ?='game' THEN last_error ELSE NULL END
+            WHERE appid=?
+            """,
+            (app_type, stamp, app_type, app_type, app_type, int(appid)),
+        )
+        if app_type != "game":
+            conn.execute("DELETE FROM niche_pool WHERE appid=?", (int(appid),))
+
+
 def fetch_players(appid):
     qs = urllib.parse.urlencode({"appid": appid})
     url = f"https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?{qs}"
@@ -3519,7 +3820,7 @@ def backfill_preview_async(appid, name=None):
 
     def worker():
         try:
-            refresh_game(
+            result = refresh_game(
                 appid,
                 name,
                 include_prices=True,
@@ -3529,6 +3830,9 @@ def backfill_preview_async(appid, name=None):
                 mark_tracked=False,
                 price_regions=["US", "CN"],
             )
+            if result.get("store_deferred"):
+                with database_connection() as conn:
+                    set_crawl_state(conn, preview_attempt_key(appid), "")
         except Exception as exc:
             log_event(f"preview backfill failed appid={appid}: {exc}")
         finally:
@@ -3563,15 +3867,29 @@ def refresh_game(
         players = None
         reviews = None
         itad_rows = []
+        store_deferred = bool(
+            (include_details or include_prices or include_reviews)
+            and service_cooldown_remaining_seconds("steam_store")
+        )
 
-        if include_details or include_prices or include_reviews:
+        if (include_details or include_prices or include_reviews) and not store_deferred:
             try:
                 details = fetch_appdetails(appid, "US")
+            except SteamRateLimited as exc:
+                store_deferred = True
+                log_event(f"steam store work deferred appid={appid}: {exc}")
+                errors.append(f"steam store deferred: {exc}")
             except Exception as exc:
                 log_event(f"appdetails failed appid={appid} region=US: {exc}")
                 errors.append(f"details: {exc}")
 
-        if include_prices:
+        if details and details.get("type"):
+            app_type = str(details.get("type")).strip().lower()
+            record_catalog_app_type(appid, app_type, stamp)
+            if app_type != "game":
+                return {"appid": appid, "fetched_at": stamp, "errors": [f"excluded app type: {app_type}"]}
+
+        if include_prices and not store_deferred:
             for region in (price_regions or TRACKED_REGIONS):
                 try:
                     if region != "US" or not details:
@@ -3592,6 +3910,11 @@ def refresh_game(
                                 stamp,
                             )
                         )
+                except SteamRateLimited as exc:
+                    store_deferred = True
+                    log_event(f"steam store work deferred appid={appid} region={region}: {exc}")
+                    errors.append(f"steam store deferred: {exc}")
+                    break
                 except Exception as exc:
                     log_event(f"price skipped appid={appid} region={region}: {exc}")
                     errors.append(f"price {region}: {exc}")
@@ -3602,14 +3925,18 @@ def refresh_game(
             except Exception as exc:
                 log_event(f"players skipped appid={appid}: {exc}")
 
-        if include_reviews:
+        if include_reviews and not store_deferred:
             try:
                 reviews = fetch_reviews(appid)
+            except SteamRateLimited as exc:
+                store_deferred = True
+                log_event(f"steam store work deferred appid={appid} reviews: {exc}")
+                errors.append(f"steam store deferred: {exc}")
             except Exception as exc:
                 log_event(f"reviews failed appid={appid}: {exc}")
                 errors.append(f"reviews: {exc}")
 
-        if include_prices:
+        if include_prices and not store_deferred:
             try:
                 polite_store_delay()
                 itad_rows = fetch_itad_prices(appid)
@@ -3681,7 +4008,12 @@ def refresh_game(
                     ),
                 )
 
-        return {"appid": appid, "fetched_at": stamp, "errors": errors}
+        return {
+            "appid": appid,
+            "fetched_at": stamp,
+            "errors": errors,
+            "store_deferred": store_deferred,
+        }
 
 
 def backfill_details_async(appid, name=None):
@@ -3699,7 +4031,7 @@ def backfill_details_async(appid, name=None):
 
     def worker():
         try:
-            refresh_game(
+            result = refresh_game(
                 appid,
                 name,
                 include_prices=True,
@@ -3709,6 +4041,9 @@ def backfill_details_async(appid, name=None):
                 mark_tracked=False,
                 price_regions=["US", "CN"],
             )
+            if result.get("store_deferred"):
+                with database_connection() as conn:
+                    set_crawl_state(conn, detail_attempt_key(appid), "")
         except Exception as exc:
             log_event(f"details backfill failed appid={appid}: {exc}")
         finally:
@@ -3814,10 +4149,10 @@ def refresh_tracked_once(force_all=False):
             )
             for error in result["errors"]:
                 all_errors.append(f"{name}: {error}")
-            if include_details:
+            if include_details and not result.get("store_deferred"):
                 with database_connection() as conn:
                     set_crawl_state(conn, detail_attempt_key(appid), now_iso())
-            if include_details or include_prices or include_reviews:
+            if (include_details or include_prices or include_reviews) and not result.get("store_deferred"):
                 polite_store_delay()
             else:
                 time.sleep(1)
@@ -3892,6 +4227,15 @@ def get_status():
             status["niche_pool_count"] = conn.execute("SELECT COUNT(*) FROM niche_pool WHERE eligible = 1").fetchone()[0]
             status["steam_catalog_count"] = conn.execute("SELECT COUNT(*) FROM steam_catalog").fetchone()[0]
             status["steam_catalog_enriched_count"] = conn.execute("SELECT COUNT(*) FROM steam_catalog WHERE last_enriched_at IS NOT NULL").fetchone()[0]
+            status["steam_catalog_game_count"] = conn.execute("SELECT COUNT(*) FROM steam_catalog WHERE app_type='game'").fetchone()[0]
+            status["steam_catalog_excluded_count"] = conn.execute("SELECT COUNT(*) FROM steam_catalog WHERE app_type NOT IN ('unknown', 'game')").fetchone()[0]
+            status["steam_catalog_unknown_count"] = conn.execute("SELECT COUNT(*) FROM steam_catalog WHERE app_type='unknown'").fetchone()[0]
+            status["steam_catalog_scan_cursor"] = int(get_crawl_state(conn, "steam_catalog_scan_cursor") or 0)
+            status["steam_catalog_scan_generation"] = int(get_crawl_state(conn, "steam_catalog_scan_generation") or 1)
+            status["steam_catalog_scan_started_at"] = get_crawl_state(conn, "steam_catalog_scan_started_at")
+            status["steam_catalog_scan_last_batch_at"] = get_crawl_state(conn, "steam_catalog_scan_last_batch_at")
+            status["steam_catalog_scan_completed_at"] = get_crawl_state(conn, "steam_catalog_scan_completed_at") or None
+            status["steam_catalog_scan_complete"] = bool(status["steam_catalog_scan_completed_at"])
             status["crawl_task_count"] = conn.execute(
                 "SELECT COUNT(*) FROM crawl_tasks WHERE status IN ('pending', 'retry', 'running')"
             ).fetchone()[0]
@@ -3920,6 +4264,15 @@ def get_status():
         status["niche_pool_count"] = 0
         status["steam_catalog_count"] = 0
         status["steam_catalog_enriched_count"] = 0
+        status["steam_catalog_game_count"] = 0
+        status["steam_catalog_excluded_count"] = 0
+        status["steam_catalog_unknown_count"] = 0
+        status["steam_catalog_scan_cursor"] = 0
+        status["steam_catalog_scan_generation"] = 1
+        status["steam_catalog_scan_started_at"] = None
+        status["steam_catalog_scan_last_batch_at"] = None
+        status["steam_catalog_scan_completed_at"] = None
+        status["steam_catalog_scan_complete"] = False
         status["crawl_task_count"] = 0
         status["crawl_task_counts"] = []
         status["hot_games_version"] = ""
@@ -3946,6 +4299,8 @@ def get_status():
     status["niche_pool_display_limit"] = NICHE_POOL_DISPLAY_LIMIT
     status["niche_pool_batch_limit"] = NICHE_POOL_BATCH_LIMIT
     status["steam_catalog_limit"] = STEAM_CATALOG_LIMIT
+    status["catalog_scan_batch_limit"] = CATALOG_SCAN_BATCH_LIMIT
+    status["catalog_rescan_days"] = CATALOG_RESCAN_DAYS
     status["catalog_enrich_daily_limit"] = CATALOG_ENRICH_DAILY_LIMIT
     status["catalog_enrich_batch_limit"] = CATALOG_ENRICH_BATCH_LIMIT
     status["niche_pool_limit"] = NICHE_POOL_LIMIT
@@ -4097,8 +4452,13 @@ def normalized_history_limit(value):
 
 
 def ensure_game_from_catalog(conn, appid):
-    row = conn.execute("SELECT appid, name FROM steam_catalog WHERE appid = ?", (appid,)).fetchone()
+    row = conn.execute(
+        "SELECT appid, name, app_type FROM steam_catalog WHERE appid = ?",
+        (appid,),
+    ).fetchone()
     if not row:
+        return False
+    if row[2] not in ("unknown", "game") or (row[2] == "unknown" and is_obvious_non_game_name(row[1])):
         return False
     name = clean_hot_name(row[1]) or fallback_game_name(appid)
     header = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
@@ -4358,15 +4718,32 @@ def ensure_daily_home_snapshot(historical_lows, memes):
     lows_by_appid = {int(game["appid"]): game for game in historical_lows}
     with database_connection() as conn:
         conn.row_factory = sqlite3.Row
+        recent_low_appids = {
+            int(item[0])
+            for item in conn.execute(
+                """
+                SELECT historical_low_appid
+                FROM daily_home_snapshots
+                WHERE recommendation_date < ? AND historical_low_appid IS NOT NULL
+                ORDER BY recommendation_date DESC
+                LIMIT 7
+                """,
+                (refresh_key,),
+            ).fetchall()
+        }
+        fresh_lows = [game for game in historical_lows if int(game["appid"]) not in recent_low_appids]
+        preferred_low = (fresh_lows or historical_lows or [None])[0]
         row = conn.execute(
             "SELECT historical_low_appid, meme_url FROM daily_home_snapshots WHERE recommendation_date = ?",
             (refresh_key,),
         ).fetchone()
         selected_low = lows_by_appid.get(int(row["historical_low_appid"])) if row and row["historical_low_appid"] else None
+        if selected_low and fresh_lows and int(selected_low["appid"]) in recent_low_appids:
+            selected_low = None
         selected_meme = row["meme_url"] if row and row["meme_url"] in memes else None
         needs_update = row is None
         if historical_lows and selected_low is None:
-            selected_low = historical_lows[0]
+            selected_low = preferred_low
             needs_update = True
         if memes and selected_meme is None:
             selected_meme = memes[daily_index(len(memes), refresh_key)]
@@ -4416,20 +4793,22 @@ def list_niche_candidates(limit=24):
         rows = conn.execute(
             """
             SELECT n.appid, n.name, n.header_image, n.current_players, n.peak_players,
-                   n.review_score, n.cn_price, n.cn_price_final,
+                   n.review_score, n.total_reviews, n.cn_price, n.cn_price_final,
                    n.cn_price_currency, n.cn_discount_percent, n.is_free,
                    (SELECT amount_cny FROM historical_lows h
                     WHERE h.appid = n.appid AND h.country = 'CN' LIMIT 1) AS cn_historical_low_cny,
-                   g.tracked, n.weighted_score, n.total_reviews
+                   g.tracked, n.weighted_score
             FROM niche_pool n
             LEFT JOIN games g ON g.appid = n.appid
+            LEFT JOIN steam_catalog c ON c.appid = n.appid
             WHERE n.eligible = 1
+              AND COALESCE(c.app_type, 'game') = 'game'
             ORDER BY n.weighted_score DESC, n.total_reviews DESC
             LIMIT ?
             """,
             (limit,),
         ).fetchall()
-    return [clean_home_pick(row) for row in rows]
+    return [clean_home_pick(row) for row in rows if not is_obvious_non_game_name(row["name"])]
 
 
 def list_niche_pool_games(limit=NICHE_POOL_DISPLAY_LIMIT):
@@ -4439,22 +4818,32 @@ def list_niche_pool_games(limit=NICHE_POOL_DISPLAY_LIMIT):
         rows = conn.execute(
             """
             SELECT n.appid, n.name, n.header_image, n.current_players, n.peak_players,
-                   n.review_score, n.cn_price, n.cn_price_final,
-                   n.cn_price_currency, n.cn_discount_percent, n.is_free, n.fetched_at,
+                   n.review_score, n.total_reviews,
+                   CASE WHEN s.price_updated_at >= n.fetched_at THEN s.cn_price ELSE n.cn_price END AS cn_price,
+                   CASE WHEN s.price_updated_at >= n.fetched_at THEN s.cn_price_final ELSE n.cn_price_final END AS cn_price_final,
+                   CASE WHEN s.price_updated_at >= n.fetched_at THEN s.cn_price_currency ELSE n.cn_price_currency END AS cn_price_currency,
+                   CASE WHEN s.price_updated_at >= n.fetched_at THEN COALESCE(s.cn_discount_percent, 0) ELSE n.cn_discount_percent END AS cn_discount_percent,
+                   COALESCE(g.is_free, n.is_free) AS is_free, n.fetched_at,
                    n.weighted_score, COALESCE(g.tracked, 0) AS tracked,
                    (SELECT amount_cny FROM historical_lows h
                     WHERE h.appid = n.appid AND h.country = 'CN' LIMIT 1) AS cn_historical_low_cny
             FROM niche_pool n
             LEFT JOIN games g ON g.appid = n.appid
+            LEFT JOIN game_latest_state s ON s.appid = n.appid
+            LEFT JOIN steam_catalog c ON c.appid = n.appid
             WHERE n.eligible = 1
+              AND COALESCE(c.app_type, 'game') = 'game'
             ORDER BY n.weighted_score DESC, n.total_reviews DESC
             """,
         ).fetchall()
+    rows = [row for row in rows if not is_obvious_non_game_name(row["name"])]
     # Keep a small pool fully visible while it is still being built. Once it
     # has enough choices, draw from the stronger half for variety, then sort
     # the displayed games back into score order for easy comparison.
     if len(rows) <= limit:
         candidates = list(rows)
+    elif len(rows) < limit * 2:
+        candidates = list(rows[:limit])
     else:
         top_half_count = max(1, (len(rows) + 1) // 2)
         top_half = list(rows[:top_half_count])
@@ -4534,11 +4923,13 @@ def search_local_games(term):
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
-            SELECT appid, name, header_image, tracked,
-                   (SELECT player_count FROM player_snapshots WHERE appid = games.appid ORDER BY fetched_at DESC LIMIT 1) AS player_count
-            FROM games
-            WHERE name LIKE ? AND name != ?
-            ORDER BY tracked DESC, player_count DESC, name ASC
+            SELECT g.appid, g.name, g.header_image, g.tracked,
+                   (SELECT player_count FROM player_snapshots WHERE appid = g.appid ORDER BY fetched_at DESC LIMIT 1) AS player_count
+            FROM games g
+            LEFT JOIN steam_catalog c ON c.appid=g.appid
+            WHERE g.name LIKE ? AND g.name != ?
+              AND COALESCE(c.app_type, 'game') = 'game'
+            ORDER BY g.tracked DESC, player_count DESC, g.name ASC
             LIMIT 12
             """,
             (pattern, UNKNOWN_GAME_NAME),
@@ -4553,6 +4944,7 @@ def search_local_games(term):
             "tracked": bool(row["tracked"]),
         }
         for row in rows
+        if not is_obvious_non_game_name(row["name"])
     ]
 
 
@@ -4568,8 +4960,9 @@ def search_catalog_games(term):
             FROM steam_catalog c
             LEFT JOIN games g ON g.appid = c.appid
             WHERE c.name LIKE ?
-            ORDER BY CASE WHEN c.enrich_status = 'done' THEN 0 ELSE 1 END, c.name ASC
-            LIMIT 12
+              AND c.app_type IN ('unknown', 'game')
+            ORDER BY CASE c.app_type WHEN 'game' THEN 0 ELSE 1 END, c.name ASC
+            LIMIT 36
             """,
             (pattern,),
         ).fetchall()
@@ -4583,7 +4976,8 @@ def search_catalog_games(term):
             "tracked": bool(row["tracked"]),
         }
         for row in rows
-    ]
+        if not is_obvious_non_game_name(row["name"])
+    ][:12]
 
 
 def search_steam(term):
@@ -4611,6 +5005,12 @@ def search_steam(term):
         appid = int(term)
         try:
             details = fetch_appdetails(appid, "US")
+            app_type = str((details or {}).get("type") or "unknown").strip().lower()
+            if app_type != "unknown":
+                record_catalog_app_type(appid, app_type)
+            if app_type != "game":
+                SEARCH_CACHE[cache_key] = {"at": time.time(), "items": []}
+                return []
             items = [
                 {
                     "appid": appid,
@@ -4642,7 +5042,7 @@ def search_steam(term):
             "price": item.get("price", {}).get("final") if isinstance(item.get("price"), dict) else None,
         }
         for item in items
-        if item.get("type") == "app" and item.get("id")
+        if item.get("type") == "app" and item.get("id") and not is_obvious_non_game_name(item.get("name"))
     ][:12]
     merged = []
     seen = set()
@@ -4656,258 +5056,3 @@ def search_steam(term):
     remember_search_games(merged)
     SEARCH_CACHE[cache_key] = {"at": time.time(), "items": merged}
     return merged
-
-
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):
-        print("[%s] %s" % (self.log_date_time_string(), fmt % args))
-
-    def send_json(self, payload, status=200):
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_cors_headers()
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_cors_headers()
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-    def read_json_body(self):
-        length = int(self.headers.get("Content-Length") or "0")
-        if not length:
-            return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
-
-    def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        query = urllib.parse.parse_qs(parsed.query)
-        try:
-            if path == "/favicon.ico":
-                self.send_file(ROOT / "assets" / "favicon.png", "image/png")
-                return
-            if path.startswith("/assets/"):
-                asset_rel = Path(urllib.parse.unquote(path.removeprefix("/assets/")))
-                if asset_rel.is_absolute() or ".." in asset_rel.parts:
-                    self.send_response(404)
-                    self.send_cors_headers()
-                    self.end_headers()
-                    return
-                asset_path = ROOT / "assets" / asset_rel
-                self.send_file(asset_path)
-                return
-            if path == "/api/image-cache":
-                url = (query.get("url") or [""])[0].strip()
-                if not url:
-                    self.send_json({"error": "missing url"}, 400)
-                    return
-                try:
-                    image_path = cache_image(url)
-                    self.send_file(image_path, mimetypes.guess_type(str(image_path))[0] or "image/jpeg", max_age=604800)
-                except Exception as exc:
-                    log_event(f"image cache failed url={url}: {exc}")
-                    self.send_response(302)
-                    self.send_cors_headers()
-                    self.send_header("Location", url)
-                    self.send_header("Cache-Control", "no-store")
-                    self.end_headers()
-                return
-            if path == "/api/games":
-                self.send_json({"games": list_games()})
-                return
-            if path == "/api/hot-games/ensure":
-                target_raw = (query.get("target") or ["100"])[0]
-                try:
-                    target = min(max(100, int(target_raw)), HOTLIST_TARGET)
-                except ValueError:
-                    target = 100
-                hot_count = count_hot_games()
-                with database_connection() as conn:
-                    hotlist_at = get_crawl_state(conn, "hotlist_at")
-                force_hotlist = hot_count < target and is_due(hotlist_at, 30)
-                queued = False
-                if force_hotlist or is_due(hotlist_at, HOTLIST_REFRESH_HOURS * 60):
-                    queued = refresh_hot_database_async(force_hotlist=force_hotlist, quick=True)
-                preview_queued = enqueue_missing_hot_previews(limit=HOT_FULL_METADATA_TOP_LIMIT, priority=90)
-                self.send_json({"queued": queued, "count": hot_count, "target": target, "preview_queued": preview_queued})
-                return
-            if path == "/api/hot-games":
-                limit = (query.get("limit") or ["100"])[0]
-                try:
-                    requested_limit = min(max(1, int(limit)), HOTLIST_TARGET)
-                except ValueError:
-                    requested_limit = 100
-                self.send_json({"games": list_hot_games(requested_limit), "count": count_hot_games(), "version": hot_games_version(), "queued": False})
-                return
-            if path == "/api/hot-games/version":
-                self.send_json({"version": hot_games_version()})
-                return
-            if path == "/api/niche-pool":
-                games = list_niche_pool_games(20)
-                pool_count = count_eligible_niche_pool()
-                self.send_json({
-                    "games": games,
-                    "count": len(games),
-                    "pool_count": pool_count,
-                    "selection_mode": "all" if pool_count <= NICHE_POOL_DISPLAY_LIMIT else "top_half_random",
-                    "queued": False,
-                })
-                return
-            if path == "/api/home-picks":
-                self.send_json(get_home_picks())
-                return
-            if path == "/api/status":
-                status = get_status()
-                self.send_json(
-                    {
-                        "running": bool(status.get("running")),
-                        "hot_running": bool(status.get("hot_running")),
-                        "track_running": bool(status.get("track_running")),
-                        "detail_running": bool(status.get("detail_running")),
-                        "historylow_running": bool(status.get("historylow_running")),
-                        "last_started_at": status.get("last_started_at"),
-                        "last_finished_at": status.get("last_finished_at"),
-                        "last_errors": list(status.get("last_errors") or []),
-                        "hot_last_started_at": status.get("hot_last_started_at"),
-                        "hot_last_finished_at": status.get("hot_last_finished_at"),
-                        "hot_last_errors": list(status.get("hot_last_errors") or []),
-                        "player_refresh_minutes": int(status.get("player_refresh_minutes") or PLAYER_REFRESH_MINUTES),
-                        "price_refresh_hours": int(status.get("price_refresh_hours") or PRICE_REFRESH_HOURS),
-                        "store_delay_seconds": status.get("store_delay_seconds"),
-                        "itad_configured": bool(status.get("itad_configured")),
-                        "steam_api_key_configured": bool(status.get("steam_api_key_configured")),
-                        "historical_low_tolerance_cny": status.get("historical_low_tolerance_cny"),
-                        "historical_low_count": status.get("historical_low_count"),
-                        "niche_pool_count": status.get("niche_pool_count"),
-                        "proxy": status.get("proxy"),
-                        "steam_cooldown_remaining_seconds": status.get("steam_cooldown_remaining_seconds"),
-                        "task_progress": status.get("task_progress"),
-                        "hot_games_version": status.get("hot_games_version"),
-                        "version": status.get("version"),
-                        "httpx_available": bool(status.get("httpx_available")),
-                        "hotlist_target": status.get("hotlist_target"),
-                        "hotlist_concurrency": status.get("hotlist_concurrency"),
-                        "hot_preview_top_limit": status.get("hot_preview_top_limit"),
-                        "hot_preview_batch_limit": status.get("hot_preview_batch_limit"),
-                        "hot_full_metadata_top_limit": status.get("hot_full_metadata_top_limit"),
-                        "hot_metadata_concurrency": status.get("hot_metadata_concurrency"),
-                        "hot_metadata_batch_limit": status.get("hot_metadata_batch_limit"),
-                        "tracked_refresh_batch_limit": status.get("tracked_refresh_batch_limit"),
-                        "itad_historylow_batch_limit": status.get("itad_historylow_batch_limit"),
-                        "niche_pool_refresh_minutes": status.get("niche_pool_refresh_minutes"),
-                        "niche_pool_display_limit": status.get("niche_pool_display_limit"),
-                        "niche_pool_batch_limit": status.get("niche_pool_batch_limit"),
-                        "steam_catalog_count": status.get("steam_catalog_count"),
-                        "steam_catalog_enriched_count": status.get("steam_catalog_enriched_count"),
-                        "steam_catalog_limit": status.get("steam_catalog_limit"),
-                        "catalog_enrich_daily_limit": status.get("catalog_enrich_daily_limit"),
-                        "catalog_enrich_batch_limit": status.get("catalog_enrich_batch_limit"),
-                        "niche_pool_limit": status.get("niche_pool_limit"),
-                        "crawl_task_count": status.get("crawl_task_count"),
-                        "crawl_task_counts": status.get("crawl_task_counts"),
-                    }
-                )
-                return
-            if path == "/api/search":
-                term = (query.get("q") or [""])[0].strip()
-                self.send_json({"items": search_steam(term) if term else []})
-                return
-            if path.startswith("/api/games/"):
-                appid = int(path.rsplit("/", 1)[-1])
-                history_limit = (query.get("history_limit") or ["500"])[0]
-                payload = get_game_payload(appid, history_limit)
-                self.send_json(payload if payload else {"error": "not found"}, 200 if payload else 404)
-                return
-            if path in ("/", "/steamkb.html"):
-                body = (ROOT / "steamkb.html").read_bytes()
-                self.send_response(200)
-                self.send_cors_headers()
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            self.send_response(404)
-            self.send_cors_headers()
-            self.end_headers()
-        except Exception as exc:
-            self.send_json({"error": str(exc)}, 500)
-
-    def send_file(self, path, content_type=None, max_age=3600):
-        if not path.is_file():
-            self.send_response(404)
-            self.send_cors_headers()
-            self.end_headers()
-            return
-        body = path.read_bytes()
-        self.send_response(200)
-        self.send_cors_headers()
-        self.send_header("Content-Type", content_type or mimetypes.guess_type(str(path))[0] or "application/octet-stream")
-        self.send_header("Cache-Control", f"public, max-age={int(max_age)}")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_POST(self):
-        parsed = urllib.parse.urlparse(self.path)
-        try:
-            if parsed.path == "/api/track":
-                body = self.read_json_body()
-                appid = int(body.get("appid"))
-                name = body.get("name")
-                header_image = body.get("header_image") or body.get("tiny_image")
-                quick_track_game(appid, name, header_image)
-                queued = refresh_tracked_game_async(appid, name)
-                self.send_json({"ok": True, "appid": appid, "queued": queued})
-                return
-            if parsed.path == "/api/untrack":
-                body = self.read_json_body()
-                appid = int(body.get("appid"))
-                untrack_game(appid)
-                self.send_json({"ok": True, "appid": appid, "tracked": False})
-                return
-            if parsed.path == "/api/refresh-all":
-                if REFRESH_STATUS["running"]:
-                    self.send_json({"ok": True, "running": True, "message": "refresh already running"})
-                    return
-                errors = refresh_tracked_once(force_all=True)
-                self.send_json({"ok": True, "running": False, "errors": errors})
-                return
-            if parsed.path.startswith("/api/games/") and parsed.path.endswith("/refresh"):
-                appid = int(parsed.path.split("/")[3])
-                result = refresh_game(appid)
-                self.send_json({"ok": True, **result})
-                return
-            self.send_response(404)
-            self.send_cors_headers()
-            self.end_headers()
-        except Exception as exc:
-            self.send_json({"error": str(exc)}, 500)
-
-
-def main():
-    init_db()
-    probe_proxy()
-    cleanup_image_cache_once()
-    startup_prewarm_async()
-    threading.Thread(target=scheduler_loop, daemon=True).start()
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"Steam-KaKaBase running at http://127.0.0.1:{PORT}")
-    print(f"SQLite database: {DB_PATH}")
-    server.serve_forever()
-
-
-if __name__ == "__main__":
-    main()

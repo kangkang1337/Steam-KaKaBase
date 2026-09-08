@@ -13,7 +13,7 @@
 - SQLite WAL、批量写入、任务队列和历史数据压缩。
 - Steam API、Steam Store、ITAD、图片 CDN 独立冷却。
 - 直连优先、失败后代理回退和直连探测冷却。
-- 首页三项内容每日 00:10 快照和史低 7 天去重。
+- 首页三项内容每日 00:10 快照，小众宝藏与史低推荐均在 7 天内去重。
 - FastAPI + Uvicorn Web 服务，以及 `/health`、`/ready` 健康检查。
 - GitHub Actions、密钥泄漏检查和前端 JavaScript 语法检查。
 - pytest 单元及进程内 API 集成测试，测试不访问真实外部服务。
@@ -22,7 +22,7 @@
 
 当前已知限制：
 
-- `backend/_runtime.py` 仍然承担大部分实现，模块边界尚未真正完成。
+- `config.py` 已独立解析环境变量；`db.py` 已拥有任务队列和主要只读查询；`catalog.py` 已拥有 AppList 扫描和 enrich；`steam_client.py` 已拥有 HTTP 与 Steam/ITAD 端点；`crawler.py` 已接管热门榜、玩家、商店预览和 ITAD 史低编排；首页推荐业务已迁入 `services.py`。`_runtime.py` 仍保留尚未迁移的写入逻辑和兼容入口。
 - Web 与 crawler 仍在同一进程，尚不能独立扩缩容或重启。
 - 收藏是服务端全局状态，多用户访问时会互相影响。
 - 前端依赖 CDN 加载 Vue 和 ECharts，离线及弱网体验有限。
@@ -61,6 +61,7 @@
 
 - `config.py`：真正拥有环境变量解析和配置校验。
 - `db.py`：拥有连接、迁移、查询仓储、事务和快照压缩。
+- `catalog.py`：拥有 AppList 游标扫描、增量 enrich 与非游戏分类。
 - `steam_client.py`：拥有 Steam、ITAD、图片请求与分服务冷却。
 - `crawler.py`：拥有任务认领、优先级、调度和失败恢复。
 - `services.py`：只组合数据库操作，不直接发外部请求。
@@ -168,11 +169,10 @@
 
 ## 下一步建议顺序
 
-1. 补任务恢复、迁移中断和备份恢复测试。
-2. 将 Steam/ITAD 请求实现真正迁出 `_runtime.py`。
-3. 将数据库查询迁入 `db.py`，保持现有 API 不变。
-4. 扩充图表和滚动加载 Playwright 流程。
-5. 将 crawler 调度器拆成独立进程。
-6. 决定公开版收藏采用浏览器本地还是用户账户。
-7. 准备 Docker Compose/systemd、HTTPS 和备份脚本。
-8. 部署私有服务器并运行 7 天稳定性观察。
+1. 继续迁移 `_runtime.py` 中的数据库写入、缓存清理和小众池刷新逻辑，移除已无调用的旧 ITAD 兼容实现。
+2. 补任务恢复、迁移中断和备份恢复测试。
+3. 扩充图表和滚动加载 Playwright 流程。
+4. 将 crawler 调度器拆成独立进程。
+5. 决定公开版收藏采用浏览器本地还是用户账户。
+6. 准备 Docker Compose/systemd、HTTPS 和备份脚本。
+7. 部署私有服务器并运行 7 天稳定性观察。

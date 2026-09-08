@@ -77,6 +77,7 @@ backend/
 ├── logging_utils.py   日志与轮转入口
 ├── db.py              SQLite 连接、迁移和任务状态
 ├── steam_client.py    Steam / ITAD 请求、代理、重试和冷却
+├── catalog.py         Steam AppList 扫描、游标和增量 enrich
 ├── crawler.py         后台采集与任务编排入口
 ├── services.py        搜索、详情、榜单、推荐和收藏
 ├── schemas.py         FastAPI 请求模型与参数校验

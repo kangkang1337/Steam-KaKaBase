@@ -98,7 +98,17 @@ def clean_home_pick(row):
     current_cny = _runtime.amount_int_to_cny(
         item["cn_price_final"], item["cn_price_currency"] or "CNY"
     )
-    is_low = _runtime.compare_historical_low(current_cny, item["cn_historical_low_cny"])
+    low_cny, low_source = _runtime.effective_historical_low(
+        item.get("cn_itad_low_cny", item.get("cn_historical_low_cny")),
+        item.get("cn_observed_low_cny"),
+    )
+    is_low = _runtime.cached_historical_low_match(
+        current_cny,
+        low_cny,
+        low_source,
+        item.get("cn_discount_percent"),
+        item.get("cn_observed_snapshot_count"),
+    )
     return {
         "appid": item["appid"],
         "name": _runtime.fallback_game_name(item["appid"], item["name"]),
@@ -113,7 +123,10 @@ def clean_home_pick(row):
         "cn_discount_percent": item["cn_discount_percent"] or 0,
         "cn_price_historical_low": is_low,
         "cn_price_discounted": bool((item["cn_discount_percent"] or 0) > 0 and not is_low),
-        "cn_historical_low_cny": item["cn_historical_low_cny"],
+        "cn_historical_low_cny": low_cny,
+        "cn_historical_low_source": low_source,
+        "cn_observed_low_since": item.get("cn_observed_low_since"),
+        "cn_observed_snapshot_count": item.get("cn_observed_snapshot_count") or 0,
         "tracked": bool(item["tracked"]),
     }
 

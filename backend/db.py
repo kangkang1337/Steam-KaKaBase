@@ -158,7 +158,25 @@ def query_latest_prices_by_region(conn, appid):
                hl.amount_cny AS historical_low_cny,
                hl.currency AS historical_low_currency,
                hl.amount_int AS historical_low_amount_int,
-               hl.low_at AS historical_low_at
+               hl.low_at AS historical_low_at,
+               (SELECT MIN(observed.final)
+                FROM price_snapshots observed
+                WHERE observed.appid = ps.appid
+                  AND observed.region = ps.region
+                  AND observed.currency = ps.currency
+                  AND observed.source = 'steam'
+                  AND observed.final IS NOT NULL) AS observed_low_amount_int,
+               (SELECT MIN(observed.fetched_at)
+                FROM price_snapshots observed
+                WHERE observed.appid = ps.appid
+                  AND observed.region = ps.region
+                  AND observed.source = 'steam') AS observed_low_since,
+               (SELECT COUNT(*)
+                FROM price_snapshots observed
+                WHERE observed.appid = ps.appid
+                  AND observed.region = ps.region
+                  AND observed.source = 'steam'
+                  AND observed.final IS NOT NULL) AS observed_snapshot_count
         FROM price_snapshots ps
         JOIN (
             SELECT region, MAX(fetched_at) AS fetched_at
@@ -230,6 +248,9 @@ def query_game_detail(conn, appid, history_limit):
     has_historical_low = conn.execute(
         "SELECT 1 FROM historical_lows WHERE appid = ? LIMIT 1", (appid,)
     ).fetchone()
+    historical_low_fetched_at = conn.execute(
+        "SELECT MAX(fetched_at) FROM historical_lows WHERE appid = ?", (appid,)
+    ).fetchone()[0]
     return {
         "game": game,
         "prices": query_latest_prices_by_region(conn, appid),
@@ -238,6 +259,7 @@ def query_game_detail(conn, appid, history_limit):
         "reviews": reviews,
         "site_peak": site_peak,
         "has_historical_low": bool(has_historical_low),
+        "historical_low_fetched_at": historical_low_fetched_at,
     }
 
 
@@ -252,7 +274,10 @@ def query_tracked_games():
                    (SELECT final FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price_final,
                    (SELECT currency FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price_currency,
                    (SELECT discount_percent FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_discount_percent,
-                   (SELECT amount_cny FROM historical_lows WHERE appid = g.appid AND country = 'CN' LIMIT 1) AS cn_historical_low_cny
+                   (SELECT amount_cny FROM historical_lows WHERE appid = g.appid AND country = 'CN' LIMIT 1) AS cn_itad_low_cny,
+                   (SELECT MIN(final) / 100.0 FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam' AND final IS NOT NULL) AS cn_observed_low_cny,
+                   (SELECT MIN(fetched_at) FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam') AS cn_observed_low_since,
+                   (SELECT COUNT(*) FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam' AND final IS NOT NULL) AS cn_observed_snapshot_count
             FROM games g
             WHERE tracked = 1
             ORDER BY player_count DESC, name ASC
@@ -281,7 +306,10 @@ def query_hot_games(limit, unknown_name):
                        h.peak_players, h.source, h.fetched_at, g.tracked, g.is_free,
                        gls.review_score, gls.cn_price, gls.cn_price_final,
                        gls.cn_price_currency, gls.cn_discount_percent,
-                       gls.historical_low_cny AS cn_historical_low_cny
+                       gls.historical_low_cny AS cn_itad_low_cny,
+                       (SELECT MIN(ps.final) / 100.0 FROM price_snapshots ps WHERE ps.appid=h.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_low_cny,
+                       (SELECT MIN(ps.fetched_at) FROM price_snapshots ps WHERE ps.appid=h.appid AND ps.region='CN' AND ps.source='steam') AS cn_observed_low_since,
+                       (SELECT COUNT(*) FROM price_snapshots ps WHERE ps.appid=h.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_snapshot_count
                 FROM hot_games h
                 LEFT JOIN games g ON g.appid = h.appid
                 LEFT JOIN steam_app_names san ON san.appid = h.appid
@@ -304,7 +332,10 @@ def query_hot_games(limit, unknown_name):
                    g.updated_at AS fetched_at, g.tracked, g.is_free,
                    gls.review_score, gls.cn_price, gls.cn_price_final,
                    gls.cn_price_currency, gls.cn_discount_percent,
-                   gls.historical_low_cny AS cn_historical_low_cny
+                   gls.historical_low_cny AS cn_itad_low_cny,
+                   (SELECT MIN(ps.final) / 100.0 FROM price_snapshots ps WHERE ps.appid=g.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_low_cny,
+                   (SELECT MIN(ps.fetched_at) FROM price_snapshots ps WHERE ps.appid=g.appid AND ps.region='CN' AND ps.source='steam') AS cn_observed_low_since,
+                   (SELECT COUNT(*) FROM price_snapshots ps WHERE ps.appid=g.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_snapshot_count
             FROM games g
             LEFT JOIN game_latest_state gls ON gls.appid = g.appid
             WHERE g.name != ?
@@ -388,17 +419,27 @@ def query_popular_historical_low_rows(limit, min_reviews, min_players):
                    s.cn_price_final, s.cn_price_currency,
                    COALESCE(s.cn_discount_percent, 0) AS cn_discount_percent,
                    g.is_free, COALESCE(g.tracked, 0) AS tracked,
-                   h.amount_cny AS cn_historical_low_cny
+                   h.amount_cny AS cn_itad_low_cny,
+                   (SELECT MIN(ps.final) / 100.0 FROM price_snapshots ps
+                    WHERE ps.appid=g.appid AND ps.region='CN' AND ps.source='steam'
+                      AND ps.final IS NOT NULL) AS cn_observed_low_cny,
+                   (SELECT MIN(ps.fetched_at) FROM price_snapshots ps
+                    WHERE ps.appid=g.appid AND ps.region='CN' AND ps.source='steam') AS cn_observed_low_since,
+                   (SELECT COUNT(*) FROM price_snapshots ps
+                    WHERE ps.appid=g.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_snapshot_count
             FROM games g
             JOIN game_latest_state s ON s.appid = g.appid
-            JOIN historical_lows h ON h.appid = g.appid AND h.country = 'CN'
+            LEFT JOIN historical_lows h ON h.appid = g.appid AND h.country = 'CN'
             LEFT JOIN steam_catalog c ON c.appid = g.appid
             WHERE COALESCE(c.app_type, 'game') = 'game'
               AND COALESCE(g.is_free, 0) = 0
               AND g.header_image IS NOT NULL
               AND s.cn_price_final IS NOT NULL
               AND s.cn_price_currency = 'CNY'
-              AND h.amount_cny IS NOT NULL
+              AND (h.amount_cny IS NOT NULL OR EXISTS (
+                    SELECT 1 FROM price_snapshots ps
+                    WHERE ps.appid=g.appid AND ps.region='CN' AND ps.source='steam'
+                      AND ps.final IS NOT NULL))
               AND (COALESCE(s.total_reviews, 0) >= ? OR COALESCE(s.current_players, 0) >= ?)
             ORDER BY COALESCE(s.current_players, 0) DESC, COALESCE(s.total_reviews, 0) DESC
             LIMIT ?
@@ -458,7 +499,13 @@ def query_daily_niche_snapshot(refresh_key, max_reviews):
             """
             SELECT n.*, COALESCE(g.tracked, 0) AS tracked,
                    (SELECT amount_cny FROM historical_lows h
-                    WHERE h.appid=n.appid AND h.country='CN' LIMIT 1) AS cn_historical_low_cny
+                    WHERE h.appid=n.appid AND h.country='CN' LIMIT 1) AS cn_itad_low_cny,
+                   (SELECT MIN(ps.final) / 100.0 FROM price_snapshots ps
+                    WHERE ps.appid=n.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_low_cny,
+                   (SELECT MIN(ps.fetched_at) FROM price_snapshots ps
+                    WHERE ps.appid=n.appid AND ps.region='CN' AND ps.source='steam') AS cn_observed_low_since,
+                   (SELECT COUNT(*) FROM price_snapshots ps
+                    WHERE ps.appid=n.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_snapshot_count
             FROM niche_recommendation_snapshots r
             JOIN niche_pool n ON n.appid=r.appid
             LEFT JOIN games g ON g.appid=n.appid

@@ -251,7 +251,7 @@ def backfill_historylow_async(appid):
     with runtime.database_connection() as conn:
         if not runtime.is_due(
             runtime.get_crawl_state(conn, runtime.historylow_attempt_key(appid)),
-            runtime.PRICE_REFRESH_HOURS * 60,
+            runtime.ITAD_HISTORYLOW_REFRESH_DAYS * 24 * 60,
         ):
             return
         runtime.set_crawl_state(conn, runtime.historylow_attempt_key(appid), runtime.now_iso())

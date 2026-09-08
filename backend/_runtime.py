@@ -58,6 +58,7 @@ HOME_POPULAR_MIN_REVIEWS = config.HOME_POPULAR_MIN_REVIEWS
 HOME_POPULAR_MIN_PLAYERS = config.HOME_POPULAR_MIN_PLAYERS
 TRACKED_REFRESH_BATCH_LIMIT = config.TRACKED_REFRESH_BATCH_LIMIT
 ITAD_HISTORYLOW_BATCH_LIMIT = config.ITAD_HISTORYLOW_BATCH_LIMIT
+ITAD_HISTORYLOW_REFRESH_DAYS = config.ITAD_HISTORYLOW_REFRESH_DAYS
 STORE_REQUEST_DELAY_MIN_SECONDS = config.STORE_REQUEST_DELAY_MIN_SECONDS
 STORE_REQUEST_DELAY_MAX_SECONDS = config.STORE_REQUEST_DELAY_MAX_SECONDS
 ITAD_API_KEY = config.ITAD_API_KEY
@@ -1317,6 +1318,24 @@ def compare_historical_low(current_cny, low_cny):
     if current_cny is None or low_cny is None:
         return False
     return abs(float(current_cny) - float(low_cny)) <= HISTORICAL_LOW_TOLERANCE_CNY
+
+
+def effective_historical_low(itad_low_cny, observed_low_cny):
+    """Choose the lowest cached value while preserving its provenance."""
+    candidates = []
+    if itad_low_cny is not None:
+        candidates.append((float(itad_low_cny), "itad"))
+    if observed_low_cny is not None:
+        candidates.append((float(observed_low_cny), "site_observed"))
+    return min(candidates, default=(None, None), key=lambda item: item[0])
+
+
+def cached_historical_low_match(current_cny, low_cny, source, discount_percent=0, observed_count=0):
+    if not compare_historical_low(current_cny, low_cny):
+        return False
+    if source == "itad":
+        return True
+    return source == "site_observed" and int(observed_count or 0) >= 2 and int(discount_percent or 0) > 0
 
 
 def itad_headers():
@@ -3510,7 +3529,17 @@ def clean_game(row, summary=False):
         display_name = infer_name_from_description(item.get("short_description")) or fallback_game_name(item.get("appid"))
     if summary:
         cn_current_cny = amount_int_to_cny(item.get("cn_price_final"), item.get("cn_price_currency") or "CNY")
-        cn_is_low = compare_historical_low(cn_current_cny, item.get("cn_historical_low_cny"))
+        cn_low_cny, cn_low_source = effective_historical_low(
+            item.get("cn_itad_low_cny", item.get("cn_historical_low_cny")),
+            item.get("cn_observed_low_cny"),
+        )
+        cn_is_low = cached_historical_low_match(
+            cn_current_cny,
+            cn_low_cny,
+            cn_low_source,
+            item.get("cn_discount_percent"),
+            item.get("cn_observed_snapshot_count"),
+        )
         cn_discounted = bool((item.get("cn_discount_percent") or 0) > 0 and not cn_is_low)
         return {
             "appid": item.get("appid"),
@@ -3524,7 +3553,10 @@ def clean_game(row, summary=False):
             "cn_price_historical_low": cn_is_low,
             "cn_price_discounted": cn_discounted,
             "cn_discount_percent": item.get("cn_discount_percent") or 0,
-            "cn_historical_low_cny": item.get("cn_historical_low_cny"),
+            "cn_historical_low_cny": cn_low_cny,
+            "cn_historical_low_source": cn_low_source,
+            "cn_observed_low_since": item.get("cn_observed_low_since"),
+            "cn_observed_snapshot_count": item.get("cn_observed_snapshot_count") or 0,
             "updated_at": item.get("updated_at"),
             "tracked": bool(item.get("tracked")),
         }
@@ -3546,7 +3578,12 @@ def clean_game(row, summary=False):
 def clean_price(row):
     item = dict(row)
     current_cny = price_row_cny(item)
-    low_cny = item.get("historical_low_cny")
+    observed_low_cny = amount_int_to_cny(
+        item.get("observed_low_amount_int"), item.get("currency")
+    )
+    low_cny, low_source = effective_historical_low(
+        item.get("historical_low_cny"), observed_low_cny
+    )
     return {
         "region": item.get("region"),
         "currency": item.get("currency"),
@@ -3556,9 +3593,20 @@ def clean_price(row):
         "final_formatted": item.get("final_formatted"),
         "source": item.get("source"),
         "fetched_at": item.get("fetched_at"),
-        "historical_low": compare_historical_low(current_cny, low_cny),
+        "historical_low": cached_historical_low_match(
+            current_cny,
+            low_cny,
+            low_source,
+            item.get("discount_percent"),
+            item.get("observed_snapshot_count"),
+        ),
         "current_cny": current_cny,
         "historical_low_cny": low_cny,
+        "historical_low_source": low_source,
+        "itad_historical_low_cny": item.get("historical_low_cny"),
+        "observed_low_cny": observed_low_cny,
+        "observed_low_since": item.get("observed_low_since"),
+        "observed_snapshot_count": item.get("observed_snapshot_count") or 0,
         "historical_low_currency": item.get("historical_low_currency"),
         "historical_low_amount_int": item.get("historical_low_amount_int"),
         "historical_low_at": item.get("historical_low_at"),
@@ -3671,7 +3719,11 @@ def get_game_payload(appid, history_limit=500):
                 enqueue_crawl_task_once_in_conn(conn, appid, "metadata", 100)
                 queued_tasks += 1
             conn.commit()
-        if not detail["has_historical_low"]:
+        historylow_stale = is_due(
+            detail.get("historical_low_fetched_at"),
+            ITAD_HISTORYLOW_REFRESH_DAYS * 24 * 60,
+        )
+        if ITAD_API_KEY and (not detail["has_historical_low"] or historylow_stale):
             enqueue_crawl_task_once_in_conn(conn, appid, "historylow", 100)
             queued_tasks += 1
             conn.commit()
@@ -3703,7 +3755,13 @@ def list_hot_games(limit=100):
     games = []
     for index, row in enumerate(rows, 1):
         current_cny = amount_int_to_cny(row["cn_price_final"], row["cn_price_currency"] or "CNY")
-        is_low = compare_historical_low(current_cny, row["cn_historical_low_cny"])
+        low_cny, low_source = effective_historical_low(
+            row["cn_itad_low_cny"], row["cn_observed_low_cny"]
+        )
+        is_low = cached_historical_low_match(
+            current_cny, low_cny, low_source, row["cn_discount_percent"],
+            row["cn_observed_snapshot_count"]
+        )
         games.append(
             {
             "appid": row["appid"],
@@ -3722,7 +3780,9 @@ def list_hot_games(limit=100):
             "cn_discount_percent": row["cn_discount_percent"] or 0,
             "cn_price_historical_low": is_low,
             "cn_price_discounted": bool((row["cn_discount_percent"] or 0) > 0 and not is_low),
-            "cn_historical_low_cny": row["cn_historical_low_cny"],
+            "cn_historical_low_cny": low_cny,
+            "cn_historical_low_source": low_source,
+            "cn_observed_low_since": row["cn_observed_low_since"],
             "source": row["source"],
             "fetched_at": row["fetched_at"],
             "tracked": bool(row["tracked"]),
@@ -3770,7 +3830,13 @@ def list_niche_candidates(limit=24):
                    n.review_score, n.total_reviews, n.cn_price, n.cn_price_final,
                    n.cn_price_currency, n.cn_discount_percent, n.is_free,
                    (SELECT amount_cny FROM historical_lows h
-                    WHERE h.appid = n.appid AND h.country = 'CN' LIMIT 1) AS cn_historical_low_cny,
+                    WHERE h.appid = n.appid AND h.country = 'CN' LIMIT 1) AS cn_itad_low_cny,
+                   (SELECT MIN(ps.final) / 100.0 FROM price_snapshots ps
+                    WHERE ps.appid=n.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_low_cny,
+                   (SELECT MIN(ps.fetched_at) FROM price_snapshots ps
+                    WHERE ps.appid=n.appid AND ps.region='CN' AND ps.source='steam') AS cn_observed_low_since,
+                   (SELECT COUNT(*) FROM price_snapshots ps
+                    WHERE ps.appid=n.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_snapshot_count,
                    g.tracked, n.weighted_score
             FROM niche_pool n
             LEFT JOIN games g ON g.appid = n.appid
@@ -3801,7 +3867,13 @@ def list_niche_pool_games(limit=NICHE_POOL_DISPLAY_LIMIT):
                    COALESCE(g.is_free, n.is_free) AS is_free, n.fetched_at,
                    n.weighted_score, COALESCE(g.tracked, 0) AS tracked,
                    (SELECT amount_cny FROM historical_lows h
-                    WHERE h.appid = n.appid AND h.country = 'CN' LIMIT 1) AS cn_historical_low_cny
+                    WHERE h.appid = n.appid AND h.country = 'CN' LIMIT 1) AS cn_itad_low_cny,
+                   (SELECT MIN(ps.final) / 100.0 FROM price_snapshots ps
+                    WHERE ps.appid=n.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_low_cny,
+                   (SELECT MIN(ps.fetched_at) FROM price_snapshots ps
+                    WHERE ps.appid=n.appid AND ps.region='CN' AND ps.source='steam') AS cn_observed_low_since,
+                   (SELECT COUNT(*) FROM price_snapshots ps
+                    WHERE ps.appid=n.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_snapshot_count
             FROM niche_pool n
             LEFT JOIN games g ON g.appid = n.appid
             LEFT JOIN game_latest_state s ON s.appid = n.appid
@@ -3832,7 +3904,13 @@ def list_niche_pool_games(limit=NICHE_POOL_DISPLAY_LIMIT):
     games = []
     for rank, row in enumerate(candidates, 1):
         current_cny = amount_int_to_cny(row["cn_price_final"], row["cn_price_currency"] or "CNY")
-        is_low = compare_historical_low(current_cny, row["cn_historical_low_cny"])
+        low_cny, low_source = effective_historical_low(
+            row["cn_itad_low_cny"], row["cn_observed_low_cny"]
+        )
+        is_low = cached_historical_low_match(
+            current_cny, low_cny, low_source, row["cn_discount_percent"],
+            row["cn_observed_snapshot_count"]
+        )
         games.append(
             {
                 "appid": row["appid"],
@@ -3852,7 +3930,9 @@ def list_niche_pool_games(limit=NICHE_POOL_DISPLAY_LIMIT):
                 "cn_discount_percent": row["cn_discount_percent"] or 0,
                 "cn_price_historical_low": is_low,
                 "cn_price_discounted": bool((row["cn_discount_percent"] or 0) > 0 and not is_low),
-                "cn_historical_low_cny": row["cn_historical_low_cny"],
+                "cn_historical_low_cny": low_cny,
+                "cn_historical_low_source": low_source,
+                "cn_observed_low_since": row["cn_observed_low_since"],
                 "source": "niche_pool",
                 "fetched_at": row["fetched_at"],
                 "tracked": bool(row["tracked"]),

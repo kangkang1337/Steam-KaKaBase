@@ -41,3 +41,38 @@ def test_itad_history_orchestration_keeps_network_and_persistence_separate(
 
     assert captured[0][0:3] == (appid, "itad-30", "CN")
     assert captured[0][-1] == stamp
+
+
+def test_failed_itad_refresh_preserves_cached_low(isolated_runtime, monkeypatch, insert_game):
+    runtime = isolated_runtime
+    appid = insert_game(31, "Cached ITAD Low")
+    stamp = runtime.now_iso()
+    with runtime.database_connection() as conn:
+        conn.execute("UPDATE games SET itad_game_id='itad-31' WHERE appid=?", (appid,))
+        conn.execute(
+            """
+            INSERT INTO historical_lows(
+                appid, itad_game_id, country, currency, amount,
+                amount_int, amount_cny, fetched_at
+            ) VALUES (?, 'itad-31', 'CN', 'CNY', 12.0, 1200, 12.0, ?)
+            """,
+            (appid, stamp),
+        )
+
+    async def failed_fetch(*_args, **_kwargs):
+        raise RuntimeError("ITAD unavailable")
+
+    monkeypatch.setattr(runtime, "ITAD_API_KEY", "configured")
+    monkeypatch.setattr(steam_client, "fetch_itad_history_low_rows", failed_fetch)
+
+    try:
+        asyncio.run(crawler.fetch_itad_history_lows_async([appid], ("CN",)))
+    except RuntimeError:
+        pass
+
+    with runtime.database_connection() as conn:
+        cached = conn.execute(
+            "SELECT amount_cny, fetched_at FROM historical_lows WHERE appid=? AND country='CN'",
+            (appid,),
+        ).fetchone()
+    assert tuple(cached) == (12.0, stamp)

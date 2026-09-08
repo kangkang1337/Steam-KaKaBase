@@ -775,12 +775,9 @@
       line-height: 1.2;
     }
 
-    .stat.price-low .stat-note {
-      display: none;
-    }
-
+    .stat.price-low .stat-note,
     .stat.price-discount .stat-note {
-      display: none;
+      color: rgba(235, 247, 255, .78);
     }
 
     .grid-2 {
@@ -1160,8 +1157,7 @@
               <div class="stat" :class="{'price-low': isHistoricalLow('CN'), 'price-discount': isDiscounted('CN')}">
                 <div class="stat-label">国区价格</div>
                 <div class="stat-value">{{ currentPrice('CN') }}</div>
-                <div class="stat-note">中国区史低：{{ historicalLowPrice('CN') }}<span v-if="historicalLowStatus('CN')"> · {{ historicalLowStatus('CN') }}</span></div>
-                <div v-if="historicalLowNote('CN')" class="stat-note">{{ historicalLowNote('CN') }}</div>
+                <div v-if="historicalLowLabel('CN')" class="stat-note">{{ historicalLowLabel('CN') }}</div>
               </div>
             </div>
           </div>
@@ -2067,26 +2063,17 @@
           const row = this.selectedPrices.find(item => item.region === region);
           return Boolean(row && !row.historical_low && Number(row.discount_percent || 0) > 0);
         },
-        historicalLowPrice(region) {
-          const row = this.selectedPrices.find(item => item.region === region);
-          if (!row || row.historical_low_cny === null || row.historical_low_cny === undefined) return '-';
-          return `¥${Number(row.historical_low_cny).toFixed(2)}`;
-        },
-        historicalLowStatus(region) {
-          const row = this.selectedPrices.find(item => item.region === region);
-          if (row?.historical_low_cny !== null && row?.historical_low_cny !== undefined) return '';
-          if (!this.itadConfigured) return '未配置 ITAD';
-          return this.historylowRunning ? '史低同步中' : '史低未入库';
-        },
-        historicalLowNote(region) {
+        historicalLowLabel(region) {
           const row = this.selectedPrices.find(item => item.region === region);
           if (!row || row.final === null || row.final === undefined) return '';
-          if (row.historical_low) return '';
-          if (!this.itadConfigured) return '未配置 ITAD';
           if (row.historical_low_cny === null || row.historical_low_cny === undefined) {
-            return this.historylowRunning ? '史低同步中' : '史低未入库';
+            if (this.historylowRunning) return '史低增强数据同步中';
+            return '本站尚未积累价格历史';
           }
-          return `史低约 ¥${Number(row.historical_low_cny).toFixed(2)}`;
+          const price = `¥${Number(row.historical_low_cny).toFixed(2)}`;
+          if (row.historical_low_source === 'itad') return `ITAD 历史最低：${price}`;
+          const since = row.observed_low_since ? ` · 自 ${this.localTime(row.observed_low_since, true)} 起记录` : '';
+          return `本站观测最低：${price}${since}`;
         },
         toCny(value, currency, region) {
           if (value === null || value === undefined) return 0;

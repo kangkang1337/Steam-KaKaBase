@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import sqlite3
 
 import pytest
 
@@ -31,6 +32,71 @@ def test_historical_low_tolerance(current, historical_low, expected):
 )
 def test_amount_to_cny(amount, currency, expected):
     assert _runtime.amount_int_to_cny(amount, currency) == expected
+
+
+def _insert_cn_price(runtime, appid, final, discount, fetched_at):
+    with runtime.database_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO price_snapshots(
+                appid, region, currency, initial, final, discount_percent,
+                final_formatted, source, fetched_at
+            ) VALUES (?, 'CN', 'CNY', 2000, ?, ?, ?, 'steam', ?)
+            """,
+            (appid, final, discount, f"¥ {final / 100:.2f}", fetched_at),
+        )
+
+
+def test_single_observed_price_is_not_promoted_to_historical_low(isolated_runtime, insert_game):
+    appid = insert_game(6101, "Newly Observed")
+    _insert_cn_price(isolated_runtime, appid, 1000, 50, "2026-09-08T00:00:00+00:00")
+
+    with isolated_runtime.database_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        prices = isolated_runtime.latest_by_region(conn, appid)
+
+    assert prices[0]["historical_low_source"] == "site_observed"
+    assert prices[0]["observed_low_cny"] == 10.0
+    assert prices[0]["historical_low"] is False
+
+
+def test_discounted_observed_low_uses_site_history_after_multiple_snapshots(
+    isolated_runtime, insert_game
+):
+    appid = insert_game(6102, "Observed Low")
+    _insert_cn_price(isolated_runtime, appid, 2000, 0, "2026-09-07T00:00:00+00:00")
+    _insert_cn_price(isolated_runtime, appid, 1000, 50, "2026-09-08T00:00:00+00:00")
+
+    with isolated_runtime.database_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        price = isolated_runtime.latest_by_region(conn, appid)[0]
+
+    assert price["historical_low_cny"] == 10.0
+    assert price["historical_low_source"] == "site_observed"
+    assert price["observed_snapshot_count"] == 2
+    assert price["historical_low"] is True
+
+
+def test_itad_low_has_priority_when_it_is_lower(isolated_runtime, insert_game):
+    appid = insert_game(6103, "ITAD Low")
+    stamp = "2026-09-08T00:00:00+00:00"
+    _insert_cn_price(isolated_runtime, appid, 1050, 40, stamp)
+    with isolated_runtime.database_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            INSERT INTO historical_lows(
+                appid, itad_game_id, country, currency, amount,
+                amount_int, amount_cny, fetched_at
+            ) VALUES (?, ?, 'CN', 'CNY', 10.0, 1000, 10.0, ?)
+            """,
+            (appid, f"itad-{appid}", stamp),
+        )
+        price = isolated_runtime.latest_by_region(conn, appid)[0]
+
+    assert price["historical_low_source"] == "itad"
+    assert price["historical_low_cny"] == 10.0
+    assert price["historical_low"] is True
 
 
 def test_fresh_timestamp_is_not_due():

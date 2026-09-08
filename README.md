@@ -9,7 +9,7 @@
 ## 当前功能
 
 - 搜索 Steam 全量轻量目录，也可以直接输入 App ID。
-- 查看中国区价格、多地区价格历史、折扣与 ITAD 中国区史低。
+- 查看中国区价格、多地区价格历史与折扣；本站观测最低作为基础，ITAD 中国区史低作为增强缓存。
 - 查看当前在线人数、本站开始记录后的历史峰值和趋势图。
 - 查看 Steam 好评率、评测数量、简介、开发商、发行商和发售日期。
 - 在详情页收藏或取消收藏，状态持久化到 SQLite。
@@ -206,6 +206,7 @@ Copy-Item .env.example .env
 | `STEAMKB_STORE_DELAY_MIN_SECONDS` | `1.5` | 商店请求随机延迟下限 |
 | `STEAMKB_STORE_DELAY_MAX_SECONDS` | `4.0` | 商店请求随机延迟上限 |
 | `STEAMKB_HISTORICAL_LOW_TOLERANCE_CNY` | `0.5` | 当前价判定史低时允许的人民币误差 |
+| `STEAMKB_ITAD_HISTORYLOW_REFRESH_DAYS` | `30` | 已缓存 ITAD 史低的详情刷新间隔；失败时保留旧缓存 |
 
 代理回退配置：
 

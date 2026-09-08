@@ -181,12 +181,26 @@
       left: 0;
       right: 0;
       top: 39px;
+      max-height: min(420px, calc(100vh - 92px));
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      overflow: hidden;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
       box-shadow: 0 10px 28px rgba(0, 0, 0, .38);
     }
+
+    .suggestions::-webkit-scrollbar { width: 10px; }
+    .suggestions::-webkit-scrollbar-track { background: #111820; }
+    .suggestions::-webkit-scrollbar-thumb {
+      background: #3b4b59;
+      border: 2px solid #111820;
+      border-radius: 5px;
+    }
+
+    .suggestions::-webkit-scrollbar-thumb:hover { background: #526777; }
 
     .suggestion {
       display: grid;
@@ -939,7 +953,7 @@
           </button>
         </div>
         <div v-else-if="searchFocused && query.length >= 2" class="suggestions search-empty">
-          {{ searching ? '正在搜索…' : '暂无结果，Steam 接口暂时不可用时会优先显示本地目录' }}
+          {{ searching ? '正在搜索…' : '暂无本地结果，目录仍在持续补充' }}
         </div>
       </div>
       <div class="toolbar">
@@ -1242,6 +1256,7 @@
           searchFocused: false,
           searchTimer: null,
           searchSeq: 0,
+          detailSeq: 0,
           searching: false,
           busy: false,
           refreshing: false,
@@ -1596,23 +1611,33 @@
           }
         },
         async selectGame(appid) {
+          const seq = ++this.detailSeq;
           this.busy = true;
           try {
-            const data = await this.api(`/api/games/${appid}?history_limit=500`);
-            this.selected = data.game;
-            this.activePage = 'tracker';
-            this.navOpen = false;
-            this.selectedPrices = data.prices || [];
-            this.priceHistory = data.priceHistory || [];
-            this.playerHistory = data.players || [];
-            this.reviews = data.reviews;
-            this.message = '';
-            await nextTick();
-            this.renderCharts();
+            for (let attempt = 0; attempt < 4; attempt++) {
+              const data = await this.api(`/api/games/${appid}?history_limit=500`);
+              if (seq !== this.detailSeq) return;
+              this.selected = data.game;
+              this.activePage = 'tracker';
+              this.navOpen = false;
+              this.selectedPrices = data.prices || [];
+              this.priceHistory = data.priceHistory || [];
+              this.playerHistory = data.players || [];
+              this.reviews = data.reviews;
+              this.message = data.refresh_pending ? '详情正在后台优先补全…' : '';
+              await nextTick();
+              this.renderCharts();
+              if (!data.refresh_pending) break;
+              if (attempt < 3) {
+                await new Promise(resolve => window.setTimeout(resolve, 1500));
+              } else {
+                this.message = '已显示本地数据，剩余详情将在后台继续补全。';
+              }
+            }
           } catch (err) {
-            this.message = err.message;
+            if (seq === this.detailSeq) this.message = err.message;
           } finally {
-            this.busy = false;
+            if (seq === this.detailSeq) this.busy = false;
           }
         },
         onSearchFocus() {
@@ -1704,7 +1729,7 @@
             this.loadHotGames();
             return;
           }
-          this.searchTimer = setTimeout(() => this.search(), 600);
+          this.searchTimer = setTimeout(() => this.search(), 180);
         },
         async search() {
           if (this.query.length < 2) {

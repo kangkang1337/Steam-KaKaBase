@@ -178,6 +178,12 @@ Copy-Item .env.example .env
 | `STEAMKB_CATALOG_ENRICH_BATCH_LIMIT` | `50` | 单轮 enrich 数量 |
 | `STEAMKB_NICHE_POOL_LIMIT` | `500` | 小众候选池上限 |
 | `STEAMKB_NICHE_MAX_REVIEWS` | `50000` | 小众候选游戏允许的最大 Steam 评测数 |
+| `STEAMKB_HOME_REPEAT_DAYS` | `7` | 首页小众宝藏和今日史低的禁止重复天数 |
+| `STEAMKB_HOME_POPULAR_MIN_REVIEWS` | `10000` | 今日史低候选的大众游戏最低评测数 |
+| `STEAMKB_HOME_POPULAR_MIN_PLAYERS` | `2000` | 今日史低候选的大众游戏最低在线人数（满足人数或评测数之一即可） |
+| `STEAMKB_SEARCH_CACHE_TTL_SECONDS` | `900` | 非空搜索结果的内存缓存时间 |
+| `STEAMKB_SEARCH_EMPTY_CACHE_TTL_SECONDS` | `30` | 空搜索结果的短缓存时间 |
+| `STEAMKB_SEARCH_CACHE_MAX_ENTRIES` | `512` | 搜索 LRU 缓存的最大查询数量 |
 | `STEAMKB_DIRECT_COOLDOWN_MINUTES` | `5` | 直连失败后的独立冷却时间 |
 | `STEAMKB_STORE_DELAY_MIN_SECONDS` | `1.5` | 商店请求随机延迟下限 |
 | `STEAMKB_STORE_DELAY_MAX_SECONDS` | `4.0` | 商店请求随机延迟上限 |
@@ -264,7 +270,7 @@ GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
 | `GET` | `/api/status` | 后台任务、目录进度、代理和冷却状态 |
 | `GET` | `/api/games` | 已收藏游戏列表 |
 | `GET` | `/api/games/{appid}` | 游戏详情与历史数据 |
-| `GET` | `/api/search?q=...` | 搜索本地目录和 Steam |
+| `GET` | `/api/search?q=...&limit=12&offset=0` | 分页搜索本地 FTS 索引，不等待 Steam |
 | `GET` | `/api/hot-games?limit=100` | 读取本地热门榜缓存 |
 | `GET` | `/api/hot-games/version` | 热门榜缓存版本 |
 | `GET` | `/api/hot-games/ensure` | 仅投递热门榜后台刷新 |
@@ -275,6 +281,14 @@ GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
 | `POST` | `/api/games/{appid}/refresh` | 提升并刷新指定游戏 |
 
 `/api/hot-games` 和普通页面访问只读取已有缓存，不应隐式等待大量 Steam 请求。
+
+## 搜索策略
+
+普通文本搜索只读取本地数据，不在 HTTP 请求内等待 Steam。SQLite v5 迁移会为游戏名称、AppList 原名和本地化简介建立 FTS5 trigram 索引，并用数据库触发器增量维护。这样 `elden` 可以匹配中文详情，“空洞骑士”也可以匹配 `Hollow Knight`。
+
+搜索结果使用有上限的进程内 LRU 作为一级缓存，FTS5 索引作为二级缓存。非空结果默认缓存 15 分钟，空结果只缓存 30 秒，以便 catalog 新数据较快变得可见。`/api/status` 的 `search` 字段提供请求数、缓存命中率、数据库平均/最大查询耗时、缓存条目数和估算内存占用。SQLite 使用每请求短连接而非传统连接池，该策略也会在状态中明确返回。
+
+点击尚未补全的目录游戏时，详情任务会提升到最高优先级；页面先显示本地内容，并在短时间内轮询本地缓存等待后台补全。Steam 限流或不可用时不会拖慢搜索接口。
 
 ## 测试
 
@@ -311,7 +325,7 @@ python -m pytest --cov=backend --cov-report=term-missing
 
 ### 搜索暂时没有结果
 
-搜索优先读取本地 `steam_catalog`。目录仍在补充时可以直接输入 App ID，例如 `730` 或 `570`。页面访问不会等待整个目录 enrich 完成。
+搜索读取本地 FTS 索引。目录仍在补充时，尚未进入 catalog 且从未查看过的游戏可能暂时搜不到；已收录的 App ID（例如 `730` 或 `570`）也可以直接搜索。页面访问不会等待整个目录 enrich 完成。
 
 ### Steam 请求频繁失败
 

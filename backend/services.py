@@ -60,8 +60,16 @@ def get_status():
     return _runtime.get_status()
 
 
-def search(term):
-    return {"items": _runtime.search_steam(term) if term else []}
+def search(term, limit=12, offset=0):
+    if not term:
+        return {"items": [], "limit": limit, "offset": offset, "has_more": False}
+    items = _runtime.search_steam(term, limit=limit + 1, offset=offset)
+    return {
+        "items": items[:limit],
+        "limit": limit,
+        "offset": offset,
+        "has_more": len(items) > limit,
+    }
 
 
 def get_game(appid, history_limit=500):

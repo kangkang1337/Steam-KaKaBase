@@ -13,6 +13,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -83,6 +84,9 @@ CATALOG_ENRICH_DAILY_LIMIT = max(100, int(os.getenv("STEAMKB_CATALOG_ENRICH_DAIL
 CATALOG_ENRICH_BATCH_LIMIT = max(20, int(os.getenv("STEAMKB_CATALOG_ENRICH_BATCH_LIMIT", "50")))
 NICHE_POOL_LIMIT = max(50, int(os.getenv("STEAMKB_NICHE_POOL_LIMIT", "500")))
 NICHE_MAX_REVIEWS = max(1, int(os.getenv("STEAMKB_NICHE_MAX_REVIEWS", "50000")))
+HOME_RECOMMENDATION_REPEAT_DAYS = max(1, int(os.getenv("STEAMKB_HOME_REPEAT_DAYS", "7")))
+HOME_POPULAR_MIN_REVIEWS = max(1, int(os.getenv("STEAMKB_HOME_POPULAR_MIN_REVIEWS", "10000")))
+HOME_POPULAR_MIN_PLAYERS = max(1, int(os.getenv("STEAMKB_HOME_POPULAR_MIN_PLAYERS", "2000")))
 TRACKED_REFRESH_BATCH_LIMIT = max(1, int(os.getenv("STEAMKB_TRACKED_REFRESH_BATCH_LIMIT", "1")))
 ITAD_HISTORYLOW_BATCH_LIMIT = max(1, int(os.getenv("STEAMKB_ITAD_HISTORYLOW_BATCH_LIMIT", "50")))
 STORE_REQUEST_DELAY_MIN_SECONDS = max(0, float(os.getenv("STEAMKB_STORE_DELAY_MIN_SECONDS", "1.5")))
@@ -139,8 +143,18 @@ TRACK_BACKFILL_LOCK = threading.Lock()
 TRACK_BACKFILLING = set()
 HISTORYLOW_BACKFILL_LOCK = threading.Lock()
 HISTORYLOW_BACKFILLING = set()
-SEARCH_CACHE = {}
-SEARCH_CACHE_TTL_SECONDS = 600
+SEARCH_CACHE = OrderedDict()
+SEARCH_CACHE_TTL_SECONDS = max(30, int(os.getenv("STEAMKB_SEARCH_CACHE_TTL_SECONDS", "900")))
+SEARCH_CACHE_EMPTY_TTL_SECONDS = max(5, int(os.getenv("STEAMKB_SEARCH_EMPTY_CACHE_TTL_SECONDS", "30")))
+SEARCH_CACHE_MAX_ENTRIES = max(32, int(os.getenv("STEAMKB_SEARCH_CACHE_MAX_ENTRIES", "512")))
+SEARCH_CACHE_LOCK = threading.Lock()
+SEARCH_METRICS = {
+    "requests": 0,
+    "cache_hits": 0,
+    "database_queries": 0,
+    "database_query_ms_total": 0.0,
+    "database_query_ms_max": 0.0,
+}
 APP_NAME_REFRESH_HOURS = max(24, int(os.getenv("STEAMKB_APP_NAME_REFRESH_HOURS", "24")))
 REFRESH_STATUS = {
     "running": False,
@@ -2419,12 +2433,28 @@ def list_niche_pool_pick():
             """,
             (NICHE_MAX_REVIEWS,),
         ).fetchall()
-        rows = [row for row in rows if not is_obvious_non_game_name(row["name"])][:30]
+        today = daily_refresh_key()
+        recent_appids = {
+            int(row[0])
+            for row in conn.execute(
+                """
+                SELECT appid FROM niche_recommendation_snapshots
+                WHERE recommendation_date < ?
+                ORDER BY recommendation_date DESC
+                LIMIT ?
+                """,
+                (today, HOME_RECOMMENDATION_REPEAT_DAYS),
+            ).fetchall()
+        }
+        rows = [
+            row for row in rows
+            if int(row["appid"]) not in recent_appids
+            and not is_obvious_non_game_name(row["name"])
+        ][:30]
         if not rows:
             return None
         # Keep the daily result server-side. A weighted draw from the top 30
         # avoids showing the same top-ranked game every day.
-        today = daily_refresh_key()
         state_key = "niche_pick_" + today
         saved = get_crawl_state(conn, state_key)
         chosen = None
@@ -2659,8 +2689,30 @@ def run_catalog_enrich_task():
 def snapshot_daily_niche_recommendation():
     today = daily_refresh_key()
     with database_connection() as conn:
-        if conn.execute("SELECT 1 FROM niche_recommendation_snapshots WHERE recommendation_date = ?", (today,)).fetchone():
-            return False
+        current = conn.execute(
+            "SELECT appid FROM niche_recommendation_snapshots WHERE recommendation_date = ?",
+            (today,),
+        ).fetchone()
+        if current:
+            repeated = conn.execute(
+                """
+                SELECT 1 FROM (
+                    SELECT appid FROM niche_recommendation_snapshots
+                    WHERE recommendation_date < ?
+                    ORDER BY recommendation_date DESC
+                    LIMIT ?
+                ) recent
+                WHERE appid = ?
+                """,
+                (today, HOME_RECOMMENDATION_REPEAT_DAYS, int(current[0])),
+            ).fetchone()
+            if not repeated:
+                return False
+            conn.execute(
+                "DELETE FROM niche_recommendation_snapshots WHERE recommendation_date = ?",
+                (today,),
+            )
+            conn.execute("DELETE FROM crawl_state WHERE key = ?", ("niche_pick_" + today,))
     chosen = list_niche_pool_pick()
     if not chosen:
         return False
@@ -2679,6 +2731,7 @@ def snapshot_daily_niche_recommendation():
 
 def get_daily_niche_recommendation():
     today = daily_refresh_key()
+    snapshot_daily_niche_recommendation()
     with database_connection() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
@@ -4229,6 +4282,10 @@ def get_status():
     status["catalog_enrich_batch_limit"] = CATALOG_ENRICH_BATCH_LIMIT
     status["niche_pool_limit"] = NICHE_POOL_LIMIT
     status["niche_max_reviews"] = NICHE_MAX_REVIEWS
+    status["home_repeat_days"] = HOME_RECOMMENDATION_REPEAT_DAYS
+    status["home_popular_min_reviews"] = HOME_POPULAR_MIN_REVIEWS
+    status["home_popular_min_players"] = HOME_POPULAR_MIN_PLAYERS
+    status["search"] = get_search_metrics()
     status["tracked_refresh_batch_limit"] = TRACKED_REFRESH_BATCH_LIMIT
     status["itad_historylow_batch_limit"] = ITAD_HISTORYLOW_BATCH_LIMIT
     with TRACK_BACKFILL_LOCK:
@@ -4482,6 +4539,7 @@ def get_game_payload(appid, history_limit=500):
             "priceHistory": [clean_price(row) for row in price_history],
             "players": [clean_player(row) for row in players],
             "reviews": clean_review(reviews),
+            "refresh_pending": bool(missing_core_data),
         }
 
 
@@ -4651,23 +4709,26 @@ def ensure_daily_home_snapshot(historical_lows, memes):
                 FROM daily_home_snapshots
                 WHERE recommendation_date < ? AND historical_low_appid IS NOT NULL
                 ORDER BY recommendation_date DESC
-                LIMIT 7
+                LIMIT ?
                 """,
-                (refresh_key,),
+                (refresh_key, HOME_RECOMMENDATION_REPEAT_DAYS),
             ).fetchall()
         }
         fresh_lows = [game for game in historical_lows if int(game["appid"]) not in recent_low_appids]
-        preferred_low = (fresh_lows or historical_lows or [None])[0]
+        preferred_low = (fresh_lows or [None])[0]
         row = conn.execute(
             "SELECT historical_low_appid, meme_url FROM daily_home_snapshots WHERE recommendation_date = ?",
             (refresh_key,),
         ).fetchone()
         selected_low = lows_by_appid.get(int(row["historical_low_appid"])) if row and row["historical_low_appid"] else None
-        if selected_low and fresh_lows and int(selected_low["appid"]) in recent_low_appids:
-            selected_low = None
-        selected_meme = row["meme_url"] if row and row["meme_url"] in memes else None
         needs_update = row is None
-        if historical_lows and selected_low is None:
+        if selected_low and int(selected_low["appid"]) in recent_low_appids:
+            selected_low = None
+            needs_update = True
+        elif row and row["historical_low_appid"] and selected_low is None:
+            needs_update = True
+        selected_meme = row["meme_url"] if row and row["meme_url"] in memes else None
+        if preferred_low and selected_low is None:
             selected_low = preferred_low
             needs_update = True
         if memes and selected_meme is None:
@@ -4710,6 +4771,44 @@ def clean_home_pick(row):
         "cn_historical_low_cny": item["cn_historical_low_cny"],
         "tracked": bool(item["tracked"]),
     }
+
+
+def list_popular_historical_low_games(limit=200):
+    """Return cached, mainstream games currently at their CN historical low."""
+    limit = min(max(1, int(limit)), 1000)
+    with database_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT g.appid, g.name, g.header_image,
+                   COALESCE(s.current_players, 0) AS current_players,
+                   s.review_score, s.total_reviews, s.cn_price,
+                   s.cn_price_final, s.cn_price_currency,
+                   COALESCE(s.cn_discount_percent, 0) AS cn_discount_percent,
+                   g.is_free, COALESCE(g.tracked, 0) AS tracked,
+                   h.amount_cny AS cn_historical_low_cny
+            FROM games g
+            JOIN game_latest_state s ON s.appid = g.appid
+            JOIN historical_lows h ON h.appid = g.appid AND h.country = 'CN'
+            LEFT JOIN steam_catalog c ON c.appid = g.appid
+            WHERE COALESCE(c.app_type, 'game') = 'game'
+              AND COALESCE(g.is_free, 0) = 0
+              AND g.header_image IS NOT NULL
+              AND s.cn_price_final IS NOT NULL
+              AND s.cn_price_currency = 'CNY'
+              AND h.amount_cny IS NOT NULL
+              AND (
+                COALESCE(s.total_reviews, 0) >= ?
+                OR COALESCE(s.current_players, 0) >= ?
+              )
+            ORDER BY COALESCE(s.current_players, 0) DESC,
+                     COALESCE(s.total_reviews, 0) DESC
+            LIMIT ?
+            """,
+            (HOME_POPULAR_MIN_REVIEWS, HOME_POPULAR_MIN_PLAYERS, limit),
+        ).fetchall()
+    games = [clean_home_pick(row) for row in rows]
+    return [game for game in games if game["cn_price_historical_low"]]
 
 
 def list_niche_candidates(limit=24):
@@ -4813,12 +4912,7 @@ def list_niche_pool_games(limit=NICHE_POOL_DISPLAY_LIMIT):
 
 
 def get_home_picks():
-    hot_games = list_hot_games(HOTLIST_TARGET)
-    historical_lows = [
-        game for game in hot_games
-        if game.get("is_paid") and game.get("cn_price_historical_low")
-    ]
-    historical_lows.sort(key=lambda game: int(game.get("current_players") or 0), reverse=True)
+    historical_lows = list_popular_historical_low_games()
 
     daily_niche = get_daily_niche_recommendation()
     if daily_niche:
@@ -4917,79 +5011,139 @@ def search_catalog_games(term):
     ][:12]
 
 
-def search_steam(term):
-    cache_key = term.strip().lower()
-    cached = SEARCH_CACHE.get(cache_key)
-    if cached and time.time() - cached["at"] < SEARCH_CACHE_TTL_SECONDS:
-        return cached["items"]
+def normalize_search_term(term):
+    return re.sub(r"\s+", " ", str(term or "").strip()).lower()
 
-    local_items = search_local_games(term)
-    catalog_items = search_catalog_games(term)
-    local_and_catalog = []
-    seen = set()
-    for item in local_items + catalog_items:
-        if item["appid"] in seen:
-            continue
-        seen.add(item["appid"])
-        local_and_catalog.append(item)
-        if len(local_and_catalog) >= 12:
-            break
-    if len(local_and_catalog) >= 12:
-        SEARCH_CACHE[cache_key] = {"at": time.time(), "items": local_and_catalog}
-        return local_and_catalog
 
-    if term.isdigit():
-        appid = int(term)
-        try:
-            details = fetch_appdetails(appid, "US")
-            app_type = str((details or {}).get("type") or "unknown").strip().lower()
-            if app_type != "unknown":
-                record_catalog_app_type(appid, app_type)
-            if app_type != "game":
-                SEARCH_CACHE[cache_key] = {"at": time.time(), "items": []}
-                return []
-            items = [
-                {
-                    "appid": appid,
-                    "name": (details or {}).get("name") or UNKNOWN_GAME_NAME,
-                    "tiny_image": (details or {}).get("header_image"),
-                    "price": ((details or {}).get("price_overview") or {}).get("final"),
-                }
-            ]
-            remember_search_games(items)
-            SEARCH_CACHE[cache_key] = {"at": time.time(), "items": items}
-            return items
-        except Exception as exc:
-            log_event(f"search appid details skipped appid={appid}: {exc}")
-            items = [{"appid": appid, "name": UNKNOWN_GAME_NAME, "tiny_image": None, "price": None}]
-            remember_search_games(items)
-            SEARCH_CACHE[cache_key] = {"at": time.time(), "items": items}
-            return items
-    qs = urllib.parse.urlencode({"term": term, "cc": "US", "l": "schinese"})
-    try:
-        payload = request_json(f"https://store.steampowered.com/api/storesearch/?{qs}", timeout=3, max_retries=0)
-    except Exception:
-        return local_and_catalog
-    items = payload.get("items") or []
-    remote_items = [
-        {
-            "appid": item.get("id"),
-            "name": item.get("name"),
-            "tiny_image": item.get("tiny_image"),
-            "price": item.get("price", {}).get("final") if isinstance(item.get("price"), dict) else None,
+def _search_cache_get(key):
+    with SEARCH_CACHE_LOCK:
+        SEARCH_METRICS["requests"] += 1
+        cached = SEARCH_CACHE.get(key)
+        if not cached:
+            return None
+        ttl = SEARCH_CACHE_TTL_SECONDS if cached["items"] else SEARCH_CACHE_EMPTY_TTL_SECONDS
+        if time.monotonic() - cached["at"] >= ttl:
+            SEARCH_CACHE.pop(key, None)
+            return None
+        SEARCH_CACHE.move_to_end(key)
+        SEARCH_METRICS["cache_hits"] += 1
+        return [dict(item) for item in cached["items"]]
+
+
+def _search_cache_set(key, items):
+    with SEARCH_CACHE_LOCK:
+        SEARCH_CACHE[key] = {
+            "at": time.monotonic(),
+            "items": [dict(item) for item in items],
         }
-        for item in items
-        if item.get("type") == "app" and item.get("id") and not is_obvious_non_game_name(item.get("name"))
-    ][:12]
-    merged = []
-    seen = set()
-    for item in remote_items + local_and_catalog:
-        if item["appid"] in seen:
-            continue
-        seen.add(item["appid"])
-        merged.append(item)
-        if len(merged) >= 12:
-            break
-    remember_search_games(merged)
-    SEARCH_CACHE[cache_key] = {"at": time.time(), "items": merged}
-    return merged
+        SEARCH_CACHE.move_to_end(key)
+        while len(SEARCH_CACHE) > SEARCH_CACHE_MAX_ENTRIES:
+            SEARCH_CACHE.popitem(last=False)
+
+
+def get_search_metrics():
+    with SEARCH_CACHE_LOCK:
+        metrics = dict(SEARCH_METRICS)
+        requests = int(metrics["requests"])
+        queries = int(metrics["database_queries"])
+        metrics["cache_entries"] = len(SEARCH_CACHE)
+        metrics["cache_max_entries"] = SEARCH_CACHE_MAX_ENTRIES
+        metrics["cache_hit_rate"] = round(metrics["cache_hits"] / requests, 4) if requests else 0.0
+        metrics["average_database_query_ms"] = round(
+            metrics.pop("database_query_ms_total") / queries, 3
+        ) if queries else 0.0
+        metrics["max_database_query_ms"] = round(metrics.pop("database_query_ms_max"), 3)
+        metrics["cache_estimated_bytes"] = sum(
+            len(str(key).encode("utf-8"))
+            + len(json.dumps(value["items"], ensure_ascii=False).encode("utf-8"))
+            for key, value in SEARCH_CACHE.items()
+        )
+    metrics["storage"] = "sqlite_fts5_trigram"
+    metrics["connection_strategy"] = "short_lived_per_request"
+    return metrics
+
+
+def search_index_games(term, limit=12, offset=0):
+    term = normalize_search_term(term)
+    limit = min(50, max(1, int(limit)))
+    offset = max(0, int(offset))
+    if not term:
+        return []
+
+    with database_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        if term.isdigit():
+            where_sql = "f.rowid = ?"
+            where_params = (int(term),)
+            rank_sql = "0"
+        elif len(term) >= 3:
+            phrase = '"' + term.replace('"', '""') + '"'
+            where_sql = "game_search_fts MATCH ?"
+            where_params = (phrase,)
+            rank_sql = "bm25(game_search_fts, 0.0, 8.0, 6.0, 1.0)"
+        else:
+            pattern = f"%{term}%"
+            where_sql = "(f.name LIKE ? OR f.catalog_name LIKE ? OR f.description LIKE ?)"
+            where_params = (pattern, pattern, pattern)
+            rank_sql = "0"
+
+        rows = conn.execute(
+            f"""
+            SELECT CAST(f.appid AS INTEGER) AS appid,
+                   CASE
+                     WHEN g.name IS NOT NULL AND g.name != ? THEN g.name
+                     WHEN f.name != '' THEN f.name
+                     ELSE f.catalog_name
+                   END AS name,
+                   COALESCE(
+                     NULLIF(g.header_image, ''),
+                     'https://cdn.akamai.steamstatic.com/steam/apps/' || f.appid || '/header.jpg'
+                   ) AS header_image,
+                   COALESCE(g.tracked, 0) AS tracked,
+                   gls.current_players,
+                   {rank_sql} AS search_rank
+            FROM game_search_fts f
+            LEFT JOIN games g ON g.appid=CAST(f.appid AS INTEGER)
+            LEFT JOIN steam_catalog c ON c.appid=CAST(f.appid AS INTEGER)
+            LEFT JOIN game_latest_state gls ON gls.appid=CAST(f.appid AS INTEGER)
+            WHERE {where_sql}
+              AND COALESCE(c.app_type, 'game') IN ('unknown', 'game')
+            ORDER BY tracked DESC, search_rank ASC,
+                     COALESCE(gls.current_players, 0) DESC, name ASC
+            LIMIT ? OFFSET ?
+            """,
+            (UNKNOWN_GAME_NAME, *where_params, limit, offset),
+        ).fetchall()
+
+    return [
+        {
+            "appid": row["appid"],
+            "name": clean_name(row["name"]),
+            "tiny_image": row["header_image"],
+            "price": None,
+            "current_players": row["current_players"],
+            "tracked": bool(row["tracked"]),
+        }
+        for row in rows
+        if row["name"] and not is_obvious_non_game_name(row["name"])
+    ]
+
+
+def search_steam(term, limit=12, offset=0):
+    """Compatibility name for fast local search; text queries never call Steam."""
+    cache_key = (str(DB_PATH), normalize_search_term(term), int(limit), int(offset))
+    cached = _search_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    started = time.perf_counter()
+    items = search_index_games(term, limit=limit, offset=offset)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    with SEARCH_CACHE_LOCK:
+        SEARCH_METRICS["database_queries"] += 1
+        SEARCH_METRICS["database_query_ms_total"] += elapsed_ms
+        SEARCH_METRICS["database_query_ms_max"] = max(
+            SEARCH_METRICS["database_query_ms_max"], elapsed_ms
+        )
+    _search_cache_set(cache_key, items)
+    return items

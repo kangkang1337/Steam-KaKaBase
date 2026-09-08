@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 class DatabaseMigrationError(RuntimeError):
@@ -245,11 +245,94 @@ def _migration_4_indexes_triggers_and_cleanup(conn):
     """, (stamp,))
 
 
+def _migration_5_search_index(conn):
+    _execute_sql(conn, """
+    CREATE VIRTUAL TABLE IF NOT EXISTS game_search_fts USING fts5(
+        appid UNINDEXED,
+        name,
+        catalog_name,
+        description,
+        tokenize='trigram'
+    );
+
+    DELETE FROM game_search_fts;
+
+    INSERT INTO game_search_fts(rowid, appid, name, catalog_name, description)
+    SELECT c.appid, c.appid, COALESCE(g.name, ''), c.name,
+           COALESCE(g.short_description, '')
+    FROM steam_catalog c
+    LEFT JOIN games g ON g.appid=c.appid;
+
+    INSERT INTO game_search_fts(rowid, appid, name, catalog_name, description)
+    SELECT g.appid, g.appid, g.name, '', COALESCE(g.short_description, '')
+    FROM games g
+    LEFT JOIN steam_catalog c ON c.appid=g.appid
+    WHERE c.appid IS NULL;
+
+    CREATE TRIGGER IF NOT EXISTS search_games_insert AFTER INSERT ON games BEGIN
+      DELETE FROM game_search_fts WHERE rowid=NEW.appid;
+      INSERT INTO game_search_fts(rowid, appid, name, catalog_name, description)
+      VALUES (
+        NEW.appid, NEW.appid, COALESCE(NEW.name, ''),
+        COALESCE((SELECT name FROM steam_catalog WHERE appid=NEW.appid), ''),
+        COALESCE(NEW.short_description, '')
+      );
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS search_games_update AFTER UPDATE OF name, short_description ON games BEGIN
+      DELETE FROM game_search_fts WHERE rowid=NEW.appid;
+      INSERT INTO game_search_fts(rowid, appid, name, catalog_name, description)
+      VALUES (
+        NEW.appid, NEW.appid, COALESCE(NEW.name, ''),
+        COALESCE((SELECT name FROM steam_catalog WHERE appid=NEW.appid), ''),
+        COALESCE(NEW.short_description, '')
+      );
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS search_games_delete AFTER DELETE ON games BEGIN
+      DELETE FROM game_search_fts WHERE rowid=OLD.appid;
+      INSERT INTO game_search_fts(rowid, appid, name, catalog_name, description)
+      SELECT OLD.appid, OLD.appid, '', c.name, ''
+      FROM steam_catalog c WHERE c.appid=OLD.appid;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS search_catalog_insert AFTER INSERT ON steam_catalog BEGIN
+      DELETE FROM game_search_fts WHERE rowid=NEW.appid;
+      INSERT INTO game_search_fts(rowid, appid, name, catalog_name, description)
+      VALUES (
+        NEW.appid, NEW.appid,
+        COALESCE((SELECT name FROM games WHERE appid=NEW.appid), ''),
+        COALESCE(NEW.name, ''),
+        COALESCE((SELECT short_description FROM games WHERE appid=NEW.appid), '')
+      );
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS search_catalog_update AFTER UPDATE OF name ON steam_catalog BEGIN
+      DELETE FROM game_search_fts WHERE rowid=NEW.appid;
+      INSERT INTO game_search_fts(rowid, appid, name, catalog_name, description)
+      VALUES (
+        NEW.appid, NEW.appid,
+        COALESCE((SELECT name FROM games WHERE appid=NEW.appid), ''),
+        COALESCE(NEW.name, ''),
+        COALESCE((SELECT short_description FROM games WHERE appid=NEW.appid), '')
+      );
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS search_catalog_delete AFTER DELETE ON steam_catalog BEGIN
+      DELETE FROM game_search_fts WHERE rowid=OLD.appid;
+      INSERT INTO game_search_fts(rowid, appid, name, catalog_name, description)
+      SELECT OLD.appid, OLD.appid, g.name, '', COALESCE(g.short_description, '')
+      FROM games g WHERE g.appid=OLD.appid;
+    END;
+    """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_1_initial_schema),
     Migration(2, "legacy_columns", _migration_2_legacy_columns),
     Migration(3, "catalog_classification", _migration_3_catalog_classification),
     Migration(4, "indexes_triggers_and_cleanup", _migration_4_indexes_triggers_and_cleanup),
+    Migration(5, "fts5_trigram_search", _migration_5_search_index),
 )
 
 

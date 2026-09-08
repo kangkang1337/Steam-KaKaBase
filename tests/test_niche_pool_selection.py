@@ -1,6 +1,22 @@
 import sqlite3
+from datetime import datetime, timedelta
 
 import pytest
+
+
+def _insert_pickable_niche_game(runtime, appid, score):
+    stamp = runtime.now_iso()
+    with runtime.database_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO niche_pool(
+                appid, name, current_players, peak_players, review_score,
+                total_reviews, cn_price, cn_price_final, cn_price_currency,
+                weighted_score, eligible, fetched_at, evaluated_at
+            ) VALUES (?, ?, 50, 500, 90, 1000, '¥ 20.00', 2000, 'CNY', ?, 1, ?, ?)
+            """,
+            (appid, f"Niche {appid}", score, stamp, stamp),
+        )
 
 
 @pytest.mark.parametrize("pool_size", [20, 21, 39, 40, 41])
@@ -36,6 +52,61 @@ def test_niche_pool_keeps_twenty_display_rows(isolated_runtime, pool_size):
 
     assert len(displayed) == 20
     assert displayed == sorted(displayed, key=lambda game: game["weighted_score"], reverse=True)
+
+
+def test_daily_niche_pick_excludes_previous_seven_recommendations(isolated_runtime):
+    runtime = isolated_runtime
+    refresh_key = runtime.daily_refresh_key()
+    for index in range(8):
+        _insert_pickable_niche_game(runtime, 9000 + index, 100 - index)
+    with runtime.database_connection() as conn:
+        for days_ago, appid in enumerate(range(9000, 9007), 1):
+            recommendation_date = (
+                datetime.strptime(refresh_key, "%Y-%m-%d") - timedelta(days=days_ago)
+            ).strftime("%Y-%m-%d")
+            conn.execute(
+                """
+                INSERT INTO niche_recommendation_snapshots(
+                    recommendation_date, appid, name, weighted_score, created_at
+                ) VALUES (?, ?, ?, 1, ?)
+                """,
+                (recommendation_date, appid, f"Niche {appid}", runtime.now_iso()),
+            )
+
+    chosen = runtime.list_niche_pool_pick()
+
+    assert chosen["appid"] == 9007
+
+
+def test_daily_niche_snapshot_repairs_a_saved_repeat(isolated_runtime):
+    runtime = isolated_runtime
+    refresh_key = runtime.daily_refresh_key()
+    previous_key = (
+        datetime.strptime(refresh_key, "%Y-%m-%d") - timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+    _insert_pickable_niche_game(runtime, 9101, 100)
+    _insert_pickable_niche_game(runtime, 9102, 90)
+    with runtime.database_connection() as conn:
+        for recommendation_date in (previous_key, refresh_key):
+            conn.execute(
+                """
+                INSERT INTO niche_recommendation_snapshots(
+                    recommendation_date, appid, name, current_players,
+                    review_score, total_reviews, weighted_score, created_at
+                ) VALUES (?, 9101, 'Repeated', 50, 90, 1000, 100, ?)
+                """,
+                (recommendation_date, runtime.now_iso()),
+            )
+        runtime.set_crawl_state(conn, "niche_pick_" + refresh_key, "9101")
+
+    recommendation = runtime.get_daily_niche_recommendation()
+
+    assert recommendation["appid"] == 9102
+    with runtime.database_connection() as conn:
+        assert conn.execute(
+            "SELECT appid FROM niche_recommendation_snapshots WHERE recommendation_date=?",
+            (refresh_key,),
+        ).fetchone() == (9102,)
 
 
 def test_remote_candidate_price_survives_when_game_is_not_yet_eligible(isolated_runtime):

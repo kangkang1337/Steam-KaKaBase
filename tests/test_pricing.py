@@ -105,6 +105,85 @@ def test_daily_historical_low_avoids_recent_repeats(isolated_runtime):
     assert selected_low["appid"] == 20
 
 
+def test_daily_historical_low_does_not_repeat_when_all_candidates_are_recent(isolated_runtime):
+    refresh_key = isolated_runtime.daily_refresh_key()
+    with isolated_runtime.database_connection() as conn:
+        for days_ago, appid in enumerate((10, 20), 1):
+            previous_key = (
+                datetime.strptime(refresh_key, "%Y-%m-%d") - timedelta(days=days_ago)
+            ).strftime("%Y-%m-%d")
+            conn.execute(
+                """
+                INSERT INTO daily_home_snapshots(
+                    recommendation_date, historical_low_appid, meme_url, created_at
+                ) VALUES (?, ?, NULL, ?)
+                """,
+                (previous_key, appid, isolated_runtime.now_iso()),
+            )
+
+    _, selected_low, _ = isolated_runtime.ensure_daily_home_snapshot(
+        [{"appid": 10}, {"appid": 20}],
+        [],
+    )
+
+    assert selected_low is None
+
+
+def _insert_historical_low_candidate(runtime, appid, *, reviews, players, current=5000, low=50.0):
+    stamp = runtime.now_iso()
+    with runtime.database_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO games(appid, name, header_image, is_free, tracked, updated_at)
+            VALUES (?, ?, ?, 0, 0, ?)
+            """,
+            (appid, f"Game {appid}", f"https://example.test/{appid}.jpg", stamp),
+        )
+        conn.execute(
+            """
+            INSERT INTO game_latest_state(
+                appid, current_players, cn_price, cn_price_final,
+                cn_price_currency, total_reviews, updated_at
+            ) VALUES (?, ?, '¥ 50.00', ?, 'CNY', ?, ?)
+            """,
+            (appid, players, current, reviews, stamp),
+        )
+        conn.execute(
+            """
+            INSERT INTO historical_lows(
+                appid, itad_game_id, country, currency, amount,
+                amount_int, amount_cny, fetched_at
+            ) VALUES (?, ?, 'CN', 'CNY', ?, ?, ?, ?)
+            """,
+            (appid, f"itad-{appid}", low, int(low * 100), low, stamp),
+        )
+
+
+def test_popular_historical_low_uses_site_database_not_hot_games(isolated_runtime):
+    _insert_historical_low_candidate(
+        isolated_runtime,
+        8001,
+        reviews=isolated_runtime.HOME_POPULAR_MIN_REVIEWS,
+        players=0,
+    )
+
+    games = isolated_runtime.list_popular_historical_low_games()
+
+    assert [game["appid"] for game in games] == [8001]
+    with isolated_runtime.database_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM hot_games").fetchone()[0] == 0
+
+
+def test_popular_historical_low_excludes_low_popularity_and_non_low_prices(isolated_runtime):
+    _insert_historical_low_candidate(isolated_runtime, 8101, reviews=9999, players=1999)
+    _insert_historical_low_candidate(isolated_runtime, 8102, reviews=10000, players=0, current=5050)
+    _insert_historical_low_candidate(isolated_runtime, 8103, reviews=10000, players=0, current=5051)
+
+    games = isolated_runtime.list_popular_historical_low_games()
+
+    assert [game["appid"] for game in games] == [8102]
+
+
 def test_meme_extensions_cover_common_browser_formats():
     assert {".gif", ".webp", ".png", ".apng", ".jpg", ".jpeg", ".jfif", ".avif", ".bmp"} <= _runtime.MEME_EXTENSIONS
 

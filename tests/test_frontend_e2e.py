@@ -138,6 +138,11 @@ def mock_frontend_api(page):
             niche = [{**hot_games[1], "rank": 1, "peak_players": 700, "weighted_score": 0.91}]
             return reply(route, {"games": niche, "count": 1, "pool_count": 20, "selection_mode": "all"})
         if path == "/api/search":
+            if "scroll" in request.url:
+                return reply(route, {"items": [
+                    {"appid": 5000 + index, "name": f"Scroll Result {index + 1}", "tiny_image": ""}
+                    for index in range(12)
+                ]})
             return reply(route, {"items": [{"appid": 4242, "name": "Test Quest", "tiny_image": ""}]})
         if path == "/api/games/4242":
             return reply(route, {**detail, "game": {**detail["game"], "tracked": state["tracked"]}})
@@ -213,6 +218,26 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
         expect(page.locator(".status")).to_contain_text("已取消收藏：Test Quest")
         assert state["untrack_calls"] == 1
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+        assert errors == []
+    finally:
+        page.close()
+
+
+def test_search_results_scroll_inside_dropdown(browser, frontend_server):
+    page, _, errors = open_test_page(browser, frontend_server)
+    try:
+        search = page.get_by_role("textbox", name="搜索 Steam 游戏")
+        search.fill("scroll")
+        dropdown = page.locator(".suggestions")
+        expect(dropdown.locator(".suggestion")).to_have_count(12, timeout=5000)
+        dimensions = dropdown.evaluate(
+            "element => ({clientHeight: element.clientHeight, scrollHeight: element.scrollHeight})"
+        )
+        assert dimensions["scrollHeight"] > dimensions["clientHeight"]
+        dropdown.evaluate("element => { element.scrollTop = element.scrollHeight; }")
+        assert dropdown.evaluate(
+            "element => element.scrollTop + element.clientHeight >= element.scrollHeight - 1"
+        )
         assert errors == []
     finally:
         page.close()

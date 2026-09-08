@@ -26,7 +26,36 @@ def test_migrate_legacy_database_creates_backup_and_history(tmp_path):
         history = conn.execute(
             "SELECT version, name FROM schema_migrations ORDER BY version"
         ).fetchall()
-    assert [row[0] for row in history] == [1, 2, 3, 4]
+    assert [row[0] for row in history] == [1, 2, 3, 4, 5]
+
+
+def test_search_index_is_seeded_and_kept_in_sync(tmp_path):
+    database = tmp_path / "search-index.sqlite3"
+    migrations.migrate_database(database)
+
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO steam_catalog(appid, name, updated_at) VALUES (367520, 'Hollow Knight', 'now')"
+        )
+        conn.execute(
+            """
+            INSERT INTO games(appid, name, short_description, updated_at)
+            VALUES (367520, 'Hollow Knight', '在空洞骑士中探索地下王国', 'now')
+            """
+        )
+        match = conn.execute(
+            "SELECT appid FROM game_search_fts WHERE game_search_fts MATCH ?",
+            ('"空洞骑士"',),
+        ).fetchone()
+        conn.execute(
+            "UPDATE games SET name='Hollow Knight Updated' WHERE appid=367520"
+        )
+        updated = conn.execute(
+            "SELECT name FROM game_search_fts WHERE rowid=367520"
+        ).fetchone()
+
+    assert match == (367520,)
+    assert updated == ("Hollow Knight Updated",)
 
 
 def test_current_database_does_not_create_redundant_backup(tmp_path):

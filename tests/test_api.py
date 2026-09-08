@@ -18,7 +18,7 @@ def test_health_and_readiness(api_client):
     assert client.get("/health").json() == {"status": "ok"}
     response = client.get("/ready")
     assert response.status_code == 200
-    assert response.json() == {"ready": True, "database": "ok", "schema_version": 4}
+    assert response.json() == {"ready": True, "database": "ok", "schema_version": 5}
 
 
 def test_status_endpoint(api_client):
@@ -33,8 +33,10 @@ def test_status_endpoint(api_client):
     assert set(payload["service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert set(payload["direct_service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert "proxy" in payload
-    assert payload["database_schema_version"] == 4
+    assert payload["database_schema_version"] == 5
     assert payload["niche_max_reviews"] == 50000
+    assert payload["search"]["storage"] == "sqlite_fts5_trigram"
+    assert payload["search"]["connection_strategy"] == "short_lived_per_request"
 
 
 def test_games_endpoint_reads_local_cache(api_client):
@@ -72,7 +74,34 @@ def test_empty_search_never_calls_steam(api_client, monkeypatch):
     monkeypatch.setattr(services._runtime, "search_steam", lambda _term: pytest.fail("Steam request attempted"))
     response = client.get("/api/search?q=")
     assert response.status_code == 200
-    assert response.json() == {"items": []}
+    assert response.json() == {
+        "items": [], "limit": 12, "offset": 0, "has_more": False
+    }
+
+
+def test_search_endpoint_supports_pagination(api_client, monkeypatch):
+    _, client = api_client
+    monkeypatch.setattr(
+        services._runtime,
+        "search_steam",
+        lambda _term, limit, offset: [
+            {"appid": offset + index, "name": f"Game {index}"}
+            for index in range(limit)
+        ],
+    )
+
+    response = client.get("/api/search?q=game&limit=2&offset=4")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {"appid": 4, "name": "Game 0"},
+            {"appid": 5, "name": "Game 1"},
+        ],
+        "limit": 2,
+        "offset": 4,
+        "has_more": True,
+    }
 
 
 @pytest.mark.parametrize("path", ["/api/games/0", "/api/games/not-a-number"])

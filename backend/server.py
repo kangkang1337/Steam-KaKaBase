@@ -146,8 +146,12 @@ def create_app(*, start_background=False):
         return services.get_status()
 
     @application.get("/api/search")
-    def search(q: str = Query(default="", max_length=300)):
-        return services.search(q.strip())
+    def search(
+        q: str = Query(default="", max_length=300),
+        limit: int = Query(default=12, ge=1, le=50),
+        offset: int = Query(default=0, ge=0, le=10000),
+    ):
+        return services.search(q.strip(), limit, offset)
 
     @application.post("/api/track")
     def track(body: TrackRequest):

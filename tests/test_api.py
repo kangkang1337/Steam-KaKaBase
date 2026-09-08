@@ -69,6 +69,29 @@ def test_hot_games_endpoint_does_not_require_network(api_client):
     assert response.json()["games"][0]["current_players"] == 100
 
 
+def test_detail_poll_does_not_revive_completed_missing_tasks(api_client, insert_game, monkeypatch):
+    runtime, client = api_client
+    appid = insert_game(7401, "No Price Yet")
+    monkeypatch.setattr(runtime, "backfill_preview_async", lambda *_args, **_kwargs: False)
+    with runtime.database_connection() as conn:
+        runtime.enqueue_crawl_tasks_in_conn(conn, [appid], "preview", 100)
+    runtime.complete_crawl_tasks([appid], "preview")
+
+    first = client.get(f"/api/games/{appid}").json()
+    second = client.get(f"/api/games/{appid}").json()
+
+    assert first["pending_fields"] == ["prices", "players", "reviews", "metadata"]
+    assert second["refresh_pending"] is True
+    with runtime.database_connection() as conn:
+        task = conn.execute(
+            "SELECT status, attempts, completed_at FROM crawl_tasks WHERE appid=? AND task_type='preview'",
+            (appid,),
+        ).fetchone()
+    assert task[0] == "done"
+    assert task[1] == 0
+    assert task[2] is not None
+
+
 def test_empty_search_never_calls_steam(api_client, monkeypatch):
     _, client = api_client
     monkeypatch.setattr(services._runtime, "search_steam", lambda _term: pytest.fail("Steam request attempted"))

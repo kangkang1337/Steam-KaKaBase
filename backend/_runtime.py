@@ -1042,6 +1042,21 @@ def enqueue_crawl_tasks(appids, task_type, priority, next_attempt_at=None, gener
         return enqueue_crawl_tasks_in_conn(conn, appids, task_type, priority, next_attempt_at, generation)
 
 
+def enqueue_crawl_task_once_in_conn(conn, appid, task_type, priority, next_attempt_at=None):
+    """Create missing detail work without reviving completed or unavailable tasks."""
+    stamp = now_iso()
+    conn.execute(
+        """
+        INSERT INTO crawl_tasks(appid, task_type, priority, next_attempt_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(appid, task_type) DO UPDATE SET
+            priority=MAX(crawl_tasks.priority, excluded.priority),
+            updated_at=excluded.updated_at
+        """,
+        (int(appid), task_type, int(priority), next_attempt_at or stamp, stamp),
+    )
+
+
 def claim_crawl_tasks(task_type, limit, lock_minutes=15):
     stamp = now_iso()
     locked_until = (datetime.now(timezone.utc) + timedelta(minutes=lock_minutes)).replace(microsecond=0).isoformat()
@@ -3782,6 +3797,8 @@ def backfill_historylow_async(appid):
 
 def backfill_preview_async(appid, name=None):
     appid = int(appid)
+    if service_cooldown_remaining_seconds("steam_store"):
+        return False
     with database_connection() as conn:
         if not is_due(get_crawl_state(conn, preview_attempt_key(appid)), 30):
             return False
@@ -3805,9 +3822,6 @@ def backfill_preview_async(appid, name=None):
                 mark_tracked=False,
                 price_regions=["US", "CN"],
             )
-            if result.get("store_deferred"):
-                with database_connection() as conn:
-                    set_crawl_state(conn, preview_attempt_key(appid), "")
         except Exception as exc:
             log_event(f"preview backfill failed appid={appid}: {exc}")
         finally:
@@ -4455,9 +4469,6 @@ def ensure_game_from_catalog(conn, appid):
         """,
         (appid, name, header, now_iso(), UNKNOWN_GAME_NAME, f"App {appid}"),
     )
-    enqueue_crawl_tasks_in_conn(conn, [appid], "metadata", 100)
-    enqueue_crawl_tasks_in_conn(conn, [appid], "preview", 100)
-    enqueue_crawl_tasks_in_conn(conn, [appid], "reviews", 100)
     conn.commit()
     return True
 
@@ -4518,13 +4529,29 @@ def get_game_payload(appid, history_limit=500):
         ).fetchone()
         game_payload["site_peak_players"] = site_peak[0] if site_peak else None
         game_payload["site_peak_recorded_since"] = site_peak[1] if site_peak else None
-        missing_core_data = not game_payload.get("short_description") or not prices or not players or not reviews
-        if missing_core_data:
-            enqueue_crawl_tasks_in_conn(conn, [appid], "preview", 100)
-            enqueue_crawl_tasks_in_conn(conn, [appid], "reviews", 100)
-            enqueue_crawl_tasks_in_conn(conn, [appid], "metadata", 100)
-            conn.commit()
-            backfill_preview_async(appid, game_payload.get("name"))
+        missing_fields = []
+        if not prices:
+            missing_fields.append("prices")
+        if not players:
+            missing_fields.append("players")
+        if not reviews:
+            missing_fields.append("reviews")
+        if not game_payload.get("short_description"):
+            missing_fields.append("metadata")
+        refresh_started = False
+        if missing_fields:
+            with PREVIEW_BACKFILL_LOCK:
+                preview_running = appid in PREVIEW_BACKFILLING
+            if not preview_running:
+                refresh_started = backfill_preview_async(appid, game_payload.get("name"))
+            if not (preview_running or refresh_started):
+                if "prices" in missing_fields or "players" in missing_fields:
+                    enqueue_crawl_task_once_in_conn(conn, appid, "preview", 100)
+                if "reviews" in missing_fields:
+                    enqueue_crawl_task_once_in_conn(conn, appid, "reviews", 100)
+                if "metadata" in missing_fields:
+                    enqueue_crawl_task_once_in_conn(conn, appid, "metadata", 100)
+                conn.commit()
         has_historical_low = conn.execute(
             "SELECT 1 FROM historical_lows WHERE appid = ? LIMIT 1",
             (appid,),
@@ -4539,7 +4566,10 @@ def get_game_payload(appid, history_limit=500):
             "priceHistory": [clean_price(row) for row in price_history],
             "players": [clean_player(row) for row in players],
             "reviews": clean_review(reviews),
-            "refresh_pending": bool(missing_core_data),
+            "refresh_pending": bool(missing_fields),
+            "pending_fields": missing_fields,
+            "refresh_started": bool(refresh_started),
+            "retry_after_seconds": service_cooldown_remaining_seconds("steam_store"),
         }
 
 

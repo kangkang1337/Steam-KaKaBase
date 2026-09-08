@@ -1614,22 +1614,49 @@
           const seq = ++this.detailSeq;
           this.busy = true;
           try {
-            for (let attempt = 0; attempt < 4; attempt++) {
+            const maxAttempts = 45;
+            let previousPriceSignature = '';
+            let previousPlayerSignature = '';
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
               const data = await this.api(`/api/games/${appid}?history_limit=500`);
               if (seq !== this.detailSeq) return;
+              const prices = data.prices || [];
+              const priceHistory = data.priceHistory || [];
+              const players = data.players || [];
+              const priceSignature = JSON.stringify([prices, priceHistory]);
+              const playerSignature = JSON.stringify(players);
+              const chartsChanged = attempt === 0
+                || priceSignature !== previousPriceSignature
+                || playerSignature !== previousPlayerSignature;
               this.selected = data.game;
               this.activePage = 'tracker';
               this.navOpen = false;
-              this.selectedPrices = data.prices || [];
-              this.priceHistory = data.priceHistory || [];
-              this.playerHistory = data.players || [];
+              this.selectedPrices = prices;
+              this.priceHistory = priceHistory;
+              this.playerHistory = players;
               this.reviews = data.reviews;
-              this.message = data.refresh_pending ? '详情正在后台优先补全…' : '';
-              await nextTick();
-              this.renderCharts();
+              const pendingLabels = {
+                prices: '价格',
+                players: '在线人数',
+                reviews: '评价',
+                metadata: '简介'
+              };
+              const pendingText = (data.pending_fields || [])
+                .map(field => pendingLabels[field] || field)
+                .join('、');
+              this.message = data.refresh_pending
+                ? `${pendingText || '详情'}正在后台优先补全…`
+                : '';
+              if (chartsChanged) {
+                previousPriceSignature = priceSignature;
+                previousPlayerSignature = playerSignature;
+                await nextTick();
+                this.renderCharts();
+              }
+              if (attempt === 0) this.busy = false;
               if (!data.refresh_pending) break;
-              if (attempt < 3) {
-                await new Promise(resolve => window.setTimeout(resolve, 1500));
+              if (attempt < maxAttempts - 1) {
+                await new Promise(resolve => window.setTimeout(resolve, 2000));
               } else {
                 this.message = '已显示本地数据，剩余详情将在后台继续补全。';
               }

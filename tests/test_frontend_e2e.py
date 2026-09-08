@@ -55,7 +55,7 @@ def frontend_server(isolated_runtime):
 
 
 def mock_frontend_api(page):
-    state = {"tracked": False, "track_calls": 0, "untrack_calls": 0}
+    state = {"tracked": False, "track_calls": 0, "untrack_calls": 0, "detail_calls": 0}
     hot_games = [
         {
             "appid": 11,
@@ -145,7 +145,27 @@ def mock_frontend_api(page):
                 ]})
             return reply(route, {"items": [{"appid": 4242, "name": "Test Quest", "tiny_image": ""}]})
         if path == "/api/games/4242":
-            return reply(route, {**detail, "game": {**detail["game"], "tracked": state["tracked"]}})
+            state["detail_calls"] += 1
+            if state["detail_calls"] == 1:
+                return reply(route, {
+                    **detail,
+                    "game": {**detail["game"], "tracked": state["tracked"]},
+                    "refresh_pending": True,
+                    "pending_fields": ["prices"],
+                })
+            price = {
+                "region": "CN", "final_formatted": "¥ 20.00", "final": 2000,
+                "currency": "CNY", "discount_percent": 0,
+                "fetched_at": "2026-09-07T10:01:00+00:00",
+            }
+            return reply(route, {
+                **detail,
+                "game": {**detail["game"], "tracked": state["tracked"]},
+                "prices": [price],
+                "priceHistory": [price],
+                "refresh_pending": False,
+                "pending_fields": [],
+            })
         if path == "/api/track" and request.method == "POST":
             state["tracked"] = True
             state["track_calls"] += 1
@@ -207,6 +227,8 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
         page.locator(".suggestion").click()
 
         expect(page.locator(".hero h1")).to_have_text("Test Quest")
+        expect(page.locator(".stat").filter(has_text="国区价格")).to_contain_text("¥ 20.00", timeout=5000)
+        assert state["detail_calls"] >= 2
         favorite = page.locator(".favorite-btn")
         expect(favorite).to_have_text("收藏")
         favorite.click()

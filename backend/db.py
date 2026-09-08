@@ -46,6 +46,103 @@ def now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _lease_times(lease_seconds, moment=None):
+    current = moment or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc).replace(microsecond=0)
+    expires = current + timedelta(seconds=max(1, int(lease_seconds)))
+    return current.isoformat(), expires.isoformat()
+
+
+def acquire_process_lease(name, owner_id, *, pid=None, hostname=None, lease_seconds=120, moment=None):
+    """Atomically acquire an expired process lease or renew one we already own."""
+    stamp, expires_at = _lease_times(lease_seconds, moment)
+    conn = connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT owner_id, expires_at, acquired_at FROM process_leases WHERE name=?",
+            (str(name),),
+        ).fetchone()
+        if row and row[0] != str(owner_id) and row[1] > stamp:
+            conn.rollback()
+            return False
+        acquired_at = row[2] if row and row[0] == str(owner_id) else stamp
+        conn.execute(
+            """
+            INSERT INTO process_leases(
+                name, owner_id, pid, hostname, acquired_at, heartbeat_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                owner_id=excluded.owner_id,
+                pid=excluded.pid,
+                hostname=excluded.hostname,
+                acquired_at=excluded.acquired_at,
+                heartbeat_at=excluded.heartbeat_at,
+                expires_at=excluded.expires_at
+            """,
+            (str(name), str(owner_id), pid, hostname, acquired_at, stamp, expires_at),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def renew_process_lease(name, owner_id, *, lease_seconds=120, moment=None):
+    stamp, expires_at = _lease_times(lease_seconds, moment)
+    with transaction() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE process_leases
+            SET heartbeat_at=?, expires_at=?
+            WHERE name=? AND owner_id=? AND expires_at>=?
+            """,
+            (stamp, expires_at, str(name), str(owner_id), stamp),
+        )
+        return cursor.rowcount == 1
+
+
+def release_process_lease(name, owner_id):
+    with transaction() as conn:
+        cursor = conn.execute(
+            "DELETE FROM process_leases WHERE name=? AND owner_id=?",
+            (str(name), str(owner_id)),
+        )
+        return cursor.rowcount == 1
+
+
+def release_process_lease_by_pid(name, pid):
+    """Release a lease after an external supervisor has stopped its exact PID."""
+    with transaction() as conn:
+        cursor = conn.execute(
+            "DELETE FROM process_leases WHERE name=? AND pid=?",
+            (str(name), int(pid)),
+        )
+        return cursor.rowcount == 1
+
+
+def get_process_lease(name, *, moment=None):
+    stamp, _ = _lease_times(1, moment)
+    with transaction(rows=True) as conn:
+        row = conn.execute(
+            """
+            SELECT name, owner_id, pid, hostname, acquired_at, heartbeat_at, expires_at
+            FROM process_leases WHERE name=?
+            """,
+            (str(name),),
+        ).fetchone()
+    if not row:
+        return None
+    payload = dict(row)
+    payload["active"] = payload["expires_at"] > stamp
+    return payload
+
+
 def query_latest_prices_by_region(conn, appid):
     """Return the latest cached price row for each region."""
     return conn.execute(
@@ -344,6 +441,46 @@ def upsert_home_snapshot(refresh_key, historical_low_appid, meme_url):
         )
 
 
+def query_home_snapshot(refresh_key):
+    with transaction(rows=True) as conn:
+        return conn.execute(
+            """
+            SELECT recommendation_date, historical_low_appid, meme_url, created_at
+            FROM daily_home_snapshots WHERE recommendation_date=?
+            """,
+            (refresh_key,),
+        ).fetchone()
+
+
+def query_daily_niche_snapshot(refresh_key, max_reviews):
+    with transaction(rows=True) as conn:
+        return conn.execute(
+            """
+            SELECT n.*, COALESCE(g.tracked, 0) AS tracked,
+                   (SELECT amount_cny FROM historical_lows h
+                    WHERE h.appid=n.appid AND h.country='CN' LIMIT 1) AS cn_historical_low_cny
+            FROM niche_recommendation_snapshots r
+            JOIN niche_pool n ON n.appid=r.appid
+            LEFT JOIN games g ON g.appid=n.appid
+            LEFT JOIN steam_catalog c ON c.appid=n.appid
+            WHERE r.recommendation_date=? AND n.eligible=1
+              AND n.total_reviews BETWEEN 1 AND ?
+              AND COALESCE(c.app_type, 'game')='game'
+            """,
+            (refresh_key, int(max_reviews)),
+        ).fetchone()
+
+
+def query_tracked_appids():
+    with transaction() as conn:
+        return [
+            int(row[0])
+            for row in conn.execute(
+                "SELECT appid FROM games WHERE tracked=1 ORDER BY appid"
+            ).fetchall()
+        ]
+
+
 def get_crawl_state(conn, key):
     row = conn.execute("SELECT value FROM crawl_state WHERE key = ?", (key,)).fetchone()
     return row[0] if row else None
@@ -413,6 +550,100 @@ def enqueue_crawl_task_once_in_conn(conn, appid, task_type, priority, next_attem
         """,
         (int(appid), task_type, int(priority), next_attempt_at or stamp, stamp),
     )
+
+
+def recover_abandoned_crawl_tasks(reason="crawler restarted before task completion"):
+    """Return tasks owned by a dead crawler to the retry queue immediately."""
+    stamp = now_iso()
+    with transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT task_type, COUNT(*)
+            FROM crawl_tasks
+            WHERE status='running' AND completed_at IS NULL
+            GROUP BY task_type
+            """
+        ).fetchall()
+        conn.execute(
+            """
+            UPDATE crawl_tasks
+            SET status='retry', next_attempt_at=?, locked_until=NULL,
+                last_error=?, updated_at=?
+            WHERE status='running' AND completed_at IS NULL
+            """,
+            (stamp, str(reason)[:500], stamp),
+        )
+    by_type = {str(row[0]): int(row[1]) for row in rows}
+    return {"count": sum(by_type.values()), "by_type": by_type, "recovered_at": stamp}
+
+
+def retire_obsolete_crawl_tasks():
+    """Stop low-priority work belonging to an older hot-list generation."""
+    stamp = now_iso()
+    with transaction() as conn:
+        generation = int(get_crawl_state(conn, "hotlist_generation") or 0)
+        cursor = conn.execute(
+            """
+            UPDATE crawl_tasks
+            SET status='skipped', completed_at=?, locked_until=NULL,
+                last_error='obsolete hotlist generation', updated_at=?
+            WHERE generation IS NOT NULL AND generation != ?
+              AND priority < 100 AND completed_at IS NULL
+              AND status IN ('pending', 'retry', 'running')
+            """,
+            (stamp, stamp, generation),
+        )
+        return cursor.rowcount
+
+
+def query_crawl_task_monitor(moment=None):
+    """Return a compact queue-health snapshot for status and monitoring APIs."""
+    current = moment or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc).replace(microsecond=0)
+    stamp = current.isoformat()
+    recent_since = (current - timedelta(hours=24)).isoformat()
+    with transaction(rows=True) as conn:
+        rows = conn.execute(
+            """
+            SELECT task_type, status, COUNT(*) AS count
+            FROM crawl_tasks
+            GROUP BY task_type, status
+            ORDER BY task_type, status
+            """
+        ).fetchall()
+        summary = conn.execute(
+            """
+            SELECT
+              SUM(CASE WHEN completed_at IS NULL AND status IN ('pending','retry','running') THEN 1 ELSE 0 END),
+              SUM(CASE WHEN completed_at IS NULL AND status IN ('pending','retry')
+                        AND (next_attempt_at IS NULL OR next_attempt_at <= ?) THEN 1 ELSE 0 END),
+              SUM(CASE WHEN status='running' THEN 1 ELSE 0 END),
+              SUM(CASE WHEN status='retry' THEN 1 ELSE 0 END),
+              SUM(CASE WHEN status='permanent_failed' THEN 1 ELSE 0 END),
+              SUM(CASE WHEN status='running' AND (locked_until IS NULL OR locked_until <= ?) THEN 1 ELSE 0 END),
+              SUM(CASE WHEN status IN ('retry','permanent_failed') AND updated_at >= ? THEN 1 ELSE 0 END),
+              MIN(CASE WHEN completed_at IS NULL AND status IN ('pending','retry')
+                        AND (next_attempt_at IS NULL OR next_attempt_at <= ?) THEN next_attempt_at END),
+              MAX(attempts)
+            FROM crawl_tasks
+            """,
+            (stamp, stamp, recent_since, stamp),
+        ).fetchone()
+    values = list(summary) if summary else [None] * 9
+    return {
+        "active_total": int(values[0] or 0),
+        "due_total": int(values[1] or 0),
+        "running_total": int(values[2] or 0),
+        "retry_total": int(values[3] or 0),
+        "permanent_failed_total": int(values[4] or 0),
+        "stale_running_total": int(values[5] or 0),
+        "recent_failures_24h": int(values[6] or 0),
+        "oldest_due_at": values[7],
+        "max_attempts": int(values[8] or 0),
+        "by_type": [dict(row) for row in rows],
+    }
 
 
 def claim_crawl_tasks(task_type, limit, lock_minutes=15):
@@ -517,10 +748,16 @@ __all__ = [
     "enqueue_crawl_task_once_in_conn", "enqueue_crawl_tasks",
     "enqueue_crawl_tasks_in_conn", "ensure_schema",
     "fail_crawl_tasks", "get_crawl_state", "init_db",
+    "acquire_process_lease", "get_process_lease", "release_process_lease",
+    "release_process_lease_by_pid",
+    "renew_process_lease",
     "mark_crawl_tasks_not_available", "set_crawl_state", "transaction",
+    "query_crawl_task_monitor", "recover_abandoned_crawl_tasks",
+    "retire_obsolete_crawl_tasks",
     "query_game_detail", "query_hot_games", "query_latest_prices_by_region",
     "query_missing_historylow_appids", "query_search_index", "query_tracked_games",
     "query_popular_historical_low_rows", "read_home_snapshot_context",
+    "query_daily_niche_snapshot", "query_home_snapshot", "query_tracked_appids",
     "upsert_home_snapshot",
     "CURRENT_SCHEMA_VERSION", "DatabaseMigrationError", "create_database_backup",
     "get_schema_version", "migrate_database", "restore_database_backup",

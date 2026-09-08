@@ -92,6 +92,9 @@ SERVICE_COOLDOWN_UNTIL = {
     "image_cdn": 0.0,
 }
 SERVICE_COOLDOWN_LOCK = threading.Lock()
+SERVICE_RATE_LIMIT_STATUS = {
+    service: {"count": 0, "last_at": None} for service in EXTERNAL_SERVICES
+}
 PROXY_STATUS = {
     "configured": bool(STEAM_PROXY_URL), "enabled": USE_PROXY, "reachable": None,
     "tls_verify": STEAM_PROXY_VERIFY_TLS, "fallback_successes": 0, "fallback_failures": 0,
@@ -397,6 +400,12 @@ def set_service_cooldown(service, minutes=10):
         previous = SERVICE_COOLDOWN_UNTIL.get(service, 0)
         was_active = previous > now
         SERVICE_COOLDOWN_UNTIL[service] = max(previous, until)
+        if not was_active:
+            metric = SERVICE_RATE_LIMIT_STATUS.setdefault(
+                service, {"count": 0, "last_at": None}
+            )
+            metric["count"] += 1
+            metric["last_at"] = now_iso()
     if not was_active:
         log_event(f"external service cooldown enabled service={service} for {minutes} minutes")
 
@@ -3278,10 +3287,17 @@ def get_status():
         service: direct_cooldown_remaining_seconds(service)
         for service in EXTERNAL_SERVICES
     }
+    with SERVICE_COOLDOWN_LOCK:
+        status["rate_limits"] = {
+            service: dict(SERVICE_RATE_LIMIT_STATUS.get(service, {}))
+            for service in EXTERNAL_SERVICES
+        }
     status["proxy"] = dict(PROXY_STATUS)
     status["proxy"]["direct_cooldown_remaining_seconds"] = status["direct_cooldown_remaining_seconds"]
+    crawler_status_json = None
     try:
         with database_connection() as conn:
+            crawler_status_json = get_crawl_state(conn, "crawler_runtime_status")
             status["historical_low_count"] = conn.execute("SELECT COUNT(*) FROM historical_lows").fetchone()[0]
             status["niche_pool_count"] = conn.execute("SELECT COUNT(*) FROM niche_pool WHERE eligible = 1").fetchone()[0]
             status["steam_catalog_count"] = conn.execute("SELECT COUNT(*) FROM steam_catalog").fetchone()[0]
@@ -3294,6 +3310,18 @@ def get_status():
             status["steam_catalog_scan_started_at"] = get_crawl_state(conn, "steam_catalog_scan_started_at")
             status["steam_catalog_scan_last_batch_at"] = get_crawl_state(conn, "steam_catalog_scan_last_batch_at")
             status["steam_catalog_scan_completed_at"] = get_crawl_state(conn, "steam_catalog_scan_completed_at") or None
+            recovery_json = get_crawl_state(conn, "crawler_last_recovery")
+            try:
+                status["crawler_last_recovery"] = json.loads(recovery_json) if recovery_json else {
+                    "count": 0, "by_type": {}, "recovered_at": None
+                }
+            except (TypeError, ValueError):
+                status["crawler_last_recovery"] = {
+                    "count": 0, "by_type": {}, "recovered_at": None
+                }
+            status["crawler_last_retired_obsolete_count"] = int(
+                get_crawl_state(conn, "crawler_last_retired_obsolete_count") or 0
+            )
             status["steam_catalog_scan_complete"] = bool(status["steam_catalog_scan_completed_at"])
             status["database_schema_version"] = int(conn.execute("PRAGMA user_version").fetchone()[0])
             status["crawl_task_count"] = conn.execute(
@@ -3332,6 +3360,8 @@ def get_status():
         status["steam_catalog_scan_started_at"] = None
         status["steam_catalog_scan_last_batch_at"] = None
         status["steam_catalog_scan_completed_at"] = None
+        status["crawler_last_recovery"] = {"count": 0, "by_type": {}, "recovered_at": None}
+        status["crawler_last_retired_obsolete_count"] = 0
         status["steam_catalog_scan_complete"] = False
         status["database_schema_version"] = 0
         status["crawl_task_count"] = 0
@@ -3372,6 +3402,92 @@ def get_status():
     status["search"] = get_search_metrics()
     status["tracked_refresh_batch_limit"] = TRACKED_REFRESH_BATCH_LIMIT
     status["itad_historylow_batch_limit"] = ITAD_HISTORYLOW_BATCH_LIMIT
+    wal_path = Path(f"{DB_PATH}-wal")
+    status["storage"] = {
+        "database_bytes": DB_PATH.stat().st_size if DB_PATH.is_file() else 0,
+        "wal_bytes": wal_path.stat().st_size if wal_path.is_file() else 0,
+        "log_bytes": LOG_PATH.stat().st_size if LOG_PATH.is_file() else 0,
+    }
+    from .db import get_process_lease
+
+    lease = get_process_lease("crawler")
+    crawler_payload = {}
+    if crawler_status_json:
+        try:
+            crawler_payload = json.loads(crawler_status_json)
+        except (TypeError, ValueError):
+            crawler_payload = {}
+    crawler_active = bool(lease and lease.get("active"))
+    status["crawler"] = {
+        "running": crawler_active,
+        "state": crawler_payload.get("state", "running") if crawler_active else "stopped",
+        "pid": lease.get("pid") if lease else None,
+        "hostname": lease.get("hostname") if lease else None,
+        "started_at": lease.get("acquired_at") if lease else None,
+        "heartbeat_at": lease.get("heartbeat_at") if lease else None,
+        "expires_at": lease.get("expires_at") if lease else None,
+        "last_cycle_at": None,
+        "last_error": crawler_payload.get("error") if crawler_payload else None,
+    }
+    heartbeat_age = age_minutes(status["crawler"]["heartbeat_at"])
+    status["crawler"]["heartbeat_age_seconds"] = (
+        max(0, int(heartbeat_age * 60)) if heartbeat_age is not None else None
+    )
+    lease_expiry = parse_iso(status["crawler"]["expires_at"])
+    status["crawler"]["lease_remaining_seconds"] = (
+        max(0, int((lease_expiry - datetime.now(timezone.utc)).total_seconds()))
+        if lease_expiry else 0
+    )
+    try:
+        with database_connection() as conn:
+            status["crawler"]["last_cycle_at"] = get_crawl_state(conn, "crawler_last_cycle_at") or None
+    except sqlite3.Error:
+        pass
+    if crawler_active and crawler_payload:
+        refresh = crawler_payload.get("refresh") or {}
+        for key in (
+            "running", "last_started_at", "last_finished_at", "last_errors",
+            "hot_running", "hot_last_started_at", "hot_last_finished_at",
+            "hot_last_errors", "detail_running", "historylow_running",
+        ):
+            if key in refresh:
+                status[key] = refresh[key]
+        service_cooldowns = crawler_payload.get("service_cooldowns") or {}
+        direct_cooldowns = crawler_payload.get("direct_service_cooldowns") or {}
+        status["service_cooldowns"] = service_cooldowns
+        status["direct_service_cooldowns"] = direct_cooldowns
+        status["steam_cooldown_remaining_seconds"] = max(
+            int(service_cooldowns.get("steam_api") or 0),
+            int(service_cooldowns.get("steam_store") or 0),
+        )
+        status["direct_cooldown_remaining_seconds"] = max(
+            int(direct_cooldowns.get("steam_api") or 0),
+            int(direct_cooldowns.get("steam_store") or 0),
+        )
+        if crawler_payload.get("proxy"):
+            status["proxy"] = crawler_payload["proxy"]
+        if crawler_payload.get("rate_limits"):
+            status["rate_limits"] = crawler_payload["rate_limits"]
+        status["proxy"]["direct_cooldown_remaining_seconds"] = status[
+            "direct_cooldown_remaining_seconds"
+        ]
+    from .db import query_crawl_task_monitor
+
+    try:
+        status["task_monitor"] = query_crawl_task_monitor()
+    except sqlite3.Error:
+        status["task_monitor"] = {
+            "active_total": 0,
+            "due_total": 0,
+            "running_total": 0,
+            "retry_total": 0,
+            "permanent_failed_total": 0,
+            "stale_running_total": 0,
+            "recent_failures_24h": 0,
+            "oldest_due_at": None,
+            "max_attempts": 0,
+            "by_type": [],
+        }
     with TRACK_BACKFILL_LOCK:
         status["track_running"] = bool(TRACK_BACKFILLING)
     with DETAIL_BACKFILL_LOCK:
@@ -3540,24 +3656,25 @@ def get_game_payload(appid, history_limit=500):
             missing_fields.append("reviews")
         if not game_payload.get("short_description"):
             missing_fields.append("metadata")
-        refresh_started = False
+        queued_tasks = 0
         if missing_fields:
-            with PREVIEW_BACKFILL_LOCK:
-                preview_running = appid in PREVIEW_BACKFILLING
-            if not preview_running:
-                refresh_started = backfill_preview_async(appid, game_payload.get("name"))
-            if not (preview_running or refresh_started):
-                if "prices" in missing_fields or "players" in missing_fields:
-                    enqueue_crawl_task_once_in_conn(conn, appid, "preview", 100)
-                if "reviews" in missing_fields:
-                    enqueue_crawl_task_once_in_conn(conn, appid, "reviews", 100)
-                if "metadata" in missing_fields:
-                    enqueue_crawl_task_once_in_conn(conn, appid, "metadata", 100)
-                conn.commit()
-        if not detail["has_historical_low"]:
-            enqueue_crawl_tasks_in_conn(conn, [appid], "historylow", 100)
+            if "players" in missing_fields:
+                enqueue_crawl_task_once_in_conn(conn, appid, "players", 100)
+                queued_tasks += 1
+            if "prices" in missing_fields:
+                enqueue_crawl_task_once_in_conn(conn, appid, "preview", 100)
+                queued_tasks += 1
+            if "reviews" in missing_fields:
+                enqueue_crawl_task_once_in_conn(conn, appid, "reviews", 100)
+                queued_tasks += 1
+            if "metadata" in missing_fields:
+                enqueue_crawl_task_once_in_conn(conn, appid, "metadata", 100)
+                queued_tasks += 1
             conn.commit()
-            backfill_historylow_async(appid)
+        if not detail["has_historical_low"]:
+            enqueue_crawl_task_once_in_conn(conn, appid, "historylow", 100)
+            queued_tasks += 1
+            conn.commit()
         return {
             "game": game_payload,
             "prices": prices,
@@ -3566,7 +3683,8 @@ def get_game_payload(appid, history_limit=500):
             "reviews": clean_review(reviews),
             "refresh_pending": bool(missing_fields),
             "pending_fields": missing_fields,
-            "refresh_started": bool(refresh_started),
+            "refresh_started": False,
+            "queued_tasks": queued_tasks,
             "retry_after_seconds": service_cooldown_remaining_seconds("steam_store"),
         }
 

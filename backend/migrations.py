@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 class DatabaseMigrationError(RuntimeError):
@@ -327,12 +327,29 @@ def _migration_5_search_index(conn):
     """)
 
 
+def _migration_6_process_leases(conn):
+    _execute_sql(conn, """
+    CREATE TABLE IF NOT EXISTS process_leases (
+        name TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        pid INTEGER,
+        hostname TEXT,
+        acquired_at TEXT NOT NULL,
+        heartbeat_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_process_leases_expiry
+        ON process_leases(expires_at);
+    """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_1_initial_schema),
     Migration(2, "legacy_columns", _migration_2_legacy_columns),
     Migration(3, "catalog_classification", _migration_3_catalog_classification),
     Migration(4, "indexes_triggers_and_cleanup", _migration_4_indexes_triggers_and_cleanup),
     Migration(5, "fts5_trigram_search", _migration_5_search_index),
+    Migration(6, "process_leases", _migration_6_process_leases),
 )
 
 

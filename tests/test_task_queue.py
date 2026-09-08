@@ -1,5 +1,7 @@
 import sqlite3
 
+from backend import db
+
 import pytest
 
 
@@ -84,3 +86,74 @@ def test_empty_price_and_zero_reviews_record_freshness(isolated_runtime, insert_
         ).fetchone()
 
     assert row == (stamp, stamp, 0)
+
+
+def test_crawler_restart_recovers_all_abandoned_running_tasks(
+    isolated_runtime, insert_game
+):
+    runtime = isolated_runtime
+    first = insert_game(8101, "Interrupted Preview")
+    second = insert_game(8102, "Interrupted Reviews")
+    runtime.enqueue_crawl_tasks([first], "preview", 50)
+    runtime.enqueue_crawl_tasks([second], "reviews", 50)
+    assert runtime.claim_crawl_tasks("preview", 1) == [first]
+    assert runtime.claim_crawl_tasks("reviews", 1) == [second]
+
+    recovered = db.recover_abandoned_crawl_tasks()
+
+    assert recovered["count"] == 2
+    assert recovered["by_type"] == {"preview": 1, "reviews": 1}
+    with sqlite3.connect(runtime.DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT status, locked_until, last_error FROM crawl_tasks ORDER BY appid"
+        ).fetchall()
+    assert rows == [
+        ("retry", None, "crawler restarted before task completion"),
+        ("retry", None, "crawler restarted before task completion"),
+    ]
+
+
+def test_obsolete_generation_cleanup_preserves_user_priority_tasks(
+    isolated_runtime, insert_game
+):
+    runtime = isolated_runtime
+    obsolete = insert_game(8201, "Old Hot Task")
+    user_task = insert_game(8202, "User Task")
+    with runtime.database_connection() as conn:
+        runtime.set_crawl_state(conn, "hotlist_generation", "3")
+    runtime.enqueue_crawl_tasks([obsolete], "preview", 20, generation=2)
+    runtime.enqueue_crawl_tasks([user_task], "metadata", 100, generation=2)
+
+    assert db.retire_obsolete_crawl_tasks() == 1
+
+    with sqlite3.connect(runtime.DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT appid, status, last_error FROM crawl_tasks ORDER BY appid"
+        ).fetchall()
+    assert rows == [
+        (obsolete, "skipped", "obsolete hotlist generation"),
+        (user_task, "pending", None),
+    ]
+
+
+def test_task_monitor_reports_due_retry_and_terminal_failures(
+    isolated_runtime, insert_game
+):
+    runtime = isolated_runtime
+    retry_app = insert_game(8301, "Retry Task")
+    failed_app = insert_game(8302, "Failed Task")
+    runtime.enqueue_crawl_tasks([retry_app], "players", 50)
+    runtime.enqueue_crawl_tasks([failed_app], "metadata", 50)
+    runtime.claim_crawl_tasks("players", 1)
+    runtime.fail_crawl_tasks([retry_app], "players", "timeout", retry_minutes=0)
+    runtime.claim_crawl_tasks("metadata", 1)
+    runtime.fail_crawl_tasks([failed_app], "metadata", "schema", terminal=True)
+
+    monitor = db.query_crawl_task_monitor()
+
+    assert monitor["active_total"] == 1
+    assert monitor["due_total"] == 1
+    assert monitor["retry_total"] == 1
+    assert monitor["permanent_failed_total"] == 1
+    assert monitor["recent_failures_24h"] == 2
+    assert monitor["max_attempts"] == 1

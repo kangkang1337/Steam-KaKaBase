@@ -17,6 +17,14 @@ SYSTEM_BROWSERS = (
     Path("C:/Program Files/Google/Chrome/Application/chrome.exe"),
     Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"),
 )
+CHROMIUM_UNSAFE_PORTS = {
+    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53,
+    69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117,
+    119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514,
+    515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989,
+    990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000,
+    6566, 6665, 6666, 6667, 6668, 6669, 6697, 10080,
+}
 
 
 @pytest.fixture
@@ -33,10 +41,12 @@ def browser():
 
 @pytest.fixture
 def frontend_server(isolated_runtime):
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    config = uvicorn.Config(create_app(start_background=False), host="127.0.0.1", port=port, log_level="error")
+    port = None
+    while port is None or port in CHROMIUM_UNSAFE_PORTS:
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+    config = uvicorn.Config(create_app(), host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True, name="playwright-uvicorn")
     thread.start()
@@ -228,6 +238,13 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
 
         expect(page.locator(".hero h1")).to_have_text("Test Quest")
         expect(page.locator(".stat").filter(has_text="国区价格")).to_contain_text("¥ 20.00", timeout=5000)
+        chart_axes = page.evaluate("""
+          () => [...document.querySelectorAll('.chart')].map(element => {
+            const chart = window.echarts?.getInstanceByDom(element);
+            return chart?.getOption()?.xAxis?.[0]?.type;
+          })
+        """)
+        assert chart_axes == ["time", "time"]
         assert state["detail_calls"] >= 2
         favorite = page.locator(".favorite-btn")
         expect(favorite).to_have_text("收藏")

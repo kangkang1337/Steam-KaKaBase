@@ -1,7 +1,6 @@
 """FastAPI transport layer; business operations live in services."""
 
 import mimetypes
-import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -10,11 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from . import config, services
-from .crawler import cleanup_image_cache_once, scheduler_loop, startup_prewarm_async
 from .db import init_db
 from .logging_utils import log_event
 from .schemas import TrackRequest, UntrackRequest
-from .steam_client import probe_proxy
 
 
 def _file_response(path: Path, *, media_type=None, max_age=3600):
@@ -27,21 +24,12 @@ def _file_response(path: Path, *, media_type=None, max_age=3600):
     )
 
 
-def create_app(*, start_background=False):
-    """Build an application, optionally enabling production background jobs."""
+def create_app():
+    """Build the cache-only web application."""
 
     @asynccontextmanager
     async def lifespan(_app):
         init_db()
-        if start_background:
-            probe_proxy()
-            cleanup_image_cache_once()
-            startup_prewarm_async()
-            threading.Thread(
-                target=scheduler_loop,
-                daemon=True,
-                name="steamkb-scheduler",
-            ).start()
         yield
 
     application = FastAPI(
@@ -100,12 +88,14 @@ def create_app(*, start_background=False):
     @application.get("/api/image-cache")
     def image_cache(url: str = Query(min_length=1, max_length=2048)):
         try:
-            image_path = services.cache_remote_image(url)
-            return _file_response(image_path, max_age=604800)
-        except Exception as exc:
-            log_event(f"image cache failed url={url}: {exc}")
+            image_path = services.cached_remote_image(url)
+            if image_path:
+                return _file_response(image_path, max_age=604800)
             if services.is_allowed_image_url(url):
                 return RedirectResponse(url=url, status_code=302, headers={"Cache-Control": "no-store"})
+            raise ValueError("unsupported image URL")
+        except Exception as exc:
+            log_event(f"image cache failed url={url}: {exc}")
             raise HTTPException(status_code=400, detail="unsupported image URL") from exc
 
     @application.get("/api/games")
@@ -174,4 +164,4 @@ def create_app(*, start_background=False):
     return application
 
 
-app = create_app(start_background=True)
+app = create_app()

@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 import pytest
@@ -9,7 +10,7 @@ from backend.server import create_app
 
 @pytest.fixture
 def api_client(isolated_runtime):
-    with TestClient(create_app(start_background=False)) as client:
+    with TestClient(create_app()) as client:
         yield isolated_runtime, client
 
 
@@ -18,7 +19,7 @@ def test_health_and_readiness(api_client):
     assert client.get("/health").json() == {"status": "ok"}
     response = client.get("/ready")
     assert response.status_code == 200
-    assert response.json() == {"ready": True, "database": "ok", "schema_version": 5}
+    assert response.json() == {"ready": True, "database": "ok", "schema_version": 6}
 
 
 def test_status_endpoint(api_client):
@@ -33,10 +34,31 @@ def test_status_endpoint(api_client):
     assert set(payload["service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert set(payload["direct_service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert "proxy" in payload
-    assert payload["database_schema_version"] == 5
+    assert payload["database_schema_version"] == 6
     assert payload["niche_max_reviews"] == 50000
     assert payload["search"]["storage"] == "sqlite_fts5_trigram"
     assert payload["search"]["connection_strategy"] == "short_lived_per_request"
+    assert payload["task_monitor"]["active_total"] == 0
+    assert set(payload["rate_limits"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
+    assert payload["crawler"]["heartbeat_age_seconds"] is None
+    assert payload["crawler"]["lease_remaining_seconds"] == 0
+    assert payload["storage"]["database_bytes"] > 0
+    assert payload["storage"]["wal_bytes"] >= 0
+
+
+def test_status_does_not_report_stale_crawler_as_running(api_client):
+    runtime, client = api_client
+    with runtime.database_connection() as conn:
+        runtime.set_crawl_state(
+            conn,
+            "crawler_runtime_status",
+            json.dumps({"state": "running", "error": None}),
+        )
+
+    payload = client.get("/api/status").json()
+
+    assert payload["crawler"]["running"] is False
+    assert payload["crawler"]["state"] == "stopped"
 
 
 def test_games_endpoint_reads_local_cache(api_client):
@@ -144,13 +166,8 @@ def test_asset_path_traversal_is_rejected(api_client):
     assert response.status_code == 404
 
 
-def test_unsupported_image_redirect_is_rejected(api_client, monkeypatch):
+def test_unsupported_image_redirect_is_rejected(api_client):
     _, client = api_client
-
-    def fail_cache(_url):
-        raise RuntimeError("download failed")
-
-    monkeypatch.setattr(services, "cache_remote_image", fail_cache)
     response = client.get(
         "/api/image-cache",
         params={"url": "https://example.test/not-steam.jpg"},
@@ -158,3 +175,87 @@ def test_unsupported_image_redirect_is_rejected(api_client, monkeypatch):
     )
     assert response.status_code == 400
     assert "location" not in response.headers
+
+
+def test_web_detail_only_enqueues_missing_data(api_client, insert_game, monkeypatch):
+    runtime, client = api_client
+    appid = insert_game(8801, "Queue Only")
+    monkeypatch.setattr(
+        runtime,
+        "backfill_preview_async",
+        lambda *_args, **_kwargs: pytest.fail("Web attempted Steam collection"),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "backfill_historylow_async",
+        lambda *_args, **_kwargs: pytest.fail("Web attempted ITAD collection"),
+    )
+
+    response = client.get(f"/api/games/{appid}")
+
+    assert response.status_code == 200
+    assert response.json()["refresh_started"] is False
+    with runtime.database_connection() as conn:
+        task_types = {
+            row[0]
+            for row in conn.execute(
+                "SELECT task_type FROM crawl_tasks WHERE appid=? AND status='pending'",
+                (appid,),
+            ).fetchall()
+        }
+    assert task_types == {"players", "preview", "reviews", "metadata", "historylow"}
+
+
+def test_web_refresh_endpoints_only_enqueue_tasks(api_client, insert_game):
+    runtime, client = api_client
+    appid = insert_game(8802, "Tracked Queue", tracked=1)
+
+    game_response = client.post(f"/api/games/{appid}/refresh")
+    all_response = client.post("/api/refresh-all")
+
+    assert game_response.status_code == 200
+    assert game_response.json()["queued"] is True
+    assert all_response.status_code == 200
+    assert all_response.json()["running"] is False
+    with runtime.database_connection() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM crawl_tasks WHERE appid=?", (appid,)
+        ).fetchone()[0] == 5
+
+
+def test_cache_only_pages_do_not_start_collection(api_client, monkeypatch):
+    runtime, client = api_client
+    monkeypatch.setattr(
+        runtime,
+        "refresh_hot_database_async",
+        lambda *_args, **_kwargs: pytest.fail("Web started hot-list collection"),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "snapshot_daily_niche_recommendation",
+        lambda *_args, **_kwargs: pytest.fail("Web created a homepage snapshot"),
+    )
+
+    ensure_response = client.get("/api/hot-games/ensure?target=100")
+    home_response = client.get("/api/home-picks")
+
+    assert ensure_response.status_code == 200
+    assert ensure_response.json()["cache_only"] is True
+    assert home_response.status_code == 200
+
+
+def test_image_cache_miss_redirects_without_downloading(api_client, monkeypatch):
+    runtime, client = api_client
+    monkeypatch.setattr(
+        runtime,
+        "cache_image",
+        lambda *_args, **_kwargs: pytest.fail("Web downloaded a CDN image"),
+    )
+    image_url = "https://cdn.akamai.steamstatic.com/steam/apps/730/header.jpg"
+
+    response = client.get(
+        "/api/image-cache", params={"url": image_url}, follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == image_url

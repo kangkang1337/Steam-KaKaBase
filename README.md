@@ -2,6 +2,8 @@
 
 一个面向本地运行的 Steam 数据面板，设计参考 SteamDB。用于查看游戏价格与本地历史快照、在线人数趋势、玩家评价、热门榜和每日小众宝藏推荐。
 
+当前版本：`v0.2.1`
+
 > 当前项目处于本地原型阶段。现有 HTTP 服务适合开发和个人使用，尚未按公网生产环境加固。
 
 ## 当前功能
@@ -81,14 +83,17 @@ backend/
 ├── crawler.py         后台采集与任务编排入口
 ├── services.py        搜索、详情、榜单、推荐和收藏
 ├── schemas.py         FastAPI 请求模型与参数校验
-├── server.py          FastAPI 路由、静态文件、CORS 和生命周期
-├── main.py            Uvicorn 进程入口
+├── server.py          仅读缓存并投递任务的 FastAPI 路由
+├── main.py            Uvicorn Web 进程入口
+├── crawler_main.py    独立采集进程、心跳和单实例租约
 └── _runtime.py        模块拆分期间的私有兼容实现
 ```
 
-正式入口为 `python -m backend.main`。`python steamkb.py` 作为兼容入口保留。`start.ps1` 不再硬编码采集频率或 Catalog 数量，业务配置统一由 `.env` 和 `backend/config.py` 解析。新增后端代码应优先通过公开模块调用，不应继续扩大 `_runtime.py`。
+Web 入口为 `python -m backend.main`，采集入口为 `python -m backend.crawler_main`。`python steamkb.py` 作为兼容 Web 入口保留。`start.ps1` 会启动并监控两个独立进程；业务配置统一由 `.env` 和 `backend/config.py` 解析。新增后端代码应优先通过公开模块调用，不应继续扩大 `_runtime.py`。
 
-API 由 FastAPI 提供，并包含 `/health`、`/ready` 和自动生成的 `/docs`。后台调度器只在正式应用生命周期中启动；测试应用不会启动采集任务。
+API 由 FastAPI 提供，并包含 `/health`、`/ready` 和自动生成的 `/docs`。Web 请求不会访问 Steam、ITAD 或下载 CDN 图片：详情与手动刷新只向 SQLite 投递任务，crawler 独立消费。SQLite 中的进程租约确保同一数据库同一时刻只有一个 crawler。
+
+`/api/status` 可查看 crawler PID、心跳年龄、租约剩余时间、任务积压、到期任务、重试与永久失败数量、最近一次崩溃恢复、各外部服务本次进程触发的限流冷却次数，以及 SQLite/WAL/日志文件大小。crawler 获得租约后会立即把旧进程遗留的 `running` 任务放回重试队列，并终止已经落后于当前热门榜代际的低优先级任务；用户点击产生的优先级 100 任务不会被该清理影响。
 
 SQLite 开启 WAL 模式，读写可以并行；批量采集按批次提交，避免每抓取一个 App 就提交一次。
 
@@ -129,12 +134,16 @@ http://127.0.0.1:8765
 .\end.ps1
 ```
 
-`start.ps1` 会读取 `.env` 中的端口和采集配置、关闭该端口上的旧后端、启动 FastAPI 服务并打开浏览器。用于启动的 PowerShell 窗口需要保持打开；调试结束后运行 `end.ps1` 可确认端口已经释放。
+`start.ps1` 会读取 `.env`、停止上次由脚本管理的进程、启动 FastAPI Web 和独立 crawler，再在 Web 就绪后打开浏览器。PID 保存在被 Git 忽略的 `data/runtime/`；用于启动的 PowerShell 窗口需要保持打开。`end.ps1` 会核对 crawler 命令行后停止它，并释放 Web 端口。
 
-只启动后端：
+分别调试两个进程：
 
 ```powershell
+# 终端 1：只提供页面和缓存 API
 python -m backend.main
+
+# 终端 2：执行外部采集和后台任务
+python -m backend.crawler_main
 ```
 
 ## 测试与 CI
@@ -170,6 +179,9 @@ Copy-Item .env.example .env
 | `STEAM_API_KEY` | 空 | Steam AppList 使用的 Web API Key |
 | `ITAD_API_KEY` | 空 | ITAD lookup 和 historylow API Key |
 | `STEAMKB_PORT` | `8765` | 本地 HTTP 端口 |
+| `STEAMKB_CRAWLER_LEASE_SECONDS` | `120` | crawler 单实例租约有效期 |
+| `STEAMKB_CRAWLER_HEARTBEAT_SECONDS` | `20` | crawler 续租和状态心跳间隔 |
+| `STEAMKB_SCHEDULER_CHECK_SECONDS` | `60` | crawler 调度循环检查间隔 |
 | `STEAMKB_DB` | `data/steamkb.sqlite3` | SQLite 文件路径 |
 | `STEAMKB_LOG` | `data/steamkb.log` | 日志路径 |
 | `STEAMKB_DB_BACKUP_DIR` | `data/backups` | 迁移前备份和手动备份目录 |
@@ -206,7 +218,7 @@ STEAMKB_PROXY_URL=http://127.0.0.1:7890
 
 ## 数据库迁移与备份
 
-SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。服务启动时只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
+SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v6 增加 `process_leases` 作为跨进程单实例锁。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
 
 迁移中任意一步失败时，事务会整体回滚，服务停止启动，并在错误中给出升级前备份路径。默认保留最近 10 份自动或手动备份，数据库和备份文件均被 Git 忽略。
 

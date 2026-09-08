@@ -49,18 +49,33 @@ def run_hotlist_task(force=False):
 def run_players_task(force=False):
     if runtime.service_cooldown_remaining_seconds("steam_api"):
         return False
-    appids = runtime.get_hot_appids(runtime.HOTLIST_TARGET) if force else runtime.get_due_hot_player_appids()
+    due_appids = runtime.get_hot_appids(runtime.HOTLIST_TARGET) if force else runtime.get_due_hot_player_appids()
+    runtime.enqueue_crawl_tasks(due_appids, "players", 20)
+    appids = runtime.claim_crawl_tasks("players", runtime.HOTLIST_TARGET)
     if not appids:
         return False
-    report = asyncio.run(runtime.fetch_players_for_appids_async(appids))
-    runtime.complete_crawl_tasks(report["success_appids"], "players")
-    with runtime.database_connection() as conn:
-        runtime.set_crawl_state(conn, "hot_players_at", report["stamp"])
-    runtime.log_event(
-        f"hot players refreshed success={report['success']} failed={report['failed']} "
-        f"skipped={report['skipped']}"
-    )
-    return True
+    try:
+        report = asyncio.run(runtime.fetch_players_for_appids_async(appids))
+        successful = report["success_appids"]
+        failed = [appid for appid in appids if appid not in set(successful)]
+        runtime.complete_crawl_tasks(successful, "players")
+        runtime.fail_crawl_tasks(failed, "players", "Steam player request failed", retry_minutes=30)
+        with runtime.database_connection() as conn:
+            runtime.set_crawl_state(conn, "hot_players_at", report["stamp"])
+        runtime.log_event(
+            f"hot players refreshed success={report['success']} failed={report['failed']} "
+            f"skipped={report['skipped']}"
+        )
+        return True
+    except sqlite3.Error as exc:
+        runtime.fail_crawl_tasks(appids, "players", exc, terminal=True)
+        raise
+    except runtime.SteamRateLimited as exc:
+        runtime.fail_crawl_tasks(appids, "players", exc, retry_minutes=10)
+        raise
+    except Exception as exc:
+        runtime.fail_crawl_tasks(appids, "players", exc, retry_minutes=30)
+        raise
 
 
 def _run_appdetails_task(task_type, due_appids, limit, priority, persist, unavailable_message, success_message):
@@ -311,8 +326,9 @@ def refresh_hot_database_once(force_hotlist=False, quick=False):
             except Exception as exc:
                 runtime.log_event(f"steam catalog sync skipped: {exc}")
             runtime.run_catalog_enrich_task()
-            runtime.snapshot_daily_niche_recommendation()
-            runtime.get_home_picks()
+            from .services import refresh_daily_home_picks
+
+            refresh_daily_home_picks()
             runtime.compact_player_snapshots_once()
             runtime.maintain_storage_once()
     except Exception as exc:
@@ -339,32 +355,43 @@ def refresh_hot_database_async(force_hotlist=False, quick=False):
     return True
 
 
-def scheduler_loop():
-    time.sleep(runtime.SCHEDULER_CHECK_SECONDS)
-    while True:
-        try:
-            runtime.snapshot_daily_niche_recommendation()
-            runtime.get_home_picks()
-        except Exception as exc:
-            runtime.log_event(f"daily homepage snapshot failed: {exc}")
-        try:
-            runtime.refresh_tracked_once()
-        except Exception as exc:
-            runtime.log_event(f"scheduler tracked refresh failed: {exc}")
-        try:
-            refresh_hot_database_once()
-        except Exception as exc:
-            runtime.log_event(f"scheduler hot refresh failed: {exc}")
-        time.sleep(runtime.SCHEDULER_CHECK_SECONDS)
+def run_scheduler_cycle():
+    try:
+        from .services import refresh_daily_home_picks
+
+        refresh_daily_home_picks()
+    except Exception as exc:
+        runtime.log_event(f"daily homepage snapshot failed: {exc}")
+    try:
+        runtime.refresh_tracked_once()
+    except Exception as exc:
+        runtime.log_event(f"scheduler tracked refresh failed: {exc}")
+    try:
+        refresh_hot_database_once()
+    except Exception as exc:
+        runtime.log_event(f"scheduler hot refresh failed: {exc}")
+
+
+def run_startup_prewarm():
+    refresh_hot_database_once(force_hotlist=runtime.count_hot_games() == 0, quick=True)
+    runtime.run_niche_pool_task(
+        force=runtime.count_eligible_niche_pool() < runtime.NICHE_POOL_DISPLAY_LIMIT
+    )
+    from .services import refresh_daily_home_picks
+
+    refresh_daily_home_picks()
+
+
+def scheduler_loop(stop_event=None):
+    stop_event = stop_event or threading.Event()
+    while not stop_event.wait(runtime.SCHEDULER_CHECK_SECONDS):
+        run_scheduler_cycle()
 
 
 def startup_prewarm_async():
     def worker():
         try:
-            refresh_hot_database_once(force_hotlist=runtime.count_hot_games() == 0, quick=True)
-            runtime.run_niche_pool_task(
-                force=runtime.count_eligible_niche_pool() < runtime.NICHE_POOL_DISPLAY_LIMIT
-            )
+            run_startup_prewarm()
         except Exception as exc:
             runtime.log_event(f"startup hotlist prewarm failed: {exc}")
 

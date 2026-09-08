@@ -17,6 +17,7 @@ tests/.tmp/
 data/*.log
 data/*.log.*
 data/image-cache/
+data/runtime/
 
 # Local build/cache
 target/

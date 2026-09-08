@@ -1,13 +1,18 @@
 """User-facing application operations consumed by the HTTP layer."""
 
 import hashlib
+from pathlib import Path
 import urllib.parse
 
-from . import _runtime
+from . import _runtime, config
 from .db import (
     CURRENT_SCHEMA_VERSION,
     get_schema_version,
+    enqueue_crawl_tasks,
+    query_daily_niche_snapshot,
+    query_home_snapshot,
     query_popular_historical_low_rows,
+    query_tracked_appids,
     read_home_snapshot_context,
     transaction,
     upsert_home_snapshot,
@@ -21,17 +26,13 @@ def list_games():
 def ensure_hot_games(target):
     target = min(max(100, int(target)), _runtime.HOTLIST_TARGET)
     hot_count = _runtime.count_hot_games()
-    with transaction() as conn:
-        hotlist_at = _runtime.get_crawl_state(conn, "hotlist_at")
-    force_hotlist = hot_count < target and _runtime.is_due(hotlist_at, 30)
-    queued = False
-    if force_hotlist or _runtime.is_due(hotlist_at, _runtime.HOTLIST_REFRESH_HOURS * 60):
-        queued = _runtime.refresh_hot_database_async(force_hotlist=force_hotlist, quick=True)
-    preview_queued = _runtime.enqueue_missing_hot_previews(
-        limit=_runtime.HOT_FULL_METADATA_TOP_LIMIT,
-        priority=90,
-    )
-    return {"queued": queued, "count": hot_count, "target": target, "preview_queued": preview_queued}
+    return {
+        "queued": False,
+        "count": hot_count,
+        "target": target,
+        "preview_queued": 0,
+        "cache_only": True,
+    }
 
 
 def list_hot_games(limit):
@@ -61,26 +62,33 @@ def list_niche_pool():
 
 
 def get_home_picks():
+    refresh_key = _runtime.daily_refresh_key()
     historical_lows = list_popular_historical_low_games()
-    daily_niche = _runtime.get_daily_niche_recommendation()
-    if daily_niche:
-        niche = daily_niche
-    else:
-        niche = None
-        niche_row = _runtime.list_niche_pool_pick()
-        if niche_row:
-            item = dict(niche_row)
-            item["tracked"] = False
-            item["cn_historical_low_cny"] = None
-            niche = clean_home_pick(item)
+    lows_by_appid = {int(game["appid"]): game for game in historical_lows}
+    snapshot = query_home_snapshot(refresh_key)
+    historical_low = None
+    meme_url = None
+    if snapshot:
+        low_appid = snapshot["historical_low_appid"]
+        historical_low = lows_by_appid.get(int(low_appid)) if low_appid else None
+        meme_url = snapshot["meme_url"]
+    niche_row = query_daily_niche_snapshot(refresh_key, _runtime.NICHE_MAX_REVIEWS)
+    niche = clean_home_pick(niche_row) if niche_row else None
     memes = list_local_memes()
-    refresh_key, historical_low, meme_url = ensure_daily_home_snapshot(historical_lows, memes)
     return {
         "refresh_key": refresh_key,
         "historical_low": historical_low,
         "niche": niche,
         "meme": {"url": meme_url, "count": len(memes)},
     }
+
+
+def refresh_daily_home_picks():
+    """Create today's recommendation snapshots from the crawler process."""
+    historical_lows = list_popular_historical_low_games()
+    _runtime.snapshot_daily_niche_recommendation()
+    memes = list_local_memes()
+    return ensure_daily_home_snapshot(historical_lows, memes)
 
 
 def clean_home_pick(row):
@@ -189,11 +197,19 @@ def get_game(appid, history_limit=500):
     return _runtime.get_game_payload(int(appid), history_limit)
 
 
+def _enqueue_game_refresh(appids, priority=100):
+    appids = [int(appid) for appid in appids]
+    queued = 0
+    for task_type in ("players", "preview", "reviews", "metadata", "historylow"):
+        queued += enqueue_crawl_tasks(appids, task_type, priority)
+    return queued
+
+
 def track_game(appid, name=None, header_image=None):
     appid = int(appid)
     _runtime.quick_track_game(appid, name, header_image)
-    queued = _runtime.refresh_tracked_game_async(appid, name)
-    return {"ok": True, "appid": appid, "queued": queued}
+    queued = _enqueue_game_refresh([appid])
+    return {"ok": True, "appid": appid, "queued": bool(queued), "queued_tasks": queued}
 
 
 def untrack_game(appid):
@@ -203,18 +219,30 @@ def untrack_game(appid):
 
 
 def refresh_all():
-    if _runtime.REFRESH_STATUS["running"]:
-        return {"ok": True, "running": True, "message": "refresh already running"}
-    errors = _runtime.refresh_tracked_once(force_all=True)
-    return {"ok": True, "running": False, "errors": errors}
+    appids = query_tracked_appids()
+    queued = _enqueue_game_refresh(appids) if appids else 0
+    return {"ok": True, "running": False, "queued": bool(queued), "queued_tasks": queued}
 
 
 def refresh_game(appid):
-    return {"ok": True, **_runtime.refresh_game(int(appid))}
+    appid = int(appid)
+    queued = _enqueue_game_refresh([appid])
+    return {"ok": True, "appid": appid, "queued": bool(queued), "queued_tasks": queued}
 
 
 def cache_remote_image(url):
     return _runtime.cache_image(url)
+
+
+def cached_remote_image(url):
+    if not is_allowed_image_url(url):
+        raise ValueError("unsupported image host")
+    parsed = urllib.parse.urlparse(url)
+    suffix = Path(parsed.path).suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+        suffix = ".img"
+    path = config.IMAGE_CACHE_DIR / (hashlib.sha256(url.encode("utf-8")).hexdigest() + suffix)
+    return path if path.is_file() and path.stat().st_size > 0 else None
 
 
 def is_allowed_image_url(url):

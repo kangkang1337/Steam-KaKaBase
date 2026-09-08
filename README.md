@@ -86,7 +86,7 @@ backend/
 └── _runtime.py        模块拆分期间的私有兼容实现
 ```
 
-正式入口为 `python -m backend.main`。`python steamkb.py` 作为兼容入口保留。新增后端代码应优先通过公开模块调用，不应继续扩大 `_runtime.py`。
+正式入口为 `python -m backend.main`。`python steamkb.py` 作为兼容入口保留。`start.ps1` 不再硬编码采集频率或 Catalog 数量，业务配置统一由 `.env` 和 `backend/config.py` 解析。新增后端代码应优先通过公开模块调用，不应继续扩大 `_runtime.py`。
 
 API 由 FastAPI 提供，并包含 `/health`、`/ready` 和自动生成的 `/docs`。后台调度器只在正式应用生命周期中启动；测试应用不会启动采集任务。
 
@@ -102,11 +102,14 @@ SQLite 开启 WAL 模式，读写可以并行；批量采集按批次提交，�
 
 ## 快速启动
 
-安装运行依赖：
+克隆项目后，安装运行依赖并创建本地配置：
 
 ```powershell
 python -m pip install -r requirements.txt
+Copy-Item .env.example .env
 ```
+
+根据需要在 `.env` 中填写 `STEAM_API_KEY`、`ITAD_API_KEY` 和代理设置。没有 API Key 时网站仍可启动并读取已有缓存，但 Catalog 同步和 ITAD 史低功能不会运行。
 
 启动后端并打开浏览器：
 
@@ -125,6 +128,8 @@ http://127.0.0.1:8765
 ```powershell
 .\end.ps1
 ```
+
+`start.ps1` 会读取 `.env` 中的端口和采集配置、关闭该端口上的旧后端、启动 FastAPI 服务并打开浏览器。用于启动的 PowerShell 窗口需要保持打开；调试结束后运行 `end.ps1` 可确认端口已经释放。
 
 只启动后端：
 

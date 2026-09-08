@@ -1,18 +1,19 @@
 Set-Location -Path $PSScriptRoot
 
+$envPath = Join-Path $PSScriptRoot ".env"
 $port = 8765
 if ($env:STEAMKB_PORT) {
     $port = [int]$env:STEAMKB_PORT
+} elseif (Test-Path $envPath) {
+    $portLine = Get-Content -LiteralPath $envPath -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.Trim().TrimStart([char]0xFEFF) } |
+        Where-Object { $_ -match '^STEAMKB_PORT\s*=\s*\d+\s*$' } |
+        Select-Object -First 1
+    if ($portLine) {
+        $port = [int](($portLine -split '=', 2)[1].Trim())
+    }
 }
 
-$env:STEAMKB_PLAYER_REFRESH_MINUTES = "30"
-$env:STEAMKB_PRICE_REFRESH_HOURS = "24"
-$env:STEAMKB_TRACKED_REFRESH_BATCH_LIMIT = "1"
-$env:STEAMKB_HOTLIST_TARGET = "100"
-$env:STEAMKB_CATALOG_LIMIT = "30000"
-$env:STEAMKB_CATALOG_ENRICH_DAILY_LIMIT = "1500"
-$env:STEAMKB_CATALOG_ENRICH_BATCH_LIMIT = "50"
-$env:STEAMKB_NICHE_POOL_LIMIT = "500"
 # Default to direct Steam access. Set STEAMKB_PROXY_URL in .env only when a
 # local proxy is deliberately required.
 Remove-Item Env:STEAMKB_PROXY_URL -ErrorAction SilentlyContinue
@@ -22,7 +23,6 @@ foreach ($proxyVariable in @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_pro
     Remove-Item "Env:$proxyVariable" -ErrorAction SilentlyContinue
 }
 
-$envPath = Join-Path $PSScriptRoot ".env"
 if (Test-Path $envPath) {
     $envLines = Get-Content -LiteralPath $envPath -ErrorAction SilentlyContinue
     $hasItadKey = $false

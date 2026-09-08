@@ -3723,7 +3723,7 @@ def get_game_payload(appid, history_limit=500):
             detail.get("historical_low_fetched_at"),
             ITAD_HISTORYLOW_REFRESH_DAYS * 24 * 60,
         )
-        if ITAD_API_KEY and (not detail["has_historical_low"] or historylow_stale):
+        if not detail["has_historical_low"] or historylow_stale:
             enqueue_crawl_task_once_in_conn(conn, appid, "historylow", 100)
             queued_tasks += 1
             conn.commit()

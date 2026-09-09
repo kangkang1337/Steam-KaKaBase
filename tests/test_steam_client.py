@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from backend import _runtime
+from backend import _runtime, steam_client
 
 
 class FakeHttpError(Exception):
@@ -55,6 +55,17 @@ class FakeProxyClient:
 
     async def request(self, method, url, params=None, json=None):
         return FakeResponse(200, {"via": "proxy"})
+
+
+class FakeAsyncClientContext:
+    def __init__(self, *args, **kwargs):
+        self.headers = kwargs.get("headers") or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
 
 
 @pytest.mark.parametrize(
@@ -148,3 +159,48 @@ def test_direct_failure_uses_proxy_and_starts_direct_cooldown(monkeypatch, isola
     )
     assert response.json() == {"via": "proxy"}
     assert skipped_direct_client.calls == 0
+
+
+def test_itad_lookup_sends_api_key_as_query_parameter(monkeypatch, isolated_runtime):
+    captured = []
+
+    async def fake_get(_client, _semaphore, url, params=None):
+        captured.append((url, params))
+        return {"found": True, "game": {"id": "itad-10"}}
+
+    monkeypatch.setattr(_runtime, "ITAD_API_KEY", "secret-test-key")
+    monkeypatch.setattr(
+        _runtime,
+        "require_httpx",
+        lambda: type("FakeHttpx", (), {"AsyncClient": FakeAsyncClientContext}),
+    )
+    monkeypatch.setattr(steam_client, "async_get_json", fake_get)
+
+    result = asyncio.run(steam_client.lookup_itad_game_ids([10]))
+
+    assert result == {10: "itad-10"}
+    assert captured == [
+        (
+            "https://api.isthereanydeal.com/games/lookup/v1",
+            {"key": "secret-test-key", "appid": 10},
+        )
+    ]
+
+
+def test_itad_auth_failure_starts_one_service_cooldown(monkeypatch, isolated_runtime):
+    async def forbidden(*_args, **_kwargs):
+        raise FakeHttpError(403)
+
+    monkeypatch.setattr(_runtime, "ITAD_API_KEY", "rejected-key")
+    monkeypatch.setitem(_runtime.SERVICE_COOLDOWN_UNTIL, "itad", 0)
+    monkeypatch.setattr(
+        _runtime,
+        "require_httpx",
+        lambda: type("FakeHttpx", (), {"AsyncClient": FakeAsyncClientContext}),
+    )
+    monkeypatch.setattr(steam_client, "async_get_json", forbidden)
+
+    with pytest.raises(steam_client.ItadLookupBatchError, match="authentication rejected"):
+        asyncio.run(steam_client.lookup_itad_game_ids([10, 20]))
+
+    assert _runtime.service_cooldown_remaining_seconds("itad") > 3500

@@ -62,6 +62,11 @@ def test_systemd_services_are_separate_and_sandboxed():
         assert "ReadWritePaths=@@APP_DIR@@/data" in unit
 
 
+def test_deployment_restarts_application_processes_after_sync():
+    installer = (ROOT / "deploy/install_ubuntu.sh").read_text(encoding="utf-8")
+    assert "systemctl restart steam-kakabase-web.service steam-kakabase-crawler.service" in installer
+
+
 def test_offsite_upload_uses_scoped_remote_and_retention(tmp_path):
     module = _load_offsite_module()
     backup = tmp_path / "steamkb-daily.sqlite3"

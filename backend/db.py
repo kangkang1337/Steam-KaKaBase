@@ -562,18 +562,18 @@ def enqueue_crawl_tasks_in_conn(conn, appids, task_type, priority, next_attempt_
         ON CONFLICT(appid, task_type) DO UPDATE SET
             priority=MAX(crawl_tasks.priority, excluded.priority),
             status=CASE
-                WHEN crawl_tasks.status IN ('failed', 'permanent_failed', 'not_available') AND excluded.priority < 100 THEN crawl_tasks.status
+                WHEN crawl_tasks.status IN ('retry', 'failed', 'permanent_failed', 'not_available') AND excluded.priority < 100 THEN crawl_tasks.status
                 ELSE 'pending'
             END,
             next_attempt_at=CASE
-                WHEN crawl_tasks.status IN ('failed', 'permanent_failed', 'not_available') AND excluded.priority < 100 THEN crawl_tasks.next_attempt_at
+                WHEN crawl_tasks.status IN ('retry', 'failed', 'permanent_failed', 'not_available') AND excluded.priority < 100 THEN crawl_tasks.next_attempt_at
                 WHEN crawl_tasks.completed_at IS NOT NULL THEN excluded.next_attempt_at
                 WHEN crawl_tasks.next_attempt_at IS NULL THEN excluded.next_attempt_at
                 WHEN excluded.next_attempt_at < crawl_tasks.next_attempt_at THEN excluded.next_attempt_at
                 ELSE crawl_tasks.next_attempt_at
             END,
             completed_at=CASE
-                WHEN crawl_tasks.status IN ('failed', 'permanent_failed', 'not_available') AND excluded.priority < 100 THEN crawl_tasks.completed_at
+                WHEN crawl_tasks.status IN ('retry', 'failed', 'permanent_failed', 'not_available') AND excluded.priority < 100 THEN crawl_tasks.completed_at
                 ELSE NULL
             END,
             updated_at=excluded.updated_at,

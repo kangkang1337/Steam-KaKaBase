@@ -195,9 +195,13 @@ def run_review_task():
 
 
 async def fetch_itad_game_ids_async(appids):
-    from .steam_client import lookup_itad_game_ids
+    from .steam_client import ItadLookupBatchError, lookup_itad_game_ids
 
-    found = await lookup_itad_game_ids(appids)
+    try:
+        found = await lookup_itad_game_ids(appids)
+    except ItadLookupBatchError as exc:
+        runtime.save_itad_game_ids(exc.partial_results.items())
+        raise
     runtime.save_itad_game_ids(found.items())
     return found
 
@@ -240,7 +244,7 @@ def refresh_itad_history_lows(appids):
     except Exception as exc:
         sample = ",".join(str(appid) for appid in appids[:5])
         runtime.log_event(f"itad historylow failed appids={sample}: {exc}")
-        return None
+        raise
 
 
 def get_missing_historylow_appids(limit=None):
@@ -323,6 +327,10 @@ def run_historylow_task():
     except runtime.SteamRateLimited as exc:
         runtime.fail_crawl_tasks(appids, "historylow", exc, retry_minutes=10)
         raise
+    except runtime.ExternalDataUnavailable as exc:
+        runtime.fail_crawl_tasks(appids, "historylow", exc, retry_minutes=60)
+        runtime.log_event(f"itad historylow deferred: {exc}")
+        return False
     except Exception as exc:
         runtime.fail_crawl_tasks(appids, "historylow", exc)
         raise

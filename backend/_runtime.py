@@ -1339,14 +1339,11 @@ def cached_historical_low_match(current_cny, low_cny, source, discount_percent=0
 
 
 def itad_headers():
-    headers = {
+    return {
         "User-Agent": STEAM_USER_AGENT,
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
-    if ITAD_API_KEY:
-        headers["ITAD-API-Key"] = ITAD_API_KEY
-    return headers
 
 
 def save_itad_game_ids(rows):

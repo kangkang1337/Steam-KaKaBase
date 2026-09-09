@@ -902,23 +902,47 @@
         margin-left: auto;
       }
       .hot-row {
-        grid-template-columns: 74px minmax(0, 1fr) 70px 78px;
-        gap: 8px;
+        grid-template-columns: 72px minmax(52px, 1fr) auto auto;
+        grid-template-rows: auto auto;
+        gap: 6px 8px;
+        min-height: 76px;
+        padding: 9px 10px;
       }
       .hot-row img {
         width: 72px;
         height: 28px;
+        grid-column: 1;
+        grid-row: 1 / span 2;
+      }
+      .hot-title {
+        grid-column: 2 / -1;
+        grid-row: 1;
+        align-self: end;
+      }
+      .hot-meta {
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .hot-review {
+        grid-column: 2;
+        grid-row: 2;
+        min-width: 0;
+        text-align: left;
+        font-size: 11px;
       }
       .hot-players {
+        grid-column: 3;
+        grid-row: 2;
         text-align: right;
-        font-size: 12px;
+        font-size: 11px;
       }
       .hot-price {
         grid-column: 4;
         grid-row: 2;
-      }
-      .hot-title {
-        grid-row: 1 / span 2;
+        min-width: 58px;
+        max-width: 76px;
       }
       .stats {
         grid-template-columns: 1fr;

@@ -280,3 +280,40 @@ def test_search_results_scroll_inside_dropdown(browser, frontend_server):
         assert errors == []
     finally:
         page.close()
+
+
+def test_mobile_hot_rows_keep_columns_separate(browser, frontend_server):
+    page, _, errors = open_test_page(
+        browser, frontend_server, viewport={"width": 390, "height": 844}
+    )
+    try:
+        page.get_by_role("button", name="打开导航菜单").click()
+        page.locator(".app-menu").get_by_role("button", name="热门榜", exact=True).click()
+        expect(page.locator(".hot-row")).to_have_count(2)
+        layout = page.locator(".hot-row").first.evaluate(
+            """row => {
+              const box = selector => {
+                const rect = row.querySelector(selector).getBoundingClientRect();
+                return {left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom};
+              };
+              const rowRect = row.getBoundingClientRect();
+              return {
+                row: {left: rowRect.left, right: rowRect.right},
+                image: box('img'), title: box('.hot-title'), review: box('.hot-review'),
+                players: box('.hot-players'), price: box('.hot-price')
+              };
+            }"""
+        )
+        assert layout["image"]["right"] <= layout["title"]["left"]
+        assert layout["title"]["bottom"] <= layout["review"]["top"]
+        assert layout["review"]["right"] <= layout["players"]["left"]
+        assert layout["players"]["right"] <= layout["price"]["left"]
+        for key in ("image", "title", "review", "players", "price"):
+            assert layout["row"]["left"] <= layout[key]["left"]
+            assert layout[key]["right"] <= layout["row"]["right"]
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        )
+        assert errors == []
+    finally:
+        page.close()

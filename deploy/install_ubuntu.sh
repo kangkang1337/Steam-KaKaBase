@@ -116,7 +116,9 @@ rm -f /etc/nginx/sites-enabled/default
 
 nginx -t
 systemctl daemon-reload
-systemctl enable --now steam-kakabase-web.service steam-kakabase-crawler.service nginx.service
+systemctl enable steam-kakabase-web.service steam-kakabase-crawler.service
+systemctl restart steam-kakabase-web.service steam-kakabase-crawler.service
+systemctl enable --now nginx.service
 curl --fail --silent --show-error http://127.0.0.1:8765/ready >/dev/null
 
 ufw default deny incoming

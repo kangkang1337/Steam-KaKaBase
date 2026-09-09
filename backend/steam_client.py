@@ -27,6 +27,16 @@ cache_image = runtime.cache_image
 fetch_players_for_appids_async = runtime.fetch_players_for_appids_async
 
 
+class ItadLookupBatchError(ExternalDataUnavailable):
+    def __init__(self, message, partial_results=None):
+        super().__init__(message)
+        self.partial_results = dict(partial_results or {})
+
+
+def _http_status(exc):
+    return getattr(getattr(exc, "response", None), "status_code", None)
+
+
 def request_json(url, timeout=None, headers=None, missing_statuses=None, max_retries=None, service=None):
     timeout = runtime.STEAM_TIMEOUT_SECONDS if timeout is None else timeout
     service = service or runtime.external_service_for_url(url)
@@ -93,17 +103,26 @@ def request_json(url, timeout=None, headers=None, missing_statuses=None, max_ret
                 runtime.set_service_cooldown(service, 10)
                 raise SteamRateLimited(f"{service} HTTP 429", service)
             if exc.code not in runtime.STEAM_RETRY_STATUSES or attempt >= retries:
-                runtime.log_event(f"steam request failed status={exc.code} url={url}: {exc}")
+                runtime.log_event(
+                    f"steam request failed status={exc.code} url={runtime.safe_log_url(url)}"
+                )
                 raise
             runtime.log_event(
-                f"steam request retry status={exc.code} attempt={attempt + 1} url={url}"
+                f"steam request retry status={exc.code} attempt={attempt + 1} "
+                f"url={runtime.safe_log_url(url)}"
             )
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             last_exc = exc
             if attempt >= retries:
-                runtime.log_event(f"steam request failed url={url}: {exc}")
+                runtime.log_event(
+                    f"steam request failed url={runtime.safe_log_url(url)} "
+                    f"error={type(exc).__name__}"
+                )
                 raise
-            runtime.log_event(f"steam request retry attempt={attempt + 1} url={url}: {exc}")
+            runtime.log_event(
+                f"steam request retry attempt={attempt + 1} "
+                f"url={runtime.safe_log_url(url)} error={type(exc).__name__}"
+            )
         time.sleep(runtime.retry_delay(attempt))
     raise last_exc
 
@@ -166,7 +185,7 @@ async def async_get_json(client, semaphore, url, params=None):
             except SteamRateLimited:
                 raise
             except Exception as exc:
-                status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                status_code = _http_status(exc)
                 if status_code == 429:
                     runtime.set_service_cooldown(service, 10)
                     raise SteamRateLimited(f"{service} HTTP 429", service)
@@ -176,12 +195,12 @@ async def async_get_json(client, semaphore, url, params=None):
                 if not retryable or attempt >= runtime.STEAM_MAX_RETRIES:
                     runtime.log_event(
                         f"http async request failed status={status_code} "
-                        f"url={runtime.safe_log_url(url)}: {exc}"
+                        f"url={runtime.safe_log_url(url)} error={type(exc).__name__}"
                     )
                     raise
                 runtime.log_event(
                     f"http async request retry status={status_code} attempt={attempt + 1} "
-                    f"url={runtime.safe_log_url(url)}: {exc}"
+                    f"url={runtime.safe_log_url(url)} error={type(exc).__name__}"
                 )
                 await asyncio.sleep(runtime.retry_delay(attempt))
 
@@ -203,7 +222,7 @@ async def async_post_json(client, semaphore, url, params=None, json_body=None):
                 raise
             except Exception as exc:
                 last_exc = exc
-                status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                status_code = _http_status(exc)
                 if status_code == 429:
                     runtime.set_service_cooldown(service, 10)
                     raise SteamRateLimited(f"{service} HTTP 429", service)
@@ -213,12 +232,12 @@ async def async_post_json(client, semaphore, url, params=None, json_body=None):
                 if not retryable or attempt >= runtime.STEAM_MAX_RETRIES:
                     runtime.log_event(
                         f"itad async post failed status={status_code} "
-                        f"url={runtime.safe_log_url(url)}: {exc}"
+                        f"url={runtime.safe_log_url(url)} error={type(exc).__name__}"
                     )
                     raise
                 runtime.log_event(
                     f"itad async post retry status={status_code} attempt={attempt + 1} "
-                    f"url={runtime.safe_log_url(url)}: {exc}"
+                    f"url={runtime.safe_log_url(url)} error={type(exc).__name__}"
                 )
                 await asyncio.sleep(runtime.retry_delay(attempt))
         raise last_exc
@@ -239,21 +258,34 @@ async def lookup_itad_game_ids(appids):
         **runtime.steam_httpx_options(),
     ) as client:
         async def fetch_one(appid):
-            try:
-                payload = await async_get_json(client, semaphore, url, {"appid": int(appid)})
-                game = payload.get("game") if payload.get("found") else None
-                game_id = game.get("id") if isinstance(game, dict) else None
-                if not game_id:
-                    runtime.log_event(f"itad lookup unavailable appid={appid}")
-                    return int(appid), runtime.ITAD_MISSING_GAME_ID
-                return int(appid), game_id
-            except Exception as exc:
-                runtime.log_event(f"itad lookup skipped appid={appid}: {exc}")
-                return int(appid), None
+            payload = await async_get_json(
+                client,
+                semaphore,
+                url,
+                {"key": runtime.ITAD_API_KEY, "appid": int(appid)},
+            )
+            game = payload.get("game") if payload.get("found") else None
+            game_id = game.get("id") if isinstance(game, dict) else None
+            return int(appid), game_id or runtime.ITAD_MISSING_GAME_ID
 
-        for appid, game_id in await asyncio.gather(*(fetch_one(appid) for appid in appids)):
+        results = await asyncio.gather(
+            *(fetch_one(appid) for appid in appids), return_exceptions=True
+        )
+        failures = [result for result in results if isinstance(result, BaseException)]
+        for result in results:
+            if isinstance(result, BaseException):
+                continue
+            appid, game_id = result
             if game_id:
                 found[appid] = game_id
+        if failures:
+            statuses = {_http_status(exc) for exc in failures}
+            if statuses & {401, 403}:
+                runtime.set_service_cooldown("itad", 60)
+                message = "ITAD authentication rejected; check ITAD_API_KEY (HTTP 401/403)"
+            else:
+                message = f"ITAD lookup batch incomplete failed={len(failures)}"
+            raise ItadLookupBatchError(message, found)
     return found
 
 
@@ -275,10 +307,22 @@ async def fetch_itad_history_low_rows(gid_to_appid, countries, stamp):
             for gid_batch in runtime.chunks(list(gid_to_appid), 200):
                 try:
                     payload = await async_post_json(
-                        client, semaphore, url, {"country": country}, gid_batch
+                        client,
+                        semaphore,
+                        url,
+                        {"key": runtime.ITAD_API_KEY, "country": country},
+                        gid_batch,
                     )
                 except Exception as exc:
-                    runtime.log_event(f"itad historylow skipped country={country}: {exc}")
+                    if _http_status(exc) in {401, 403}:
+                        runtime.set_service_cooldown("itad", 60)
+                        raise ExternalDataUnavailable(
+                            "ITAD authentication rejected; check ITAD_API_KEY (HTTP 401/403)"
+                        ) from exc
+                    runtime.log_event(
+                        f"itad historylow skipped country={country} "
+                        f"error={type(exc).__name__}"
+                    )
                     continue
                 returned = {item.get("id"): item for item in (payload or [])}
                 for game_id in gid_batch:

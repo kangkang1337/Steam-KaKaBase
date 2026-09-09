@@ -65,6 +65,29 @@ def test_temporary_and_permanent_failures_are_distinct(isolated_runtime, insert_
     assert task_row(runtime, second, "reviews")[0] == "permanent_failed"
 
 
+def test_low_priority_enqueue_preserves_retry_schedule(isolated_runtime, insert_game):
+    runtime = isolated_runtime
+    appid = insert_game(103, "Retry Later")
+    runtime.enqueue_crawl_tasks([appid], "players", 20)
+    runtime.claim_crawl_tasks("players", 1)
+    runtime.fail_crawl_tasks([appid], "players", "timeout", retry_minutes=30)
+    with runtime.database_connection() as conn:
+        scheduled = conn.execute(
+            "SELECT next_attempt_at FROM crawl_tasks WHERE appid=? AND task_type='players'",
+            (appid,),
+        ).fetchone()[0]
+
+    runtime.enqueue_crawl_tasks([appid], "players", 20)
+
+    with runtime.database_connection() as conn:
+        row = conn.execute(
+            "SELECT status, next_attempt_at FROM crawl_tasks WHERE appid=? AND task_type='players'",
+            (appid,),
+        ).fetchone()
+    assert tuple(row) == ("retry", scheduled)
+    assert runtime.claim_crawl_tasks("players", 1) == []
+
+
 def test_empty_price_and_zero_reviews_record_freshness(isolated_runtime, insert_game):
     runtime = isolated_runtime
     appid = insert_game()

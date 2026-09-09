@@ -9,7 +9,14 @@ TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "${TEMP_DIR}"' EXIT
 
 APP_DIR=${TEMP_DIR}/app
-mkdir -p "${APP_DIR}/.venv/bin" "${APP_DIR}/data"
+mkdir -p \
+  "${APP_DIR}/.venv/bin" \
+  "${APP_DIR}/data" \
+  "${TEMP_DIR}/client_body" \
+  "${TEMP_DIR}/proxy" \
+  "${TEMP_DIR}/fastcgi" \
+  "${TEMP_DIR}/uwsgi" \
+  "${TEMP_DIR}/scgi"
 ln -s "$(command -v python3)" "${APP_DIR}/.venv/bin/python"
 touch "${APP_DIR}/.env" "${TEMP_DIR}/rclone.conf"
 
@@ -32,7 +39,9 @@ systemd-analyze verify \
   "${TEMP_DIR}/steam-kakabase-backup.service" \
   "${TEMP_DIR}/steam-kakabase-backup.timer"
 
-sed 's|@@DOMAIN@@|steam.example.com|g' \
+sed -e 's|@@DOMAIN@@|steam.example.com|g' \
+  -e 's|listen 80;|listen 18080;|g' \
+  -e 's|listen \[::\]:80;|listen [::]:18080;|g' \
   "${ROOT}/deploy/nginx/steam-kakabase.conf" > "${TEMP_DIR}/site.conf"
 
 cat > "${TEMP_DIR}/nginx.conf" <<EOF
@@ -41,6 +50,11 @@ error_log stderr;
 events {}
 http {
     access_log ${TEMP_DIR}/access.log;
+    client_body_temp_path ${TEMP_DIR}/client_body;
+    proxy_temp_path ${TEMP_DIR}/proxy;
+    fastcgi_temp_path ${TEMP_DIR}/fastcgi;
+    uwsgi_temp_path ${TEMP_DIR}/uwsgi;
+    scgi_temp_path ${TEMP_DIR}/scgi;
     proxy_headers_hash_max_size 1024;
     proxy_headers_hash_bucket_size 128;
     include /etc/nginx/mime.types;

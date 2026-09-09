@@ -362,3 +362,20 @@ def test_image_cache_retry_uses_a_cache_busting_cdn_url(api_client, insert_game)
 
     assert response.status_code == 302
     assert response.headers["location"] == f"{image_url}&_steamkb_retry=1"
+
+
+def test_image_cache_ignores_user_supplied_redirect_urls(api_client, insert_game):
+    runtime, client = api_client
+    appid = insert_game(732, "Trusted Header")
+    trusted_url = "https://cdn.akamai.steamstatic.com/steam/apps/732/header.jpg"
+    with runtime.database_connection() as conn:
+        conn.execute("UPDATE games SET header_image=? WHERE appid=?", (trusted_url, appid))
+
+    response = client.get(
+        "/api/image-cache",
+        params={"appid": appid, "url": "https://example.test/phishing"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == trusted_url

@@ -40,6 +40,9 @@ pid ${TEMP_DIR}/nginx.pid;
 error_log stderr;
 events {}
 http {
+    access_log ${TEMP_DIR}/access.log;
+    proxy_headers_hash_max_size 1024;
+    proxy_headers_hash_bucket_size 128;
     include /etc/nginx/mime.types;
     include ${ROOT}/deploy/nginx/steam-kakabase-rate-limits.conf;
     include ${TEMP_DIR}/site.conf;

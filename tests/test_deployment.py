@@ -36,6 +36,15 @@ def test_nginx_limits_public_search_and_admin_routes():
     assert "include proxy_params;" not in site
 
 
+def test_linux_nginx_validation_uses_writable_runtime_files():
+    validator = (ROOT / "deploy/validate_linux.sh").read_text(encoding="utf-8")
+    assert "pid ${TEMP_DIR}/nginx.pid;" in validator
+    assert "access_log ${TEMP_DIR}/access.log;" in validator
+    assert "error_log stderr;" in validator
+    assert "proxy_headers_hash_max_size 1024;" in validator
+    assert "proxy_headers_hash_bucket_size 128;" in validator
+
+
 def test_systemd_services_are_separate_and_sandboxed():
     web = (ROOT / "deploy/systemd/steam-kakabase-web.service").read_text(encoding="utf-8")
     crawler = (ROOT / "deploy/systemd/steam-kakabase-crawler.service").read_text(

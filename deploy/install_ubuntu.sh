@@ -119,7 +119,20 @@ systemctl daemon-reload
 systemctl enable steam-kakabase-web.service steam-kakabase-crawler.service
 systemctl restart steam-kakabase-web.service steam-kakabase-crawler.service
 systemctl enable --now nginx.service
-curl --fail --silent --show-error http://127.0.0.1:8765/ready >/dev/null
+
+ready=0
+for _attempt in $(seq 1 20); do
+  if curl --fail --silent --show-error http://127.0.0.1:8765/ready >/dev/null; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [[ ${ready} -ne 1 ]]; then
+  echo "Steam-KaKaBase web service did not become ready within 20 seconds." >&2
+  systemctl status steam-kakabase-web.service --no-pager >&2 || true
+  exit 1
+fi
 
 ufw default deny incoming
 ufw default allow outgoing

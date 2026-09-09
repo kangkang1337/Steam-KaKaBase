@@ -344,3 +344,15 @@ def test_image_cache_miss_redirects_without_downloading(api_client, monkeypatch)
 
     assert response.status_code == 302
     assert response.headers["location"] == image_url
+
+
+def test_image_cache_retry_uses_a_cache_busting_cdn_url(api_client):
+    _, client = api_client
+    image_url = "https://cdn.akamai.steamstatic.com/steam/apps/730/header.jpg?t=1"
+
+    response = client.get(
+        "/api/image-cache", params={"url": image_url, "retry": 1}, follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == f"{image_url}&_steamkb_retry=1"

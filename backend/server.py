@@ -133,13 +133,20 @@ def create_app():
         return _file_response(requested, max_age=max_age)
 
     @application.get("/api/image-cache")
-    def image_cache(url: str = Query(min_length=1, max_length=2048)):
+    def image_cache(
+        url: str = Query(min_length=1, max_length=2048),
+        retry: int = Query(default=0, ge=0, le=2),
+    ):
         try:
             image_path = services.cached_remote_image(url)
             if image_path:
                 return _file_response(image_path, max_age=604800)
             if services.is_allowed_image_url(url):
-                return RedirectResponse(url=url, status_code=302, headers={"Cache-Control": "no-store"})
+                redirect_url = url
+                if retry:
+                    separator = "&" if "?" in url else "?"
+                    redirect_url = f"{url}{separator}_steamkb_retry={retry}"
+                return RedirectResponse(url=redirect_url, status_code=302, headers={"Cache-Control": "no-store"})
             raise ValueError("unsupported image URL")
         except Exception as exc:
             log_event(f"image cache failed url={url}: {exc}")

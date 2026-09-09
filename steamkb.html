@@ -979,7 +979,7 @@
         <input v-model.trim="query" @focus="onSearchFocus" @blur="onSearchBlur" @input="queueSearch" placeholder="搜索 Steam 游戏" aria-label="搜索 Steam 游戏">
         <div v-if="dropdownItems.length" class="suggestions">
           <button class="suggestion" v-for="item in dropdownItems" :key="item.appid" @mousedown.prevent @click="openSuggestion(item)">
-            <img :src="cachedImage(item.tiny_image) || placeholderImage" alt="" loading="lazy" decoding="async">
+        <img :src="cachedImage(item.tiny_image) || placeholderImage" @error="retryImage" alt="" loading="lazy" decoding="async">
             <span class="suggestion-title">{{ displayGameName(item) }}</span>
             <span class="suggestion-meta">{{ item.current_players !== undefined ? formatPlayers(item.current_players) + ' 在线' : (item.tracked ? '已收藏' : '查看') }}</span>
           </button>
@@ -1020,7 +1020,7 @@
             <article class="pick-card">
               <div class="pick-label">今日史低</div>
               <template v-if="homePicks.historical_low">
-                <img class="pick-image" :src="cachedImage(homePicks.historical_low.header_image) || placeholderImage" alt="" loading="lazy" decoding="async">
+                <img class="pick-image" :src="cachedImage(homePicks.historical_low.header_image) || placeholderImage" @error="retryImage" alt="" loading="lazy" decoding="async">
                 <div class="pick-content">
                   <div class="pick-title">{{ displayGameName(homePicks.historical_low) }}</div>
                   <div class="pick-meta">
@@ -1040,7 +1040,7 @@
                 <div class="pick-refresh">{{ dailyRecommendationCountdown }}</div>
               </div>
               <template v-if="homePicks.niche">
-                <img class="pick-image" :src="cachedImage(homePicks.niche.header_image) || placeholderImage" alt="" loading="lazy" decoding="async">
+                <img class="pick-image" :src="cachedImage(homePicks.niche.header_image) || placeholderImage" @error="retryImage" alt="" loading="lazy" decoding="async">
                 <div class="pick-content">
                   <div class="pick-title">{{ displayGameName(homePicks.niche) }}</div>
                   <div class="pick-blurb">{{ dailyNicheBlurb(homePicks.niche) }}</div>
@@ -1075,7 +1075,7 @@
         </div>
         <div v-if="nicheGames.length" class="hot-list">
           <button v-for="game in nicheGames" :key="game.appid" class="hot-row" @click="selectGame(game.appid)">
-            <img :src="cachedImage(game.header_image) || placeholderImage" alt="" loading="lazy" decoding="async">
+            <img :src="cachedImage(game.header_image) || placeholderImage" @error="retryImage" alt="" loading="lazy" decoding="async">
             <span class="hot-title">
               <span class="hot-name"><span class="hot-rank">#{{ game.rank }}</span>{{ displayGameName(game) }}</span>
               <span class="hot-meta">峰值 {{ formatPlayers(game.peak_players) }} · 更新于 {{ localTime(game.fetched_at, true) }}</span>
@@ -1112,7 +1112,7 @@
         </div>
         <div v-if="filteredHotPageGames.length" class="hot-list">
           <button v-for="game in filteredHotPageGames" :key="game.appid" class="hot-row" @click="selectGame(game.appid)">
-            <img :src="cachedImage(game.header_image) || placeholderImage" alt="" loading="lazy" decoding="async">
+            <img :src="cachedImage(game.header_image) || placeholderImage" @error="retryImage" alt="" loading="lazy" decoding="async">
             <span class="hot-title">
               <span class="hot-name"><span class="hot-rank">#{{ game.rank }}</span>{{ displayGameName(game) }}</span>
               <span class="hot-meta">更新于 {{ localTime(game.fetched_at, true) }}</span>
@@ -1151,7 +1151,7 @@
 
       <section class="detail" v-if="selected">
         <article class="hero">
-          <img :src="cachedImage(selected.header_image) || placeholderImage" alt="" loading="eager" decoding="async">
+          <img :src="cachedImage(selected.header_image) || placeholderImage" @error="retryImage" alt="" loading="eager" decoding="async">
           <div class="hero-body">
             <div>
               <div class="hero-title-row">
@@ -1543,6 +1543,23 @@
         cachedImage(url) {
           if (!url || String(url).startsWith('data:')) return url || '';
           return `/api/image-cache?url=${encodeURIComponent(url)}`;
+        },
+        retryImage(event) {
+          const image = event?.target;
+          if (!image || image.dataset.imageFallback === 'true') return;
+          const attempts = Number(image.dataset.imageRetries || 0);
+          if (attempts >= 2) {
+            image.dataset.imageFallback = 'true';
+            image.src = this.placeholderImage;
+            return;
+          }
+          const original = image.dataset.imageOriginal || image.getAttribute('src') || image.src;
+          image.dataset.imageOriginal = original;
+          image.dataset.imageRetries = String(attempts + 1);
+          window.setTimeout(() => {
+            const separator = original.includes('?') ? '&' : '?';
+            image.src = `${original}${separator}retry=${attempts + 1}`;
+          }, attempts === 0 ? 5000 : 10000);
         },
         async api(path, options) {
           if (window.location.protocol === 'file:') {

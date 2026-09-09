@@ -256,7 +256,7 @@ def external_service_for_url(url):
         return "itad"
     if host == "store.steampowered.com":
         return "steam_store"
-    if host in ALLOWED_IMAGE_HOSTS or host.endswith("steamstatic.com"):
+    if host in ALLOWED_IMAGE_HOSTS or host == "steamstatic.com" or host.endswith(".steamstatic.com"):
         return "image_cdn"
     return "steam_api"
 

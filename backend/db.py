@@ -270,6 +270,25 @@ def query_catalog_game_stub(conn, appid):
     ).fetchone()
 
 
+def query_header_image_url(appid):
+    with transaction(rows=True) as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(NULLIF(TRIM(g.header_image), ''), NULLIF(TRIM(h.header_image), '')) AS header_image
+            FROM games g
+            LEFT JOIN hot_games h ON h.appid = g.appid
+            WHERE g.appid = ?
+            UNION ALL
+            SELECT NULLIF(TRIM(h.header_image), '') AS header_image
+            FROM hot_games h
+            WHERE h.appid = ? AND NOT EXISTS (SELECT 1 FROM games g WHERE g.appid = h.appid)
+            LIMIT 1
+            """,
+            (int(appid), int(appid)),
+        ).fetchone()
+    return row["header_image"] if row else None
+
+
 def query_tracked_games():
     with transaction(rows=True) as conn:
         return conn.execute(
@@ -808,7 +827,7 @@ __all__ = [
     "mark_crawl_tasks_not_available", "set_crawl_state", "transaction",
     "query_crawl_task_monitor", "recover_abandoned_crawl_tasks",
     "retire_obsolete_crawl_tasks",
-    "query_catalog_game_stub", "query_game_detail", "query_hot_games", "query_latest_prices_by_region",
+    "query_catalog_game_stub", "query_game_detail", "query_header_image_url", "query_hot_games", "query_latest_prices_by_region",
     "query_missing_historylow_appids", "query_search_index", "query_tracked_games",
     "query_popular_historical_low_rows", "read_home_snapshot_context",
     "query_daily_niche_snapshot", "query_home_snapshot", "query_tracked_appids",

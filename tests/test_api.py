@@ -173,7 +173,7 @@ def test_unsupported_image_redirect_is_rejected(api_client):
     _, client = api_client
     response = client.get(
         "/api/image-cache",
-        params={"url": "https://example.test/not-steam.jpg"},
+        params={"appid": 1, "url": "https://example.test/not-steam.jpg"},
         follow_redirects=False,
     )
     assert response.status_code == 400
@@ -329,29 +329,35 @@ def test_cache_only_pages_do_not_start_collection(api_client, monkeypatch):
     assert home_response.status_code == 200
 
 
-def test_image_cache_miss_redirects_without_downloading(api_client, monkeypatch):
+def test_image_cache_miss_redirects_without_downloading(api_client, insert_game, monkeypatch):
     runtime, client = api_client
     monkeypatch.setattr(
         runtime,
         "cache_image",
         lambda *_args, **_kwargs: pytest.fail("Web downloaded a CDN image"),
     )
+    appid = insert_game(730, "Cached Header")
     image_url = "https://cdn.akamai.steamstatic.com/steam/apps/730/header.jpg"
+    with runtime.database_connection() as conn:
+        conn.execute("UPDATE games SET header_image=? WHERE appid=?", (image_url, appid))
 
     response = client.get(
-        "/api/image-cache", params={"url": image_url}, follow_redirects=False
+        "/api/image-cache", params={"appid": appid}, follow_redirects=False
     )
 
     assert response.status_code == 302
     assert response.headers["location"] == image_url
 
 
-def test_image_cache_retry_uses_a_cache_busting_cdn_url(api_client):
-    _, client = api_client
+def test_image_cache_retry_uses_a_cache_busting_cdn_url(api_client, insert_game):
+    runtime, client = api_client
+    appid = insert_game(731, "Cached Header Retry")
     image_url = "https://cdn.akamai.steamstatic.com/steam/apps/730/header.jpg?t=1"
+    with runtime.database_connection() as conn:
+        conn.execute("UPDATE games SET header_image=? WHERE appid=?", (image_url, appid))
 
     response = client.get(
-        "/api/image-cache", params={"url": image_url, "retry": 1}, follow_redirects=False
+        "/api/image-cache", params={"appid": appid, "retry": 1}, follow_redirects=False
     )
 
     assert response.status_code == 302

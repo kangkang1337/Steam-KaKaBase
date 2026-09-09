@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import config, services
 from .db import init_db
@@ -83,6 +84,7 @@ def create_app():
             allow_headers=["Content-Type", "Authorization", "X-Admin-Token"],
             allow_credentials=False,
         )
+    application.mount("/assets", StaticFiles(directory=config.ROOT / "assets"), name="assets")
 
     @application.middleware("http")
     async def cache_policy(request, call_next):
@@ -123,33 +125,25 @@ def create_app():
     def favicon():
         return _file_response(config.ROOT / "assets" / "favicon.png", media_type="image/png")
 
-    @application.get("/assets/{asset_path:path}")
-    def asset(asset_path: str):
-        assets_root = (config.ROOT / "assets").resolve()
-        requested = (assets_root / asset_path).resolve()
-        if requested != assets_root and assets_root not in requested.parents:
-            raise HTTPException(status_code=404, detail="not found")
-        max_age = 31536000 if asset_path.startswith("vendor/") else 3600
-        return _file_response(requested, max_age=max_age)
-
     @application.get("/api/image-cache")
     def image_cache(
-        url: str = Query(min_length=1, max_length=2048),
+        appid: int = Query(ge=1),
         retry: int = Query(default=0, ge=0, le=2),
     ):
         try:
+            url = services.header_image_url(appid)
+            if not url:
+                raise ValueError("header image unavailable")
             image_path = services.cached_remote_image(url)
             if image_path:
                 return _file_response(image_path, max_age=604800)
-            if services.is_allowed_image_url(url):
-                redirect_url = url
-                if retry:
-                    separator = "&" if "?" in url else "?"
-                    redirect_url = f"{url}{separator}_steamkb_retry={retry}"
-                return RedirectResponse(url=redirect_url, status_code=302, headers={"Cache-Control": "no-store"})
-            raise ValueError("unsupported image URL")
+            redirect_url = url
+            if retry:
+                separator = "&" if "?" in url else "?"
+                redirect_url = f"{url}{separator}_steamkb_retry={retry}"
+            return RedirectResponse(url=redirect_url, status_code=302, headers={"Cache-Control": "no-store"})
         except Exception as exc:
-            log_event(f"image cache failed url={url}: {exc}")
+            log_event(f"image cache failed appid={appid}: {exc}")
             raise HTTPException(status_code=400, detail="unsupported image URL") from exc
 
     @application.get("/api/games")

@@ -10,6 +10,7 @@ from .db import (
     get_schema_version,
     enqueue_crawl_tasks,
     query_daily_niche_snapshot,
+    query_header_image_url,
     query_home_snapshot,
     query_popular_historical_low_rows,
     query_tracked_appids,
@@ -239,11 +240,19 @@ def cached_remote_image(url):
     if not is_allowed_image_url(url):
         raise ValueError("unsupported image host")
     parsed = urllib.parse.urlparse(url)
-    suffix = Path(parsed.path).suffix.lower()
-    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
-        suffix = ".img"
-    path = config.IMAGE_CACHE_DIR / (hashlib.sha256(url.encode("utf-8")).hexdigest() + suffix)
+    suffix = {
+        ".jpg": ".jpg", ".jpeg": ".jpeg", ".png": ".png", ".webp": ".webp", ".gif": ".gif",
+    }.get(Path(parsed.path).suffix.lower(), ".img")
+    cache_root = config.IMAGE_CACHE_DIR.resolve()
+    path = (cache_root / f"{hashlib.sha256(url.encode('utf-8')).hexdigest()}{suffix}").resolve()
+    if path.parent != cache_root:
+        raise ValueError("invalid cache path")
     return path if path.is_file() and path.stat().st_size > 0 else None
+
+
+def header_image_url(appid):
+    url = query_header_image_url(int(appid))
+    return str(url or "") if is_allowed_image_url(url) else ""
 
 
 def is_allowed_image_url(url):

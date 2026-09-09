@@ -18,5 +18,8 @@ def test_discount_card_does_not_hide_historical_low_note():
 
 def test_game_images_retry_before_using_the_local_placeholder():
     assert HTML.count('@error="retryImage"') == 6
+    assert "cachedImage(game)" in HTML
+    assert "/api/image-cache?appid=${appid}" in HTML
+    assert "cachedImage(url)" not in HTML
     assert "retryImage(event)" in HTML
     assert "attempts >= 2" in HTML

@@ -1,6 +1,7 @@
 """Validate inline JavaScript embedded in the single-page frontend."""
 
 import hashlib
+from html.parser import HTMLParser
 import re
 import subprocess
 import sys
@@ -13,6 +14,29 @@ VENDOR_FILES = {
     "assets/vendor/vue-3.5.13.global.prod.js": "c459ba7cc8db65c982589fa5d64c7ff478877e8e5b0fd75683207cec6a4e89e8",
     "assets/vendor/echarts-5.6.0.min.js": "bf4a223524e40b77c304bec67e1222cf551f14880cf42c69dc046558e11c07b1",
 }
+
+
+class InlineScriptExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.scripts = []
+        self._script_parts = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "script":
+            return
+        attributes = dict(attrs)
+        if "src" not in attributes:
+            self._script_parts = []
+
+    def handle_data(self, data):
+        if self._script_parts is not None:
+            self._script_parts.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "script" and self._script_parts is not None:
+            self.scripts.append("".join(self._script_parts))
+            self._script_parts = None
 
 
 def main():
@@ -30,8 +54,10 @@ def main():
         result = subprocess.run(["node", "--check", str(vendor_path)], cwd=ROOT)
         if result.returncode:
             return result.returncode
-    scripts = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", html, flags=re.IGNORECASE | re.DOTALL)
-    inline = [script for script in scripts if script.strip()]
+    extractor = InlineScriptExtractor()
+    extractor.feed(html)
+    extractor.close()
+    inline = [script for script in extractor.scripts if script.strip()]
     if not inline:
         print("No inline JavaScript found.", file=sys.stderr)
         return 1

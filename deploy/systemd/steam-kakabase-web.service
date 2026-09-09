@@ -1,0 +1,31 @@
+[Unit]
+Description=Steam-KaKaBase FastAPI web service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@APP_USER@@
+Group=@@APP_USER@@
+WorkingDirectory=@@APP_DIR@@
+EnvironmentFile=@@APP_DIR@@/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@@APP_DIR@@/.venv/bin/python -m backend.main
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=@@APP_DIR@@/data
+
+[Install]
+WantedBy=multi-user.target

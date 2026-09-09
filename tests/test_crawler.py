@@ -76,3 +76,15 @@ def test_failed_itad_refresh_preserves_cached_low(isolated_runtime, monkeypatch,
             (appid,),
         ).fetchone()
     assert tuple(cached) == (12.0, stamp)
+
+
+def test_daily_backup_runs_once_per_day(isolated_runtime):
+    runtime = isolated_runtime
+    assert crawler.run_daily_backup_task() is True
+    assert crawler.run_daily_backup_task() is False
+    backups = list(
+        runtime.DB_MIGRATION_BACKUP_DIR.glob(f"{runtime.DB_PATH.stem}-daily-*.sqlite3")
+    )
+    assert len(backups) == 1
+    with runtime.database_connection() as conn:
+        assert runtime.get_crawl_state(conn, "daily_database_backup_at")

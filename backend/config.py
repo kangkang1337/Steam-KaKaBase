@@ -58,6 +58,10 @@ def env_bool(name, default=False, *, fallback=None):
     raise ValueError(f"{name} must be true or false, got {raw!r}")
 
 
+def env_list(name, default=""):
+    return tuple(value.strip() for value in os.getenv(name, default).split(",") if value.strip())
+
+
 load_dotenv()
 
 DATA_DIR = ROOT / "data"
@@ -66,8 +70,16 @@ DB_PATH = Path(os.getenv("STEAMKB_DB", str(DATA_DIR / "steamkb.sqlite3")))
 LOG_PATH = Path(os.getenv("STEAMKB_LOG", str(DATA_DIR / "steamkb.log")))
 DB_MIGRATION_BACKUP_DIR = Path(os.getenv("STEAMKB_DB_BACKUP_DIR", str(DB_PATH.parent / "backups")))
 DB_MIGRATION_BACKUP_KEEP = env_int("STEAMKB_DB_BACKUP_KEEP", 10, minimum=1)
+DB_DAILY_BACKUP_ENABLED = env_bool("STEAMKB_DAILY_BACKUP_ENABLED", True)
+DB_DAILY_BACKUP_KEEP = env_int("STEAMKB_DAILY_BACKUP_KEEP", 14, minimum=1, maximum=90)
 DB_TIMEOUT_SECONDS = 30
 
+ENVIRONMENT = os.getenv("STEAMKB_ENV", "development").strip().lower()
+IS_PRODUCTION = ENVIRONMENT == "production"
+ADMIN_TOKEN = os.getenv("STEAMKB_ADMIN_TOKEN", "").strip()
+CORS_ALLOWED_ORIGINS = env_list("STEAMKB_CORS_ALLOWED_ORIGINS")
+ALLOWED_HOSTS = env_list("STEAMKB_ALLOWED_HOSTS")
+HOST = os.getenv("STEAMKB_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = env_int("STEAMKB_PORT", 8765, minimum=1, maximum=65535)
 PLAYER_REFRESH_MINUTES = env_int("STEAMKB_PLAYER_REFRESH_MINUTES", 30, minimum=30)
 PRICE_REFRESH_HOURS = env_int("STEAMKB_PRICE_REFRESH_HOURS", 24, minimum=24)

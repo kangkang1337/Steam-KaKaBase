@@ -3679,14 +3679,42 @@ def get_game_payload(appid, history_limit=500):
     history_limit = normalized_history_limit(history_limit)
     with database_connection() as conn:
         conn.row_factory = sqlite3.Row
-        from .db import query_game_detail
+        from .db import query_catalog_game_stub, query_game_detail
 
         detail = query_game_detail(conn, appid, history_limit)
         if not detail:
-            ensure_game_from_catalog(conn, appid)
-            detail = query_game_detail(conn, appid, history_limit)
-        if not detail:
-            return None
+            catalog_game = query_catalog_game_stub(conn, appid)
+            if not catalog_game or catalog_game["app_type"] not in ("unknown", "game"):
+                return None
+            if catalog_game["app_type"] == "unknown" and is_obvious_non_game_name(catalog_game["name"]):
+                return None
+            display_name = clean_hot_name(catalog_game["name"]) or fallback_game_name(appid)
+            return {
+                "game": {
+                    "appid": int(appid),
+                    "name": display_name,
+                    "header_image": f"https://cdn.akamai.steamstatic.com/steam/apps/{int(appid)}/header.jpg",
+                    "short_description": None,
+                    "developer": None,
+                    "publisher": None,
+                    "release_date": None,
+                    "is_free": False,
+                    "updated_at": catalog_game["updated_at"],
+                    "tracked": False,
+                    "site_peak_players": None,
+                    "site_peak_recorded_since": None,
+                },
+                "prices": [],
+                "priceHistory": [],
+                "players": [],
+                "reviews": None,
+                "refresh_pending": False,
+                "data_incomplete": True,
+                "pending_fields": ["prices", "players", "reviews", "metadata"],
+                "refresh_started": False,
+                "queued_tasks": 0,
+                "retry_after_seconds": service_cooldown_remaining_seconds("steam_store"),
+            }
         prices = [clean_price(row) for row in detail["prices"]]
         price_history = detail["price_history"]
         players = detail["players"]
@@ -3704,39 +3732,17 @@ def get_game_payload(appid, history_limit=500):
             missing_fields.append("reviews")
         if not game_payload.get("short_description"):
             missing_fields.append("metadata")
-        queued_tasks = 0
-        if missing_fields:
-            if "players" in missing_fields:
-                enqueue_crawl_task_once_in_conn(conn, appid, "players", 100)
-                queued_tasks += 1
-            if "prices" in missing_fields:
-                enqueue_crawl_task_once_in_conn(conn, appid, "preview", 100)
-                queued_tasks += 1
-            if "reviews" in missing_fields:
-                enqueue_crawl_task_once_in_conn(conn, appid, "reviews", 100)
-                queued_tasks += 1
-            if "metadata" in missing_fields:
-                enqueue_crawl_task_once_in_conn(conn, appid, "metadata", 100)
-                queued_tasks += 1
-            conn.commit()
-        historylow_stale = is_due(
-            detail.get("historical_low_fetched_at"),
-            ITAD_HISTORYLOW_REFRESH_DAYS * 24 * 60,
-        )
-        if not detail["has_historical_low"] or historylow_stale:
-            enqueue_crawl_task_once_in_conn(conn, appid, "historylow", 100)
-            queued_tasks += 1
-            conn.commit()
         return {
             "game": game_payload,
             "prices": prices,
             "priceHistory": [clean_price(row) for row in price_history],
             "players": [clean_player(row) for row in players],
             "reviews": clean_review(reviews),
-            "refresh_pending": bool(missing_fields),
+            "refresh_pending": False,
+            "data_incomplete": bool(missing_fields),
             "pending_fields": missing_fields,
             "refresh_started": False,
-            "queued_tasks": queued_tasks,
+            "queued_tasks": 0,
             "retry_after_seconds": service_cooldown_remaining_seconds("steam_store"),
         }
 

@@ -137,3 +137,21 @@ def test_backup_retention_keeps_configured_count(tmp_path):
         migrations.create_database_backup(database, backup_dir, label=f"manual-{index}", keep=2)
 
     assert len(list(backup_dir.glob("*.sqlite3"))) == 2
+
+
+def test_daily_backup_retention_does_not_remove_manual_backup(tmp_path):
+    database = tmp_path / "retention-by-kind.sqlite3"
+    backup_dir = tmp_path / "backups"
+    with sqlite3.connect(database) as conn:
+        conn.execute("CREATE TABLE marker(value TEXT)")
+    migrations.create_database_backup(database, backup_dir, label="manual", keep=10)
+    for _ in range(3):
+        migrations.create_database_backup(
+            database,
+            backup_dir,
+            label="daily",
+            keep=2,
+            retention_label="daily",
+        )
+    assert len(list(backup_dir.glob("*-daily-*.sqlite3"))) == 2
+    assert len(list(backup_dir.glob("*-manual-*.sqlite3"))) == 1

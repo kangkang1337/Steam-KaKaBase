@@ -4,7 +4,7 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import services
+from backend import config, services
 from backend.server import create_app
 
 
@@ -27,7 +27,9 @@ def test_status_endpoint(api_client):
     response = client.get("/api/status", headers={"Origin": "http://localhost:8765"})
     payload = response.json()
     assert response.status_code == 200
-    assert response.headers["Access-Control-Allow-Origin"] == "*"
+    assert "Access-Control-Allow-Origin" not in response.headers
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Cache-Control"] == "no-store"
     assert "steam_cooldown_remaining_seconds" in payload
     assert "direct_cooldown_remaining_seconds" in payload
@@ -103,7 +105,8 @@ def test_detail_poll_does_not_revive_completed_missing_tasks(api_client, insert_
     second = client.get(f"/api/games/{appid}").json()
 
     assert first["pending_fields"] == ["prices", "players", "reviews", "metadata"]
-    assert second["refresh_pending"] is True
+    assert second["refresh_pending"] is False
+    assert second["data_incomplete"] is True
     with runtime.database_connection() as conn:
         task = conn.execute(
             "SELECT status, attempts, completed_at FROM crawl_tasks WHERE appid=? AND task_type='preview'",
@@ -177,7 +180,7 @@ def test_unsupported_image_redirect_is_rejected(api_client):
     assert "location" not in response.headers
 
 
-def test_web_detail_only_enqueues_missing_data(api_client, insert_game, monkeypatch):
+def test_web_detail_is_strictly_read_only(api_client, insert_game, monkeypatch):
     runtime, client = api_client
     appid = insert_game(8801, "Queue Only")
     monkeypatch.setattr(
@@ -195,15 +198,100 @@ def test_web_detail_only_enqueues_missing_data(api_client, insert_game, monkeypa
 
     assert response.status_code == 200
     assert response.json()["refresh_started"] is False
+    assert response.json()["data_incomplete"] is True
     with runtime.database_connection() as conn:
-        task_types = {
-            row[0]
-            for row in conn.execute(
-                "SELECT task_type FROM crawl_tasks WHERE appid=? AND status='pending'",
-                (appid,),
-            ).fetchall()
-        }
-    assert task_types == {"players", "preview", "reviews", "metadata", "historylow"}
+        task_count = conn.execute(
+            "SELECT COUNT(*) FROM crawl_tasks WHERE appid=?", (appid,)
+        ).fetchone()[0]
+    assert task_count == 0
+
+
+def test_catalog_detail_stub_does_not_materialize_or_enqueue(api_client):
+    runtime, client = api_client
+    with runtime.database_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO steam_catalog(appid, name, app_type, updated_at)
+            VALUES (8810, 'Catalog Only', 'game', ?)
+            """,
+            (runtime.now_iso(),),
+        )
+
+    response = client.get("/api/games/8810")
+
+    assert response.status_code == 200
+    assert response.json()["game"]["name"] == "Catalog Only"
+    assert response.json()["data_incomplete"] is True
+    with runtime.database_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM games WHERE appid=8810").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM crawl_tasks WHERE appid=8810").fetchone()[0] == 0
+
+
+def test_admin_token_protects_write_routes(isolated_runtime, monkeypatch):
+    token = "a" * 32
+    monkeypatch.setattr(config, "ADMIN_TOKEN", token)
+    with TestClient(create_app()) as client:
+        assert client.post("/api/track", json={"appid": 730}).status_code == 401
+        assert client.post(
+            "/api/track",
+            json={"appid": 730},
+            headers={"Authorization": "Bearer wrong"},
+        ).status_code == 401
+        response = client.post(
+            "/api/track",
+            json={"appid": 730, "name": "Counter-Strike 2"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+
+
+def test_production_requires_strong_admin_token(monkeypatch):
+    monkeypatch.setattr(config, "IS_PRODUCTION", True)
+    monkeypatch.setattr(config, "ENVIRONMENT", "production")
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "")
+    with pytest.raises(RuntimeError, match="at least 32 characters"):
+        create_app()
+
+
+def test_production_rejects_wildcard_cors(monkeypatch):
+    monkeypatch.setattr(config, "IS_PRODUCTION", True)
+    monkeypatch.setattr(config, "ENVIRONMENT", "production")
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "a" * 32)
+    monkeypatch.setattr(config, "CORS_ALLOWED_ORIGINS", ("*",))
+    with pytest.raises(RuntimeError, match="wildcard CORS"):
+        create_app()
+
+
+def test_production_disables_api_documentation(isolated_runtime, monkeypatch):
+    monkeypatch.setattr(config, "IS_PRODUCTION", True)
+    monkeypatch.setattr(config, "ENVIRONMENT", "production")
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "a" * 32)
+    monkeypatch.setattr(config, "CORS_ALLOWED_ORIGINS", ())
+    with TestClient(create_app()) as client:
+        assert client.get("/docs").status_code == 404
+        assert client.get("/openapi.json").status_code == 404
+
+
+def test_cors_only_allows_configured_origin(isolated_runtime, monkeypatch):
+    monkeypatch.setattr(config, "CORS_ALLOWED_ORIGINS", ("https://steam.example",))
+    with TestClient(create_app()) as client:
+        allowed = client.get("/health", headers={"Origin": "https://steam.example"})
+        denied = client.get("/health", headers={"Origin": "https://evil.example"})
+    assert allowed.headers["Access-Control-Allow-Origin"] == "https://steam.example"
+    assert "Access-Control-Allow-Origin" not in denied.headers
+
+
+def test_unhandled_exception_is_not_exposed(isolated_runtime, monkeypatch):
+    monkeypatch.setattr(
+        services,
+        "list_games",
+        lambda: (_ for _ in ()).throw(RuntimeError("/secret/path database failure")),
+    )
+    with TestClient(create_app(), raise_server_exceptions=False) as client:
+        response = client.get("/api/games")
+    assert response.status_code == 500
+    assert response.json() == {"error": "Internal server error"}
+    assert "/secret/path" not in response.text
 
 
 def test_web_refresh_endpoints_only_enqueue_tasks(api_client, insert_game):
@@ -236,11 +324,8 @@ def test_cache_only_pages_do_not_start_collection(api_client, monkeypatch):
         lambda *_args, **_kwargs: pytest.fail("Web created a homepage snapshot"),
     )
 
-    ensure_response = client.get("/api/hot-games/ensure?target=100")
     home_response = client.get("/api/home-picks")
 
-    assert ensure_response.status_code == 200
-    assert ensure_response.json()["cache_only"] is True
     assert home_response.status_code == 200
 
 

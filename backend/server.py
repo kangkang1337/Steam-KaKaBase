@@ -1,11 +1,13 @@
 """FastAPI transport layer; business operations live in services."""
 
 import mimetypes
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from . import config, services
@@ -24,8 +26,39 @@ def _file_response(path: Path, *, media_type=None, max_age=3600):
     )
 
 
+def _validate_security_config():
+    if config.ENVIRONMENT not in {"development", "test", "production"}:
+        raise RuntimeError("STEAMKB_ENV must be development, test, or production")
+    if config.IS_PRODUCTION and len(config.ADMIN_TOKEN) < 32:
+        raise RuntimeError("STEAMKB_ADMIN_TOKEN must contain at least 32 characters in production")
+    if config.IS_PRODUCTION and "*" in config.CORS_ALLOWED_ORIGINS:
+        raise RuntimeError("wildcard CORS is not allowed in production")
+
+
+def _admin_token_from_request(request: Request):
+    authorization = request.headers.get("Authorization", "")
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return request.headers.get("X-Admin-Token", "").strip()
+
+
+def require_admin(request: Request):
+    """Protect server-wide mutations without ever exposing the token to JavaScript."""
+    if not config.ADMIN_TOKEN and not config.IS_PRODUCTION:
+        return
+    supplied = _admin_token_from_request(request)
+    if not supplied or not secrets.compare_digest(supplied, config.ADMIN_TOKEN):
+        raise HTTPException(
+            status_code=401,
+            detail="administrator authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 def create_app():
     """Build the cache-only web application."""
+
+    _validate_security_config()
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -36,25 +69,38 @@ def create_app():
         title="Steam-KaKaBase API",
         version=config.APP_VERSION,
         lifespan=lifespan,
+        docs_url=None if config.IS_PRODUCTION else "/docs",
+        redoc_url=None if config.IS_PRODUCTION else "/redoc",
+        openapi_url=None if config.IS_PRODUCTION else "/openapi.json",
     )
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type"],
-    )
+    if config.ALLOWED_HOSTS:
+        application.add_middleware(TrustedHostMiddleware, allowed_hosts=list(config.ALLOWED_HOSTS))
+    if config.CORS_ALLOWED_ORIGINS:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(config.CORS_ALLOWED_ORIGINS),
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Content-Type", "Authorization", "X-Admin-Token"],
+            allow_credentials=False,
+        )
 
     @application.middleware("http")
     async def cache_policy(request, call_next):
         response = await call_next(request)
         if request.url.path.startswith("/api/") or request.url.path in {"/", "/steamkb.html", "/health", "/ready"}:
             response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "same-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if config.IS_PRODUCTION and request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
     @application.exception_handler(Exception)
     async def unhandled_exception(request, exc):
         log_event(f"http request failed path={request.url.path}: {exc}")
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse({"error": "Internal server error"}, status_code=500)
 
     @application.get("/health")
     def health():
@@ -83,7 +129,8 @@ def create_app():
         requested = (assets_root / asset_path).resolve()
         if requested != assets_root and assets_root not in requested.parents:
             raise HTTPException(status_code=404, detail="not found")
-        return _file_response(requested)
+        max_age = 31536000 if asset_path.startswith("vendor/") else 3600
+        return _file_response(requested, max_age=max_age)
 
     @application.get("/api/image-cache")
     def image_cache(url: str = Query(min_length=1, max_length=2048)):
@@ -119,10 +166,6 @@ def create_app():
     def hot_games_version():
         return services.hot_games_version()
 
-    @application.get("/api/hot-games/ensure")
-    def ensure_hot_games(target: int = Query(default=100, ge=1)):
-        return services.ensure_hot_games(target)
-
     @application.get("/api/niche-pool")
     def niche_pool():
         return services.list_niche_pool()
@@ -133,7 +176,19 @@ def create_app():
 
     @application.get("/api/status")
     def status():
-        return services.get_status()
+        payload = services.get_status()
+        payload["browser_write_actions_enabled"] = not bool(config.ADMIN_TOKEN)
+        if config.IS_PRODUCTION:
+            payload.pop("last_errors", None)
+            payload.pop("hot_last_errors", None)
+            crawler = payload.get("crawler") or {}
+            crawler.pop("pid", None)
+            crawler.pop("hostname", None)
+            crawler.pop("last_error", None)
+            proxy = payload.get("proxy") or {}
+            if str(proxy.get("message") or "").startswith("代理回退失败"):
+                proxy["message"] = "代理回退暂不可用"
+        return payload
 
     @application.get("/api/search")
     def search(
@@ -144,19 +199,19 @@ def create_app():
         return services.search(q.strip(), limit, offset)
 
     @application.post("/api/track")
-    def track(body: TrackRequest):
+    def track(body: TrackRequest, _admin=Depends(require_admin)):
         return services.track_game(body.appid, body.name, body.header_image or body.tiny_image)
 
     @application.post("/api/untrack")
-    def untrack(body: UntrackRequest):
+    def untrack(body: UntrackRequest, _admin=Depends(require_admin)):
         return services.untrack_game(body.appid)
 
     @application.post("/api/refresh-all")
-    def refresh_all():
+    def refresh_all(_admin=Depends(require_admin)):
         return services.refresh_all()
 
     @application.post("/api/games/{appid}/refresh")
-    def refresh_game(appid: int):
+    def refresh_game(appid: int, _admin=Depends(require_admin)):
         if appid <= 0:
             raise HTTPException(status_code=422, detail="invalid appid")
         return services.refresh_game(appid)

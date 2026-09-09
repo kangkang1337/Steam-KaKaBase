@@ -23,18 +23,6 @@ def list_games():
     return _runtime.list_games()
 
 
-def ensure_hot_games(target):
-    target = min(max(100, int(target)), _runtime.HOTLIST_TARGET)
-    hot_count = _runtime.count_hot_games()
-    return {
-        "queued": False,
-        "count": hot_count,
-        "target": target,
-        "preview_queued": 0,
-        "cache_only": True,
-    }
-
-
 def list_hot_games(limit):
     requested = min(max(1, int(limit)), _runtime.HOTLIST_TARGET)
     return {

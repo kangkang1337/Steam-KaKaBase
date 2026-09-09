@@ -263,6 +263,13 @@ def query_game_detail(conn, appid, history_limit):
     }
 
 
+def query_catalog_game_stub(conn, appid):
+    return conn.execute(
+        "SELECT appid, name, app_type, updated_at FROM steam_catalog WHERE appid = ?",
+        (int(appid),),
+    ).fetchone()
+
+
 def query_tracked_games():
     with transaction(rows=True) as conn:
         return conn.execute(
@@ -801,7 +808,7 @@ __all__ = [
     "mark_crawl_tasks_not_available", "set_crawl_state", "transaction",
     "query_crawl_task_monitor", "recover_abandoned_crawl_tasks",
     "retire_obsolete_crawl_tasks",
-    "query_game_detail", "query_hot_games", "query_latest_prices_by_region",
+    "query_catalog_game_stub", "query_game_detail", "query_hot_games", "query_latest_prices_by_region",
     "query_missing_historylow_appids", "query_search_index", "query_tracked_games",
     "query_popular_historical_low_rows", "read_home_snapshot_context",
     "query_daily_niche_snapshot", "query_home_snapshot", "query_tracked_appids",

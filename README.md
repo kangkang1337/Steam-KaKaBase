@@ -91,7 +91,9 @@ backend/
 
 Web 入口为 `python -m backend.main`，采集入口为 `python -m backend.crawler_main`。`python steamkb.py` 作为兼容 Web 入口保留。`start.ps1` 会启动并监控两个独立进程；业务配置统一由 `.env` 和 `backend/config.py` 解析。新增后端代码应优先通过公开模块调用，不应继续扩大 `_runtime.py`。
 
-API 由 FastAPI 提供，并包含 `/health`、`/ready` 和自动生成的 `/docs`。Web 请求不会访问 Steam、ITAD 或下载 CDN 图片：详情与手动刷新只向 SQLite 投递任务，crawler 独立消费。SQLite 中的进程租约确保同一数据库同一时刻只有一个 crawler。
+API 由 FastAPI 提供，并包含 `/health`、`/ready`；开发环境提供 `/docs`，生产环境会关闭 API 文档。所有 GET 页面和 API 都严格读取缓存，不会写数据库、投递任务、访问 Steam/ITAD 或下载 CDN 图片。受管理员令牌保护的 POST 只向 SQLite 投递任务，crawler 独立消费。SQLite 中的进程租约确保同一数据库同一时刻只有一个 crawler。
+
+Vue 3.5.13 与 ECharts 5.6.0 使用固定版本并存放在 `assets/vendor/`，生产页面不依赖公共 JavaScript CDN。校验脚本会核对文件 SHA-256，防止依赖文件被意外替换。
 
 `/api/status` 可查看 crawler PID、心跳年龄、租约剩余时间、任务积压、到期任务、重试与永久失败数量、最近一次崩溃恢复、各外部服务本次进程触发的限流冷却次数，以及 SQLite/WAL/日志文件大小。crawler 获得租约后会立即把旧进程遗留的 `running` 任务放回重试队列，并终止已经落后于当前热门榜代际的低优先级任务；用户点击产生的优先级 100 任务不会被该清理影响。
 
@@ -178,6 +180,11 @@ Copy-Item .env.example .env
 | --- | --- | --- |
 | `STEAM_API_KEY` | 空 | Steam AppList 使用的 Web API Key |
 | `ITAD_API_KEY` | 空 | ITAD lookup 和 historylow API Key |
+| `STEAMKB_ENV` | `development` | 运行环境；公网部署必须设置为 `production` |
+| `STEAMKB_HOST` | `127.0.0.1` | Web 监听地址；使用同机 Nginx 时保持本地监听 |
+| `STEAMKB_ADMIN_TOKEN` | 空 | 写接口管理令牌；生产环境至少 32 个字符，否则拒绝启动 |
+| `STEAMKB_CORS_ALLOWED_ORIGINS` | 空 | 允许跨域的完整 Origin，多个值用逗号分隔；同域部署留空 |
+| `STEAMKB_ALLOWED_HOSTS` | 空 | 允许的 Host 名称，多个值用逗号分隔 |
 | `STEAMKB_PORT` | `8765` | 本地 HTTP 端口 |
 | `STEAMKB_CRAWLER_LEASE_SECONDS` | `120` | crawler 单实例租约有效期 |
 | `STEAMKB_CRAWLER_HEARTBEAT_SECONDS` | `20` | crawler 续租和状态心跳间隔 |
@@ -186,6 +193,10 @@ Copy-Item .env.example .env
 | `STEAMKB_LOG` | `data/steamkb.log` | 日志路径 |
 | `STEAMKB_DB_BACKUP_DIR` | `data/backups` | 迁移前备份和手动备份目录 |
 | `STEAMKB_DB_BACKUP_KEEP` | `10` | 自动保留的最近数据库备份数量 |
+| `STEAMKB_DAILY_BACKUP_ENABLED` | `true` | crawler 是否每 24 小时创建一致性 SQLite 备份 |
+| `STEAMKB_DAILY_BACKUP_KEEP` | `14` | 每日备份保留份数，不影响手动和迁移备份 |
+| `STEAMKB_OFFSITE_REMOTE` | 空 | rclone 异地备份目标，例如 `vultr:bucket/steam-kakabase` |
+| `STEAMKB_OFFSITE_RETENTION_DAYS` | `30` | 异地 SQLite 备份保留天数 |
 | `STEAMKB_PLAYER_REFRESH_MINUTES` | `30` | 在线人数刷新间隔，最小 30 分钟 |
 | `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 价格刷新间隔，最小 24 小时 |
 | `STEAMKB_HOTLIST_TARGET` | `100` | 本地热门榜目标数量 |
@@ -221,7 +232,36 @@ STEAMKB_PROXY_URL=http://127.0.0.1:7890
 
 SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v6 增加 `process_leases` 作为跨进程单实例锁。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
 
-迁移中任意一步失败时，事务会整体回滚，服务停止启动，并在错误中给出升级前备份路径。默认保留最近 10 份自动或手动备份，数据库和备份文件均被 Git 忽略。
+迁移中任意一步失败时，事务会整体回滚，服务停止启动，并在错误中给出升级前备份路径。crawler 还会使用 SQLite Backup API 每 24 小时在线创建一次 `daily` 备份，默认保留 14 份；每日备份、手动备份和迁移备份分别轮转，不会互相删除。数据库和备份文件均被 Git 忽略。
+
+## 生产安全配置
+
+建议让 Uvicorn 只监听 `127.0.0.1`，由同机 Nginx 提供 HTTPS 和公网入口。生成管理令牌：
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+生产环境至少配置：
+
+```env
+STEAMKB_ENV=production
+STEAMKB_HOST=127.0.0.1
+STEAMKB_ADMIN_TOKEN=替换为生成的随机令牌
+STEAMKB_ALLOWED_HOSTS=steam.example.com,127.0.0.1,localhost
+STEAMKB_CORS_ALLOWED_ORIGINS=
+```
+
+前后端同域时 CORS 应保持为空。只有前端确实部署在另一个域名时，才填写类似 `https://www.example.com` 的完整 Origin，不能在生产环境使用 `*`。生产环境会隐藏收藏按钮，因为收藏当前是服务器全局写操作；管理员可通过 API 管理：
+
+```bash
+curl -X POST https://steam.example.com/api/games/730/refresh \
+  -H "Authorization: Bearer $STEAMKB_ADMIN_TOKEN"
+```
+
+未捕获异常只向浏览器返回通用 500 信息，完整异常写入服务端日志。生产状态接口也会移除 crawler PID、主机名和内部错误原文。
+
+Ubuntu 24.04 的 Nginx、HTTPS、systemd、UFW、SSH 加固和 rclone 部署步骤见 [`deploy/README.md`](deploy/README.md)。安装脚本会在修改配置后依次执行健康检查；没有已验证的非 root SSH 公钥时会拒绝关闭密码和 root 登录。
 
 常用维护命令：
 
@@ -292,14 +332,14 @@ GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
 | `GET` | `/api/search?q=...&limit=12&offset=0` | 分页搜索本地 FTS 索引，不等待 Steam |
 | `GET` | `/api/hot-games?limit=100` | 读取本地热门榜缓存 |
 | `GET` | `/api/hot-games/version` | 热门榜缓存版本 |
-| `GET` | `/api/hot-games/ensure` | 仅投递热门榜后台刷新 |
 | `GET` | `/api/niche-pool` | 小众池展示数据 |
 | `GET` | `/api/home-picks` | 首页三项每日快照 |
 | `POST` | `/api/track` | 收藏游戏 |
 | `POST` | `/api/untrack` | 取消收藏 |
 | `POST` | `/api/games/{appid}/refresh` | 提升并刷新指定游戏 |
+| `POST` | `/api/refresh-all` | 刷新全部服务器收藏 |
 
-`/api/hot-games` 和普通页面访问只读取已有缓存，不应隐式等待大量 Steam 请求。
+所有 POST 接口均要求管理令牌（开发模式且未配置令牌时除外）。`/api/hot-games`、详情、搜索和普通页面访问只读取已有缓存，不会隐式投递任务或等待 Steam 请求。
 
 ## 搜索策略
 
@@ -307,7 +347,7 @@ GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
 
 搜索结果使用有上限的进程内 LRU 作为一级缓存，FTS5 索引作为二级缓存。非空结果默认缓存 15 分钟，空结果只缓存 30 秒，以便 catalog 新数据较快变得可见。`/api/status` 的 `search` 字段提供请求数、缓存命中率、数据库平均/最大查询耗时、缓存条目数和估算内存占用。SQLite 使用每请求短连接而非传统连接池，该策略也会在状态中明确返回。
 
-点击尚未补全的目录游戏时，详情任务会提升到最高优先级；页面先显示本地内容，并在短时间内轮询本地缓存等待后台补全。Steam 限流或不可用时不会拖慢搜索接口。
+点击尚未补全的目录游戏时，页面只显示已有 Catalog 信息，并明确提示详情尚未进入本地缓存。管理员可通过受保护的刷新接口提升该游戏任务优先级；Steam 限流或不可用不会拖慢搜索和详情接口。
 
 ## 测试
 

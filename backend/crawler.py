@@ -5,7 +5,31 @@ import sqlite3
 import threading
 import time
 
+from . import config
 from . import _runtime as runtime
+from .migrations import create_database_backup
+
+
+def run_daily_backup_task(force=False):
+    if not config.DB_DAILY_BACKUP_ENABLED:
+        return False
+    with runtime.database_connection() as conn:
+        last_backup = runtime.get_crawl_state(conn, "daily_database_backup_at")
+    if not (force or runtime.is_due(last_backup, 24 * 60)):
+        return False
+    path = create_database_backup(
+        config.DB_PATH,
+        config.DB_MIGRATION_BACKUP_DIR,
+        label="daily",
+        keep=config.DB_DAILY_BACKUP_KEEP,
+        retention_label="daily",
+    )
+    stamp = runtime.now_iso()
+    with runtime.database_connection() as conn:
+        runtime.set_crawl_state(conn, "daily_database_backup_at", stamp)
+        runtime.set_crawl_state(conn, "daily_database_backup_path", str(path))
+    runtime.log_event(f"daily database backup completed path={path.name}")
+    return True
 
 
 def run_hotlist_task(force=False):
@@ -357,6 +381,10 @@ def refresh_hot_database_async(force_hotlist=False, quick=False):
 
 def run_scheduler_cycle():
     try:
+        run_daily_backup_task()
+    except Exception as exc:
+        runtime.log_event(f"daily database backup failed: {exc}")
+    try:
         from .services import refresh_daily_home_picks
 
         refresh_daily_home_picks()
@@ -373,6 +401,10 @@ def run_scheduler_cycle():
 
 
 def run_startup_prewarm():
+    try:
+        run_daily_backup_task()
+    except Exception as exc:
+        runtime.log_event(f"startup database backup failed: {exc}")
     refresh_hot_database_once(force_hotlist=runtime.count_hot_games() == 0, quick=True)
     runtime.run_niche_pool_task(
         force=runtime.count_eligible_niche_pool() < runtime.NICHE_POOL_DISPLAY_LIMIT

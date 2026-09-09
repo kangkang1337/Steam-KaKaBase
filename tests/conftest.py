@@ -34,6 +34,7 @@ def isolated_runtime(monkeypatch):
     monkeypatch.setattr(_runtime, "DB_MIGRATION_BACKUP_DIR", test_backups)
     monkeypatch.setattr(config, "DB_PATH", test_db)
     monkeypatch.setattr(config, "LOG_PATH", test_log)
+    monkeypatch.setattr(config, "DB_MIGRATION_BACKUP_DIR", test_backups)
     monkeypatch.setattr(db, "DB_PATH", test_db)
 
     _runtime.init_db()

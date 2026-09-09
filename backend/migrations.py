@@ -365,7 +365,9 @@ def _has_user_tables(conn):
     """).fetchone())
 
 
-def create_database_backup(db_path, backup_dir=None, *, label="manual", keep=10):
+def create_database_backup(
+    db_path, backup_dir=None, *, label="manual", keep=10, retention_label=None
+):
     db_path = Path(db_path)
     if not db_path.is_file():
         raise FileNotFoundError(db_path)
@@ -381,7 +383,12 @@ def create_database_backup(db_path, backup_dir=None, *, label="manual", keep=10)
     finally:
         target.close()
         source.close()
-    backups = sorted(backup_dir.glob(f"{db_path.stem}-*.sqlite3"), key=lambda path: path.stat().st_mtime, reverse=True)
+    retention_prefix = retention_label or "*"
+    backups = sorted(
+        backup_dir.glob(f"{db_path.stem}-{retention_prefix}-*.sqlite3"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
     for old in backups[max(1, int(keep)):]:
         old.unlink(missing_ok=True)
     return destination
@@ -442,6 +449,7 @@ def migrate_database(db_path, *, timeout=30, backup_dir=None, backup_keep=10, mi
                 backup_dir,
                 label=f"before-v{current_version}-to-v{target_version}",
                 keep=backup_keep,
+                retention_label="before-*",
             )
             conn = sqlite3.connect(db_path, timeout=timeout, isolation_level=None)
         conn.execute("PRAGMA foreign_keys = ON")

@@ -51,6 +51,7 @@ def main():
             config.DB_PATH,
             config.DB_MIGRATION_BACKUP_DIR,
             keep=config.DB_MIGRATION_BACKUP_KEEP,
+            retention_label="manual",
         )
         print(path)
         return

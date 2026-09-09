@@ -45,3 +45,12 @@ jobs:
 
       - name: Check frontend JavaScript
         run: python scripts/check_frontend.py
+
+      - name: Check deployment shell scripts
+        run: bash -n deploy/install_ubuntu.sh deploy/validate_linux.sh
+
+      - name: Validate Nginx and systemd deployment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nginx
+          bash deploy/validate_linux.sh

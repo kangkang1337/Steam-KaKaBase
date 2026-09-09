@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Steam-KaKaBase offsite backup timer
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=steam-kakabase-backup.service
+
+[Install]
+WantedBy=timers.target

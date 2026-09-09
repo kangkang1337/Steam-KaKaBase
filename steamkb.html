@@ -6,8 +6,8 @@
   <title>Steam-KaKaBase</title>
   <link id="pageIcon" rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="apple-touch-icon" href="/assets/kakabase-bird-256.png">
-  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <script src="/assets/vendor/vue-3.5.13.global.prod.js"></script>
+  <script src="/assets/vendor/echarts-5.6.0.min.js"></script>
   <style>
     :root {
       color-scheme: dark;
@@ -1132,7 +1132,7 @@
             <div>
               <div class="hero-title-row">
                 <h1>{{ displayGameName(selected) }}</h1>
-                <button class="favorite-btn" :class="{active: selected.tracked}" @click="toggleFavorite" :disabled="busy">
+                <button v-if="browserWriteActionsEnabled" class="favorite-btn" :class="{active: selected.tracked}" @click="toggleFavorite" :disabled="busy">
                   {{ selected.tracked ? '已收藏' : '收藏' }}
                 </button>
               </div>
@@ -1291,6 +1291,7 @@
           crawlerRunning: false,
           taskMonitor: {},
           backendProgress: '',
+          browserWriteActionsEnabled: true,
           logoSrc: birdIcon,
           cnyRates: {
             CNY: 1,
@@ -1590,6 +1591,7 @@
             this.catalogEnrichDailyLimit = Number(status.catalog_enrich_daily_limit || 0);
             this.crawlerRunning = Boolean(status.crawler?.running);
             this.taskMonitor = status.task_monitor || {};
+            this.browserWriteActionsEnabled = status.browser_write_actions_enabled !== false;
             const progress = status.task_progress || {};
             const players = progress.players || {};
             const preview = progress.preview || {};
@@ -1664,7 +1666,7 @@
                 .join('、');
               this.message = data.refresh_pending
                 ? `${pendingText || '详情'}正在后台优先补全…`
-                : '';
+                : (data.data_incomplete ? `${pendingText || '部分详情'}尚未进入本地缓存。` : '');
               if (chartsChanged) {
                 previousPriceSignature = priceSignature;
                 previousPlayerSignature = playerSignature;
@@ -1722,7 +1724,6 @@
           }
         },
         async loadHotPageGames(options = {}) {
-          const ensure = options.ensure !== false;
           const silent = Boolean(options.silent);
           if (!silent) this.busy = true;
           try {
@@ -1733,7 +1734,6 @@
             }));
             this.hotVersion = data.version || this.hotVersion;
             if (!silent) this.message = '';
-            if (ensure) this.ensureHotGames();
           } catch (err) {
             this.message = err.message;
           } finally {
@@ -1743,16 +1743,6 @@
         async refreshHotPage() {
           this.hotPageLimit = 100;
           await this.loadHotPageGames();
-        },
-        async ensureHotGames() {
-          try {
-            const data = await this.api(`/api/hot-games/ensure?target=${this.hotPageLimit}`);
-            if (data.queued && !this.refreshing) {
-              this.message = '热门榜正在后台同步，当前先显示本地已有数据。';
-            }
-          } catch (err) {
-            this.message = err.message;
-          }
         },
         async onWindowScroll() {
           if (this.activePage !== 'hot' || this.hotLoadingMore || this.busy) return;

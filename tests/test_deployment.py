@@ -32,6 +32,8 @@ def test_nginx_limits_public_search_and_admin_routes():
     assert "limit_req zone=steamkb_search" in site
     assert "limit_req zone=steamkb_admin" in site
     assert "proxy_pass http://127.0.0.1:8765" in site
+    assert "include /etc/nginx/proxy_params;" in site
+    assert "include proxy_params;" not in site
 
 
 def test_systemd_services_are_separate_and_sandboxed():

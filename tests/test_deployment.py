@@ -47,8 +47,7 @@ def test_linux_nginx_validation_uses_writable_runtime_files():
     assert "s|listen \\[::\\]:80;|listen [::]:18080;|g" in validator
     assert "client_body_temp_path ${TEMP_DIR}/client_body;" in validator
     assert "proxy_temp_path ${TEMP_DIR}/proxy;" in validator
-    assert "proxy_headers_hash_max_size 1024;" in validator
-    assert "proxy_headers_hash_bucket_size 128;" in validator
+    assert "include ${ROOT}/deploy/nginx/steam-kakabase-rate-limits.conf;" in validator
 
 
 def test_systemd_services_are_separate_and_sandboxed():

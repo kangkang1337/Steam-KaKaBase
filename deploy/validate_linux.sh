@@ -55,8 +55,6 @@ http {
     fastcgi_temp_path ${TEMP_DIR}/fastcgi;
     uwsgi_temp_path ${TEMP_DIR}/uwsgi;
     scgi_temp_path ${TEMP_DIR}/scgi;
-    proxy_headers_hash_max_size 1024;
-    proxy_headers_hash_bucket_size 128;
     include /etc/nginx/mime.types;
     include ${ROOT}/deploy/nginx/steam-kakabase-rate-limits.conf;
     include ${TEMP_DIR}/site.conf;

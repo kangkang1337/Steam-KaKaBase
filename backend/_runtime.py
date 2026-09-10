@@ -32,6 +32,8 @@ PORT = config.PORT
 PLAYER_REFRESH_MINUTES = config.PLAYER_REFRESH_MINUTES
 PRICE_REFRESH_HOURS = config.PRICE_REFRESH_HOURS
 SCHEDULER_CHECK_SECONDS = config.SCHEDULER_CHECK_SECONDS
+DAILY_REFRESH_TIMEZONE = config.DAILY_REFRESH_TIMEZONE
+DAILY_REFRESH_TZINFO = config.DAILY_REFRESH_TZINFO
 HISTORICAL_LOW_TOLERANCE_CNY = config.HISTORICAL_LOW_TOLERANCE_CNY
 HOTLIST_TARGET = config.HOTLIST_TARGET
 HOTLIST_CONCURRENCY = config.HOTLIST_CONCURRENCY
@@ -227,8 +229,12 @@ def age_minutes(value):
 
 
 def daily_refresh_key(moment=None):
-    """Use 00:10 local time as the boundary for all daily homepage picks."""
-    current = moment or datetime.now()
+    """Use 00:10 in the configured business time zone for daily homepage picks."""
+    current = moment or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=DAILY_REFRESH_TZINFO)
+    else:
+        current = current.astimezone(DAILY_REFRESH_TZINFO)
     boundary = current.replace(hour=0, minute=10, second=0, microsecond=0)
     if current < boundary:
         current -= timedelta(days=1)
@@ -3413,6 +3419,7 @@ def get_status():
     status["niche_pool_limit"] = NICHE_POOL_LIMIT
     status["niche_max_reviews"] = NICHE_MAX_REVIEWS
     status["home_repeat_days"] = HOME_RECOMMENDATION_REPEAT_DAYS
+    status["daily_refresh_timezone"] = DAILY_REFRESH_TIMEZONE
     status["home_popular_min_reviews"] = HOME_POPULAR_MIN_REVIEWS
     status["home_popular_min_players"] = HOME_POPULAR_MIN_PLAYERS
     status["search"] = get_search_metrics()

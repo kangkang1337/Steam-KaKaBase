@@ -189,6 +189,7 @@ Copy-Item .env.example .env
 | `STEAMKB_CRAWLER_LEASE_SECONDS` | `120` | crawler 单实例租约有效期 |
 | `STEAMKB_CRAWLER_HEARTBEAT_SECONDS` | `20` | crawler 续租和状态心跳间隔 |
 | `STEAMKB_SCHEDULER_CHECK_SECONDS` | `60` | crawler 调度循环检查间隔 |
+| `STEAMKB_DAILY_REFRESH_TIMEZONE` | `Asia/Shanghai` | 每日主页推荐、今日史低与表情包的日切时区；默认北京时间，边界为 `00:10` |
 | `STEAMKB_DB` | `data/steamkb.sqlite3` | SQLite 文件路径 |
 | `STEAMKB_LOG` | `data/steamkb.log` | 日志路径 |
 | `STEAMKB_DB_BACKUP_DIR` | `data/backups` | 迁移前备份和手动备份目录 |

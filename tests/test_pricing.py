@@ -126,9 +126,11 @@ def test_release_recency_factor_uses_age_bands():
     assert _runtime.release_recency_factor(str(current_year - 9)) == 0.0
 
 
-def test_daily_homepage_boundary_is_0010_local_time():
+def test_daily_homepage_boundary_is_0010_in_configured_business_time_zone():
     assert _runtime.daily_refresh_key(datetime(2026, 9, 6, 0, 9, 59)) == "2026-09-05"
     assert _runtime.daily_refresh_key(datetime(2026, 9, 6, 0, 10, 0)) == "2026-09-06"
+    assert _runtime.daily_refresh_key(datetime(2026, 9, 5, 16, 9, 59, tzinfo=timezone.utc)) == "2026-09-05"
+    assert _runtime.daily_refresh_key(datetime(2026, 9, 5, 16, 10, 0, tzinfo=timezone.utc)) == "2026-09-06"
 
 
 def test_daily_home_snapshot_keeps_the_same_available_picks(isolated_runtime):

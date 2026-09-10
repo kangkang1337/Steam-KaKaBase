@@ -38,6 +38,7 @@ def test_status_endpoint(api_client):
     assert "proxy" in payload
     assert payload["database_schema_version"] == 6
     assert payload["niche_max_reviews"] == 50000
+    assert payload["daily_refresh_timezone"] == "Asia/Shanghai"
     assert payload["search"]["storage"] == "sqlite_fts5_trigram"
     assert payload["search"]["connection_strategy"] == "short_lived_per_request"
     assert payload["task_monitor"]["active_total"] == 0

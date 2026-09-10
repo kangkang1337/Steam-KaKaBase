@@ -1268,6 +1268,7 @@
           },
           nowEpoch: Date.now(),
           dailyRefreshKey: '',
+          dailyRefreshTimeZone: 'Asia/Shanghai',
           activePage: 'home',
           navOpen: false,
           query: '',
@@ -1389,11 +1390,11 @@
           return `${this.reviews.review_score ?? '-'}%${suffix}`;
         },
         dailyRecommendationCountdown() {
-          const now = new Date(this.nowEpoch);
-          const next = new Date(now);
-          next.setHours(0, 10, 0, 0);
-          if (next <= now) next.setDate(next.getDate() + 1);
-          const seconds = Math.max(0, Math.floor((next - now) / 1000));
+          const current = this.businessDateParts(this.nowEpoch);
+          const businessNow = Date.UTC(current.year, current.month - 1, current.day, current.hour, current.minute, current.second);
+          let next = Date.UTC(current.year, current.month - 1, current.day, 0, 10, 0);
+          if (next <= businessNow) next += 24 * 60 * 60 * 1000;
+          const seconds = Math.max(0, Math.floor((next - businessNow) / 1000));
           const hours = Math.floor(seconds / 3600);
           const minutes = Math.floor((seconds % 3600) / 60);
           const remainder = seconds % 60;
@@ -1509,14 +1510,25 @@
       },
       methods: {
         homeRefreshKey(moment) {
-          const current = new Date(moment || Date.now());
-          if (current.getHours() === 0 && current.getMinutes() < 10) {
-            current.setDate(current.getDate() - 1);
-          }
-          const year = current.getFullYear();
-          const month = String(current.getMonth() + 1).padStart(2, '0');
-          const day = String(current.getDate()).padStart(2, '0');
-          return `${year}-${month}-${day}`;
+          const current = this.businessDateParts(moment);
+          const boundary = Date.UTC(current.year, current.month - 1, current.day, 0, 10, 0);
+          const businessNow = Date.UTC(current.year, current.month - 1, current.day, current.hour, current.minute, current.second);
+          const refreshDate = new Date(businessNow < boundary ? boundary - 24 * 60 * 60 * 1000 : boundary);
+          return refreshDate.toISOString().slice(0, 10);
+        },
+        businessDateParts(moment) {
+          const parts = new Intl.DateTimeFormat('en-US', {
+            timeZone: this.dailyRefreshTimeZone,
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+          }).formatToParts(new Date(moment || Date.now()));
+          const values = Object.fromEntries(parts
+            .filter(part => part.type !== 'literal')
+            .map(part => [part.type, Number(part.value)]));
+          return {
+            year: values.year, month: values.month, day: values.day,
+            hour: values.hour, minute: values.minute, second: values.second
+          };
         },
         displayGameName(game) {
           const name = String(game?.name || '').trim();
@@ -1612,6 +1624,7 @@
             this.wasRefreshing = this.refreshing;
             this.playerRefreshMinutes = status.player_refresh_minutes || this.playerRefreshMinutes;
             this.priceRefreshHours = status.price_refresh_hours || this.priceRefreshHours;
+            this.dailyRefreshTimeZone = status.daily_refresh_timezone || this.dailyRefreshTimeZone;
             this.itadConfigured = Boolean(status.itad_configured);
             this.historicalLowCount = status.historical_low_count || 0;
             const previousNicheCount = this.nichePoolCount;

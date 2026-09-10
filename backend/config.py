@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -86,6 +87,11 @@ PRICE_REFRESH_HOURS = env_int("STEAMKB_PRICE_REFRESH_HOURS", 24, minimum=24)
 SCHEDULER_CHECK_SECONDS = env_int("STEAMKB_SCHEDULER_CHECK_SECONDS", 60, minimum=5)
 CRAWLER_LEASE_SECONDS = env_int("STEAMKB_CRAWLER_LEASE_SECONDS", 120, minimum=30)
 CRAWLER_HEARTBEAT_SECONDS = env_int("STEAMKB_CRAWLER_HEARTBEAT_SECONDS", 20, minimum=5)
+DAILY_REFRESH_TIMEZONE = os.getenv("STEAMKB_DAILY_REFRESH_TIMEZONE", "Asia/Shanghai").strip() or "Asia/Shanghai"
+try:
+    DAILY_REFRESH_TZINFO = ZoneInfo(DAILY_REFRESH_TIMEZONE)
+except ZoneInfoNotFoundError as exc:
+    raise ValueError(f"STEAMKB_DAILY_REFRESH_TIMEZONE is invalid: {DAILY_REFRESH_TIMEZONE!r}") from exc
 HISTORICAL_LOW_TOLERANCE_CNY = env_float("STEAMKB_HISTORICAL_LOW_TOLERANCE_CNY", 0.5, minimum=0)
 
 HOTLIST_TARGET = env_int("STEAMKB_HOTLIST_TARGET", 100, minimum=100)

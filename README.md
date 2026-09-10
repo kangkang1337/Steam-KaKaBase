@@ -2,9 +2,9 @@
 
 一个面向本地运行的 Steam 数据面板，设计参考 SteamDB。用于查看游戏价格与本地历史快照、在线人数趋势、玩家评价、热门榜和每日小众宝藏推荐。
 
-当前版本：`v0.2.1`
+当前版本：`v0.3.3`
 
-> 当前项目处于本地原型阶段。现有 HTTP 服务适合开发和个人使用，尚未按公网生产环境加固。
+> 项目支持本地运行和单机 VPS 自托管。生产部署使用 Nginx、HTTPS、UFW、systemd、受限写接口与异地 SQLite 备份；仍建议先在个人规模下运行并持续观察 Steam/ITAD 的限流情况。
 
 ## 当前功能
 
@@ -95,7 +95,7 @@ API 由 FastAPI 提供，并包含 `/health`、`/ready`；开发环境提供 `/d
 
 Vue 3.5.13 与 ECharts 5.6.0 使用固定版本并存放在 `assets/vendor/`，生产页面不依赖公共 JavaScript CDN。校验脚本会核对文件 SHA-256，防止依赖文件被意外替换。
 
-`/api/status` 可查看 crawler PID、心跳年龄、租约剩余时间、任务积压、到期任务、重试与永久失败数量、最近一次崩溃恢复、各外部服务本次进程触发的限流冷却次数，以及 SQLite/WAL/日志文件大小。crawler 获得租约后会立即把旧进程遗留的 `running` 任务放回重试队列，并终止已经落后于当前热门榜代际的低优先级任务；用户点击产生的优先级 100 任务不会被该清理影响。
+`/api/status` 可查看 crawler PID、心跳年龄、租约剩余时间、任务积压、到期任务、重试与永久失败数量、最近一次崩溃恢复、各外部服务本次进程触发的限流冷却次数，以及 SQLite/WAL/日志文件大小。crawler 获得租约后会立即把旧进程遗留的 `running` 任务放回重试队列，并终止已经落后于当前热门榜代际的低优先级任务；用户点击产生的高优先级详情任务不会被该清理影响。
 
 SQLite 开启 WAL 模式，读写可以并行；批量采集按批次提交，避免每抓取一个 App 就提交一次。
 
@@ -233,7 +233,7 @@ STEAMKB_PROXY_URL=http://127.0.0.1:7890
 
 ## 数据库迁移与备份
 
-SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v6 增加 `process_leases` 作为跨进程单实例锁。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
+SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v7 包含跨进程单实例锁和双语搜索别名索引。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
 
 迁移中任意一步失败时，事务会整体回滚，服务停止启动，并在错误中给出升级前备份路径。crawler 还会使用 SQLite Backup API 每 24 小时在线创建一次 `daily` 备份，默认保留 14 份；每日备份、手动备份和迁移备份分别轮转，不会互相删除。数据库和备份文件均被 Git 忽略。
 
@@ -343,7 +343,7 @@ GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
 | `POST` | `/api/games/{appid}/refresh` | 提升并刷新指定游戏 |
 | `POST` | `/api/refresh-all` | 刷新全部服务器收藏 |
 
-所有 POST 接口均要求管理令牌（开发模式且未配置令牌时除外）。`/api/hot-games`、详情、搜索和普通页面访问只读取已有缓存，不会隐式投递任务或等待 Steam 请求。
+除 `POST /api/games/{appid}/interest` 外，所有 POST 接口均要求管理令牌（开发模式且未配置令牌时除外）。`interest` 仅允许已收录游戏创建缺失的高优先级任务，不会重复创建、重启已完成任务或等待 Steam；Nginx 还会按 IP 限速。`/api/hot-games`、详情、搜索和普通页面访问只读取已有缓存，不会隐式投递任务或等待 Steam 请求。
 
 ## 搜索策略
 
@@ -351,7 +351,7 @@ GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
 
 搜索结果使用有上限的进程内 LRU 作为一级缓存，FTS5 索引作为二级缓存。非空结果默认缓存 15 分钟，空结果只缓存 30 秒，以便 catalog 新数据较快变得可见。`/api/status` 的 `search` 字段提供请求数、缓存命中率、数据库平均/最大查询耗时、缓存条目数和估算内存占用。SQLite 使用每请求短连接而非传统连接池，该策略也会在状态中明确返回。
 
-点击尚未补全的目录游戏时，页面只显示已有 Catalog 信息，并明确提示详情尚未进入本地缓存。管理员可通过受保护的刷新接口提升该游戏任务优先级；Steam 限流或不可用不会拖慢搜索和详情接口。
+点击尚未补全的目录游戏时，页面先显示已有 Catalog 信息，并仅投递一次受限的高优先级详情任务；随后每 10 秒从本地缓存读取更新，最长约 6 分钟。页面刷新会通过 URL 中的 App ID 恢复当前详情。Steam 限流或不可用不会拖慢搜索和详情接口。
 
 ## 测试
 

@@ -1289,6 +1289,7 @@
           detailPollInFlight: false,
           detailPollAttempts: 0,
           detailLastPollAt: 0,
+          detailPollTimer: null,
           detailRequestAttempted: false,
           selectedDetailSignature: '',
           searchFocused: false,
@@ -1514,6 +1515,7 @@
       beforeUnmount() {
         clearInterval(this.statusTimer);
         clearInterval(this.clockTimer);
+        clearTimeout(this.detailPollTimer);
         window.removeEventListener('resize', this.resizeCharts);
         window.removeEventListener('scroll', this.onWindowScroll);
         window.removeEventListener('hashchange', this.restoreDetailFromUrl);
@@ -1706,7 +1708,6 @@
             if (this.activePage === 'home') {
               await this.loadHomePicks();
             }
-            this.pollSelectedDetail();
             }
           } catch (err) {
             if (!this.games.length && !this.selected) {
@@ -1728,11 +1729,27 @@
             this.message = err.message;
           }
         },
+        scheduleSelectedDetailPoll(delay = 10000) {
+          clearTimeout(this.detailPollTimer);
+          this.detailPollTimer = null;
+          if (!this.selectedDetailIncomplete || !this.selected?.appid || this.detailPollAttempts >= 36) return;
+          this.detailPollTimer = window.setTimeout(() => {
+            this.detailPollTimer = null;
+            this.pollSelectedDetail();
+          }, delay);
+        },
         async pollSelectedDetail() {
           if (!this.selectedDetailIncomplete || !this.selected?.appid || this.detailPollInFlight) return;
-          if (document.visibilityState !== 'visible' || this.detailPollAttempts >= 36) return;
+          if (document.visibilityState !== 'visible' || this.detailPollAttempts >= 36) {
+            this.scheduleSelectedDetailPoll();
+            return;
+          }
           const now = Date.now();
-          if (now - this.detailLastPollAt < 10000) return;
+          const elapsed = now - this.detailLastPollAt;
+          if (elapsed < 10000) {
+            this.scheduleSelectedDetailPoll(Math.max(1000, 10000 - elapsed));
+            return;
+          }
           this.detailLastPollAt = now;
           this.detailPollInFlight = true;
           try {
@@ -1740,6 +1757,7 @@
             this.detailPollAttempts++;
           } finally {
             this.detailPollInFlight = false;
+            this.scheduleSelectedDetailPoll();
           }
         },
         async selectGame(appid, options = {}) {
@@ -1772,6 +1790,11 @@
               this.detailPollAttempts = 0;
               this.detailRequestAttempted = false;
             }
+            // Start cache polling after a full interval. The dedicated timer
+            // keeps actual detail reads at most once per ten seconds.
+            if (this.selectedDetailIncomplete && !silent && this.detailPollAttempts === 0) {
+              this.detailLastPollAt = Date.now();
+            }
             if (updateUrl) this.updateDetailUrl(appid);
             const pendingLabels = {
               prices: '价格',
@@ -1791,11 +1814,12 @@
             } else if (!silent) {
               this.message = '';
             }
-            if (chartsChanged) {
-              await nextTick();
-              this.renderCharts();
+            if (chartsChanged || !this.priceChart || !this.playerChart) {
+              await this.renderChartsAfterLayout();
+            } else {
+              this.resizeCharts();
             }
-            if (data.refresh_pending) this.pollSelectedDetail();
+            this.scheduleSelectedDetailPoll();
           } catch (err) {
             if (seq === this.detailSeq) this.message = err.message;
           } finally {
@@ -1984,6 +2008,15 @@
           this.renderPriceChart();
           this.renderPlayerChart();
         },
+        async renderChartsAfterLayout() {
+          // The tracker view is created by the same reactive update that
+          // changes activePage. Two animation frames ensure ECharts measures
+          // its final visible dimensions instead of a transient zero-size box.
+          await nextTick();
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          this.renderCharts();
+          this.resizeCharts();
+        },
         renderPriceChart() {
           if (!window.echarts || !this.$refs.priceChart) return;
           this.priceChart = this.priceChart || echarts.init(this.$refs.priceChart);
@@ -2139,8 +2172,15 @@
           }, true);
         },
         resizeCharts() {
-          this.priceChart?.resize();
-          this.playerChart?.resize();
+          for (const chart of [this.priceChart, this.playerChart]) {
+            if (!chart || !(chart.getOption()?.series || []).length) continue;
+            try {
+              chart.resize();
+            } catch (_error) {
+              // ECharts 5.6 can reject resize for an empty transient series.
+              // The next cache update will supply data and render it normally.
+            }
+          }
         },
         currentPrice(region) {
           const row = this.selectedPrices.find(item => item.region === region);

@@ -176,6 +176,8 @@ def mock_frontend_api(page):
                 "refresh_pending": False,
                 "pending_fields": [],
             })
+        if path == "/api/games/4242/interest" and request.method == "POST":
+            return reply(route, {"ok": True, "appid": 4242, "queued": True, "reason": None})
         if path == "/api/track" and request.method == "POST":
             state["tracked"] = True
             state["track_calls"] += 1
@@ -237,14 +239,20 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
         page.locator(".suggestion").click()
 
         expect(page.locator(".hero h1")).to_have_text("Test Quest")
-        expect(page.locator(".stat").filter(has_text="国区价格")).to_contain_text("¥ 20.00", timeout=5000)
+        expect(page.locator(".stat").filter(has_text="国区价格")).to_contain_text("¥ 20.00", timeout=15000)
         chart_axes = page.evaluate("""
           () => [...document.querySelectorAll('.chart')].map(element => {
             const chart = window.echarts?.getInstanceByDom(element);
-            return chart?.getOption()?.xAxis?.[0]?.type;
+            return {
+              axis: chart?.getOption()?.xAxis?.[0]?.type,
+              width: chart?.getWidth(),
+              height: chart?.getHeight(),
+              points: chart?.getOption()?.series?.reduce((total, series) => total + (series.data || []).length, 0)
+            };
           })
         """)
-        assert chart_axes == ["time", "time"]
+        assert [chart["axis"] for chart in chart_axes] == ["time", "time"]
+        assert all(chart["width"] > 0 and chart["height"] > 0 and chart["points"] > 0 for chart in chart_axes)
         assert state["detail_calls"] >= 2
         favorite = page.locator(".favorite-btn")
         expect(favorite).to_have_text("收藏")

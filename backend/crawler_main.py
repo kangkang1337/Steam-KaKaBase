@@ -141,6 +141,10 @@ def run(*, stop_event=None, owner_id=None, prewarm=True):
         raise
     finally:
         stop_event.set()
+        # Prevent a heartbeat already in flight from publishing "running"
+        # after the final shutdown state has been persisted.
+        if heartbeat_thread.is_alive():
+            heartbeat_thread.join()
         lease = get_process_lease(LEASE_NAME)
         owns_lease = bool(lease and lease.get("owner_id") == owner_id)
         try:

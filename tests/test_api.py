@@ -239,6 +239,35 @@ def test_catalog_detail_stub_does_not_materialize_or_enqueue(api_client):
         assert conn.execute("SELECT COUNT(*) FROM crawl_tasks WHERE appid=8810").fetchone()[0] == 0
 
 
+def test_detail_interest_materializes_catalog_game_and_queues_once(api_client):
+    runtime, client = api_client
+    appid = 8811
+    with runtime.database_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO steam_catalog(appid, name, app_type, updated_at)
+            VALUES (?, 'Interest Queue', 'game', ?)
+            """,
+            (appid, runtime.now_iso()),
+        )
+
+    first = client.post(f"/api/games/{appid}/interest")
+    second = client.post(f"/api/games/{appid}/interest")
+
+    assert first.status_code == 200
+    assert first.json()["queued"] is True
+    assert second.status_code == 200
+    assert second.json()["queued"] is False
+    with runtime.database_connection() as conn:
+        assert conn.execute("SELECT name FROM games WHERE appid=?", (appid,)).fetchone()[0] == "Interest Queue"
+        task_types = {
+            row[0] for row in conn.execute(
+                "SELECT task_type FROM crawl_tasks WHERE appid=?", (appid,)
+            ).fetchall()
+        }
+    assert task_types == {"players", "preview", "reviews", "metadata", "regional_prices"}
+
+
 def test_admin_token_protects_write_routes(isolated_runtime, monkeypatch):
     token = "a" * 32
     monkeypatch.setattr(config, "ADMIN_TOKEN", token)

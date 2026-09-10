@@ -186,6 +186,7 @@ Copy-Item .env.example .env
 | `STEAMKB_CORS_ALLOWED_ORIGINS` | 空 | 允许跨域的完整 Origin，多个值用逗号分隔；同域部署留空 |
 | `STEAMKB_ALLOWED_HOSTS` | 空 | 允许的 Host 名称，多个值用逗号分隔 |
 | `STEAMKB_PROXY_VERIFY_TLS` | `true` | 代理 HTTPS 证书校验；生产环境不应关闭 |
+| `STEAMKB_PUBLIC_DETAIL_QUEUE_LIMIT` | `60` | 公开详情补全队列的全站 App 上限 |
 | `STEAMKB_PORT` | `8765` | 本地 HTTP 端口 |
 | `STEAMKB_CRAWLER_LEASE_SECONDS` | `120` | crawler 单实例租约有效期 |
 | `STEAMKB_CRAWLER_HEARTBEAT_SECONDS` | `20` | crawler 续租和状态心跳间隔 |
@@ -331,6 +332,7 @@ GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
 | `GET` | `/api/status` | 后台任务、目录进度、代理和冷却状态 |
 | `GET` | `/api/games` | 已收藏游戏列表 |
 | `GET` | `/api/games/{appid}` | 游戏详情与历史数据 |
+| `POST` | `/api/games/{appid}/interest` | 请求已收录游戏的详情优先补全；限速且不会重复刷新 |
 | `GET` | `/api/search?q=...&limit=12&offset=0` | 分页搜索本地 FTS 索引，不等待 Steam |
 | `GET` | `/api/hot-games?limit=100` | 读取本地热门榜缓存 |
 | `GET` | `/api/hot-games/version` | 热门榜缓存版本 |

@@ -7,6 +7,7 @@ import urllib.parse
 from . import _runtime, config
 from .db import (
     CURRENT_SCHEMA_VERSION,
+    enqueue_crawl_task_once_in_conn,
     get_schema_version,
     enqueue_crawl_tasks,
     query_daily_niche_snapshot,
@@ -230,6 +231,40 @@ def refresh_game(appid):
     appid = int(appid)
     queued = _enqueue_game_refresh([appid])
     return {"ok": True, "appid": appid, "queued": bool(queued), "queued_tasks": queued}
+
+
+def request_game_detail(appid):
+    """Accept one bounded public request to prioritize a cached game detail.
+
+    This intentionally only creates missing queue rows. Repeated browser calls
+    cannot revive completed work or generate further external requests.
+    """
+    appid = int(appid)
+    with transaction() as conn:
+        game_exists = bool(conn.execute("SELECT 1 FROM games WHERE appid=?", (appid,)).fetchone())
+        if not game_exists and not _runtime.ensure_game_from_catalog(conn, appid):
+            return {"ok": False, "appid": appid, "queued": False, "reason": "not_found"}
+        existing = bool(conn.execute(
+            """
+            SELECT 1 FROM crawl_tasks
+            WHERE appid=? AND task_type IN ('players', 'preview', 'reviews', 'metadata', 'regional_prices')
+              AND completed_at IS NULL AND status IN ('pending', 'retry', 'running')
+            LIMIT 1
+            """,
+            (appid,),
+        ).fetchone())
+        active = conn.execute(
+            """
+            SELECT COUNT(DISTINCT appid) FROM crawl_tasks
+            WHERE priority >= 90 AND completed_at IS NULL
+              AND status IN ('pending', 'retry', 'running')
+            """
+        ).fetchone()[0]
+        if not existing and int(active or 0) >= config.PUBLIC_DETAIL_QUEUE_LIMIT:
+            return {"ok": True, "appid": appid, "queued": False, "reason": "queue_full"}
+        for task_type in ("players", "preview", "reviews", "metadata", "regional_prices"):
+            enqueue_crawl_task_once_in_conn(conn, appid, task_type, 90)
+    return {"ok": True, "appid": appid, "queued": not existing, "reason": None}
 
 
 def cache_remote_image(url):

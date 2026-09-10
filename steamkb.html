@@ -1156,7 +1156,7 @@
             <div>
               <div class="hero-title-row">
                 <h1>{{ displayGameName(selected) }}</h1>
-                <button v-if="browserWriteActionsEnabled" class="favorite-btn" :class="{active: selected.tracked}" @click="toggleFavorite" :disabled="busy">
+                <button v-if="browserWriteActionsEnabled" class="favorite-btn" :class="{active: selected.tracked}" @click="toggleFavorite" :disabled="favoriteBusy">
                   {{ selected.tracked ? '已收藏' : '收藏' }}
                 </button>
               </div>
@@ -1285,12 +1285,19 @@
           hotLastAutoRefreshAt: 0,
           hotVersion: '',
           hotRunning: false,
+          selectedDetailIncomplete: false,
+          detailPollInFlight: false,
+          detailPollAttempts: 0,
+          detailLastPollAt: 0,
+          detailRequestAttempted: false,
+          selectedDetailSignature: '',
           searchFocused: false,
           searchTimer: null,
           searchSeq: 0,
           detailSeq: 0,
           searching: false,
           busy: false,
+          favoriteBusy: false,
           refreshing: false,
           wasRefreshing: false,
           statusTimer: null,
@@ -1501,12 +1508,15 @@
         }, 1000);
         window.addEventListener('resize', this.resizeCharts);
         window.addEventListener('scroll', this.onWindowScroll, { passive: true });
+        window.addEventListener('hashchange', this.restoreDetailFromUrl);
+        this.restoreDetailFromUrl();
       },
       beforeUnmount() {
         clearInterval(this.statusTimer);
         clearInterval(this.clockTimer);
         window.removeEventListener('resize', this.resizeCharts);
         window.removeEventListener('scroll', this.onWindowScroll);
+        window.removeEventListener('hashchange', this.restoreDetailFromUrl);
       },
       methods: {
         homeRefreshKey(moment) {
@@ -1538,6 +1548,7 @@
         switchPage(page) {
           this.activePage = page;
           this.navOpen = false;
+          if (page !== 'tracker') this.updateDetailUrl(null);
           if (page === 'home') {
             this.loadHomePicks();
           }
@@ -1550,6 +1561,24 @@
           }
           if (page === 'tracker') {
             nextTick(this.resizeCharts);
+          }
+        },
+        detailAppidFromUrl() {
+          const value = new URLSearchParams(window.location.hash.slice(1)).get('game');
+          const appid = Number(value);
+          return Number.isSafeInteger(appid) && appid > 0 ? appid : null;
+        },
+        updateDetailUrl(appid) {
+          const url = new URL(window.location.href);
+          url.hash = appid ? `game=${appid}` : '';
+          window.history.replaceState(null, '', url);
+        },
+        restoreDetailFromUrl() {
+          const appid = this.detailAppidFromUrl();
+          if (appid) {
+            this.selectGame(appid, { updateUrl: false });
+          } else if (this.activePage === 'tracker') {
+            this.activePage = 'home';
           }
         },
         cachedImage(game) {
@@ -1674,9 +1703,10 @@
                   this.message = '';
                 }
               }
-              if (this.activePage === 'home') {
-                await this.loadHomePicks();
-              }
+            if (this.activePage === 'home') {
+              await this.loadHomePicks();
+            }
+            this.pollSelectedDetail();
             }
           } catch (err) {
             if (!this.games.length && !this.selected) {
@@ -1684,61 +1714,92 @@
             }
           }
         },
-        async selectGame(appid) {
-          const seq = ++this.detailSeq;
-          this.busy = true;
+        async requestDetailWork(appid) {
+          if (this.detailRequestAttempted) return;
+          this.detailRequestAttempted = true;
           try {
-            const maxAttempts = 45;
-            let previousPriceSignature = '';
-            let previousPlayerSignature = '';
-            for (let attempt = 0; attempt < maxAttempts; attempt++) {
-              const data = await this.api(`/api/games/${appid}?history_limit=500`);
-              if (seq !== this.detailSeq) return;
-              const prices = data.prices || [];
-              const priceHistory = data.priceHistory || [];
-              const players = data.players || [];
-              const priceSignature = JSON.stringify([prices, priceHistory]);
-              const playerSignature = JSON.stringify(players);
-              const chartsChanged = attempt === 0
-                || priceSignature !== previousPriceSignature
-                || playerSignature !== previousPlayerSignature;
-              this.selected = data.game;
-              this.activePage = 'tracker';
-              this.navOpen = false;
-              this.selectedPrices = prices;
-              this.priceHistory = priceHistory;
-              this.playerHistory = players;
-              this.reviews = data.reviews;
-              const pendingLabels = {
-                prices: '价格',
-                players: '在线人数',
-                reviews: '评价',
-                metadata: '简介'
-              };
-              const pendingText = (data.pending_fields || [])
-                .map(field => pendingLabels[field] || field)
-                .join('、');
-              this.message = data.refresh_pending
-                ? `${pendingText || '详情'}正在后台优先补全…`
-                : (data.data_incomplete ? `${pendingText || '部分详情'}尚未进入本地缓存。` : '');
-              if (chartsChanged) {
-                previousPriceSignature = priceSignature;
-                previousPlayerSignature = playerSignature;
-                await nextTick();
-                this.renderCharts();
-              }
-              if (attempt === 0) this.busy = false;
-              if (!data.refresh_pending) break;
-              if (attempt < maxAttempts - 1) {
-                await new Promise(resolve => window.setTimeout(resolve, 2000));
-              } else {
-                this.message = '已显示本地数据，剩余详情将在后台继续补全。';
-              }
+            const result = await this.api(`/api/games/${appid}/interest`, { method: 'POST' });
+            if (result.queued) {
+              this.message = '详情已进入优先补全队列，页面会自动更新。';
+            } else if (result.reason === 'queue_full') {
+              this.message = '详情补全队列暂满，页面会继续显示已有缓存。';
             }
+          } catch (err) {
+            this.message = err.message;
+          }
+        },
+        async pollSelectedDetail() {
+          if (!this.selectedDetailIncomplete || !this.selected?.appid || this.detailPollInFlight) return;
+          if (document.visibilityState !== 'visible' || this.detailPollAttempts >= 36) return;
+          const now = Date.now();
+          if (now - this.detailLastPollAt < 10000) return;
+          this.detailLastPollAt = now;
+          this.detailPollInFlight = true;
+          try {
+            await this.selectGame(this.selected.appid, { silent: true, updateUrl: false, requestWork: false });
+            this.detailPollAttempts++;
+          } finally {
+            this.detailPollInFlight = false;
+          }
+        },
+        async selectGame(appid, options = {}) {
+          const seq = ++this.detailSeq;
+          const silent = Boolean(options.silent);
+          const updateUrl = options.updateUrl !== false;
+          if (!silent) this.busy = true;
+          try {
+            const data = await this.api(`/api/games/${appid}?history_limit=500`);
+            if (seq !== this.detailSeq) return;
+            const prices = data.prices || [];
+            const priceHistory = data.priceHistory || [];
+            const players = data.players || [];
+            const detailSignature = JSON.stringify([prices, priceHistory, players, data.reviews]);
+            const chartsChanged = detailSignature !== this.selectedDetailSignature;
+            const changedGame = this.selected?.appid !== data.game?.appid;
+            this.selected = data.game;
+            this.activePage = 'tracker';
+            this.navOpen = false;
+            this.selectedPrices = prices;
+            this.priceHistory = priceHistory;
+            this.playerHistory = players;
+            this.reviews = data.reviews;
+            this.selectedDetailSignature = detailSignature;
+            const regionalPending = prices.length > 0 && prices.length < 13;
+            this.selectedDetailIncomplete = Boolean(
+              data.refresh_pending || data.data_incomplete || regionalPending
+            );
+            if (changedGame) {
+              this.detailPollAttempts = 0;
+              this.detailRequestAttempted = false;
+            }
+            if (updateUrl) this.updateDetailUrl(appid);
+            const pendingLabels = {
+              prices: '价格',
+              players: '在线人数',
+              reviews: '评价',
+              metadata: '简介'
+            };
+            const pendingText = (data.pending_fields || [])
+              .map(field => pendingLabels[field] || field)
+              .join('、');
+            if (data.refresh_pending || data.data_incomplete || regionalPending) {
+              const pieces = [];
+              if (pendingText) pieces.push(`${pendingText}正在补全`);
+              if (regionalPending) pieces.push('全区价格正在分批缓存');
+              this.message = `${pieces.join('，') || '详情正在补全'}，页面会自动更新。`;
+              if (options.requestWork !== false && !silent) await this.requestDetailWork(appid);
+            } else if (!silent) {
+              this.message = '';
+            }
+            if (chartsChanged) {
+              await nextTick();
+              this.renderCharts();
+            }
+            if (data.refresh_pending) this.pollSelectedDetail();
           } catch (err) {
             if (seq === this.detailSeq) this.message = err.message;
           } finally {
-            if (seq === this.detailSeq) this.busy = false;
+            if (seq === this.detailSeq && !silent) this.busy = false;
           }
         },
         onSearchFocus() {
@@ -1847,15 +1908,20 @@
         },
         async toggleFavorite() {
           if (!this.selected) return;
-          if (this.selected.tracked) {
-            await this.untrackSelected();
-            return;
+          this.favoriteBusy = true;
+          try {
+            if (this.selected.tracked) {
+              await this.untrackSelected();
+              return;
+            }
+            await this.track({
+              appid: this.selected.appid,
+              name: this.selected.name,
+              tiny_image: this.selected.header_image
+            }, { keepSelected: true });
+          } finally {
+            this.favoriteBusy = false;
           }
-          await this.track({
-            appid: this.selected.appid,
-            name: this.selected.name,
-            tiny_image: this.selected.header_image
-          }, { keepSelected: true });
         },
         async untrackSelected() {
           if (!this.selected) return;

@@ -29,10 +29,12 @@ def test_nginx_limits_public_search_and_admin_routes():
     )
     assert "zone=steamkb_search" in zones
     assert "zone=steamkb_admin" in zones
+    assert "zone=steamkb_detail" in zones
     assert "proxy_headers_hash_max_size 1024;" in zones
     assert "proxy_headers_hash_bucket_size 128;" in zones
     assert "limit_req zone=steamkb_search" in site
     assert "limit_req zone=steamkb_admin" in site
+    assert "limit_req zone=steamkb_detail" in site
     assert "proxy_pass http://127.0.0.1:8765" in site
     assert "include /etc/nginx/proxy_params;" in site
     assert "include proxy_params;" not in site

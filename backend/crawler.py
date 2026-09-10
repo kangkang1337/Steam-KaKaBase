@@ -384,10 +384,12 @@ def refresh_hot_database_once(force_hotlist=False, quick=False):
         run_hotlist_task(force=force_hotlist)
         if not quick:
             run_players_task()
+            # Detail requests are explicitly user-prioritized. Run their
+            # region expansion before low-priority hot-list enrichment.
+            run_regional_prices_task()
             run_preview_task()
             run_review_task()
             run_metadata_task()
-            run_regional_prices_task()
             run_historylow_task()
             runtime.run_niche_pool_task()
             try:

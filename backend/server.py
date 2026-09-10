@@ -193,6 +193,15 @@ def create_app():
                 proxy["message"] = "代理回退暂不可用"
         return payload
 
+    @application.post("/api/games/{appid}/interest")
+    def request_game_detail(appid: int):
+        if appid <= 0:
+            raise HTTPException(status_code=422, detail="invalid appid")
+        result = services.request_game_detail(appid)
+        if result["reason"] == "not_found":
+            raise HTTPException(status_code=404, detail="not found")
+        return result
+
     @application.get("/api/search")
     def search(
         q: str = Query(default="", max_length=300),

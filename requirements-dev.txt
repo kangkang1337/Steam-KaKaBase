@@ -1,5 +1,5 @@
 -r requirements.txt
 pytest>=8,<9
-pytest-cov>=5,<7
+pytest-cov>=7.1.0,<8
 playwright>=1.55,<2
 pip-audit>=2.8,<3

@@ -119,8 +119,16 @@ def _run_appdetails_task(task_type, due_appids, limit, priority, persist, unavai
         if task_type == "metadata" and successful_appids:
             # The hot-list metadata pass has already earned this game a richer
             # cache.  Regional prices can now be expanded slowly in a separate
-            # task without making the AppDetails pass fan out by region.
-            runtime.enqueue_crawl_tasks(successful_appids, "regional_prices", 70)
+            # task without making the AppDetails pass fan out by region. Do
+            # not revive an already completed regional task: on a fresh
+            # deployment the bootstrap task may have completed just before
+            # metadata, and immediately repeating all 13 Store requests is
+            # unnecessary.
+            with runtime.database_connection() as conn:
+                for appid in successful_appids:
+                    runtime.enqueue_crawl_task_once_in_conn(
+                        conn, appid, "regional_prices", 70
+                    )
         runtime.mark_crawl_tasks_not_available(unavailable, task_type, unavailable_message)
         runtime.fail_crawl_tasks(retry, task_type, "Steam AppDetails request failed")
         runtime.log_event(

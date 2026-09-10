@@ -31,6 +31,17 @@
     }
 
     * { box-sizing: border-box; }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
     body {
       margin: 0;
       min-width: 320px;
@@ -39,7 +50,7 @@
       font-size: 14px;
     }
 
-    button, input {
+    button, input, select {
       font: inherit;
     }
 
@@ -812,6 +823,7 @@
     }
 
     td { color: #dce6ef; }
+    tbody tr.selected { background: rgba(102, 192, 244, .09); }
     .discount { color: var(--green); font-weight: 700; }
     .error { color: var(--red); padding: 12px; }
     .empty { padding: 24px; color: var(--muted); text-align: center; }
@@ -826,6 +838,28 @@
       align-items: center;
       gap: 8px;
       flex-wrap: wrap;
+    }
+
+    .region-picker {
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .region-picker select {
+      height: 34px;
+      min-width: 112px;
+      padding: 0 30px 0 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: #18212a;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .region-picker select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(102, 192, 244, .22);
+      outline: none;
     }
 
     .status {
@@ -989,6 +1023,12 @@
         </div>
       </div>
       <div class="toolbar">
+        <label class="region-picker">
+          <span class="sr-only">选择价格地区</span>
+          <select v-model="selectedRegion" @change="changeSelectedRegion" aria-label="选择价格地区">
+            <option v-for="region in priceRegions" :key="region.code" :value="region.code">{{ region.label }}</option>
+          </select>
+        </label>
         <button @click="loadGames" :disabled="busy">刷新列表</button>
       </div>
     </header>
@@ -1162,7 +1202,7 @@
               </div>
               <div class="desc">{{ selected.short_description || '暂无简介。' }}</div>
               <div v-if="selected.release_date" class="release-meta">发行日期：{{ selected.release_date }}</div>
-              <div class="release-meta">数据更新：在线 {{ relativeAge(playerHistory[playerHistory.length - 1]?.fetched_at) }}，价格 {{ relativeAge(selectedPrices.find(price => price.region === 'CN')?.fetched_at) }}，评价 {{ relativeAge(reviews?.fetched_at) }}</div>
+              <div class="release-meta">数据更新：在线 {{ relativeAge(playerHistory[playerHistory.length - 1]?.fetched_at) }}，{{ selectedRegionLabel }}价格 {{ relativeAge(selectedRegionPrice?.fetched_at) }}，评价 {{ relativeAge(reviews?.fetched_at) }}</div>
             </div>
             <div class="stats">
               <div class="stat">
@@ -1178,10 +1218,10 @@
                 <div class="stat-label">玩家评价</div>
                 <div class="stat-value">{{ latestReviewScore }}</div>
               </div>
-              <div class="stat" :class="{'price-low': isHistoricalLow('CN'), 'price-discount': isDiscounted('CN')}">
-                <div class="stat-label">国区价格</div>
-                <div class="stat-value">{{ currentPrice('CN') }}</div>
-                <div v-if="historicalLowLabel('CN')" class="stat-note">{{ historicalLowLabel('CN') }}</div>
+              <div class="stat" :class="{'price-low': isHistoricalLow(), 'price-discount': isDiscounted()}">
+                <div class="stat-label">{{ selectedRegionLabel }}价格</div>
+                <div class="stat-value">{{ currentPrice() }}</div>
+                <div v-if="historicalLowLabel()" class="stat-note">{{ historicalLowLabel() }}</div>
               </div>
             </div>
           </div>
@@ -1190,8 +1230,8 @@
         <div class="grid-2">
           <article class="panel">
             <div class="panel-head">
-              <span>历史价格</span>
-              <span class="muted">人民币换算</span>
+              <span>{{ selectedRegionLabel }}历史价格</span>
+              <span class="muted">{{ selectedRegionCurrency || '原币' }} 原币价格</span>
             </div>
             <div ref="priceChart" class="chart"></div>
           </article>
@@ -1223,7 +1263,7 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="price in selectedPrices" :key="price.region + price.fetched_at">
+                <tr v-for="price in orderedSelectedPrices" :key="price.region + price.fetched_at" :class="{selected: price.region === selectedRegion}">
                   <td>{{ price.region }}</td>
                   <td>{{ price.final_formatted || cents(price.final, price.currency) }}</td>
                   <td>{{ cents(price.initial, price.currency) }}</td>
@@ -1270,6 +1310,22 @@
           dailyRefreshKey: '',
           dailyRefreshTimeZone: 'Asia/Shanghai',
           activePage: 'home',
+          priceRegions: [
+            { code: 'CN', label: '中国区', language: '简体中文' },
+            { code: 'US', label: '美国区', language: 'English' },
+            { code: 'JP', label: '日本区', language: '日本語' },
+            { code: 'HK', label: '香港区', language: '繁體中文' },
+            { code: 'TW', label: '台湾区', language: '繁體中文' },
+            { code: 'KR', label: '韩国区', language: '한국어' },
+            { code: 'GB', label: '英国区', language: 'English' },
+            { code: 'DE', label: '德国区', language: 'Deutsch' },
+            { code: 'FR', label: '法国区', language: 'Français' },
+            { code: 'BR', label: '巴西区', language: 'Português' },
+            { code: 'RU', label: '俄罗斯区', language: 'Русский' },
+            { code: 'TR', label: '土耳其区', language: 'Türkçe' },
+            { code: 'AR', label: '阿根廷区', language: 'Español' }
+          ],
+          selectedRegion: 'CN',
           navOpen: false,
           query: '',
           suggestions: [],
@@ -1326,20 +1382,6 @@
           backendProgress: '',
           browserWriteActionsEnabled: true,
           logoSrc: birdIcon,
-          cnyRates: {
-            CNY: 1,
-            USD: 7.2,
-            EUR: 7.8,
-            GBP: 9.1,
-            JPY: 0.049,
-            KRW: 0.0052,
-            HKD: 0.92,
-            TWD: 0.23,
-            BRL: 1.35,
-            RUB: 0.08,
-            TRY: 0.17,
-            ARS: 0.005
-          },
           priceChart: null,
           playerChart: null,
           placeholderImage: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="460" height="215"><rect width="100%" height="100%" fill="#0b1116"/><text x="50%" y="50%" fill="#5f6e7b" font-family="Arial" font-size="22" text-anchor="middle">Steam-KaKaBase</text></svg>')
@@ -1363,6 +1405,30 @@
         dropdownItems() {
           if (!this.searchFocused) return [];
           return this.query.length >= 2 ? this.suggestions : this.hotGames;
+        },
+        selectedRegionMeta() {
+          return this.priceRegions.find(region => region.code === this.selectedRegion) || this.priceRegions[0];
+        },
+        selectedRegionLabel() {
+          return this.selectedRegionMeta?.label || this.selectedRegion;
+        },
+        selectedRegionPrice() {
+          return this.selectedPrices.find(price => price.region === this.selectedRegion) || null;
+        },
+        selectedRegionCurrency() {
+          return this.selectedRegionPrice?.currency
+            || this.priceHistory.find(price => price.region === this.selectedRegion)?.currency
+            || '';
+        },
+        selectedRegionPriceHistory() {
+          return this.priceHistory.filter(price => price.region === this.selectedRegion);
+        },
+        orderedSelectedPrices() {
+          return [...this.selectedPrices].sort((left, right) => {
+            if (left.region === this.selectedRegion) return -1;
+            if (right.region === this.selectedRegion) return 1;
+            return String(left.region).localeCompare(String(right.region));
+          });
         },
         filteredHotPageGames() {
           let rows = [...this.hotPageGames];
@@ -1496,6 +1562,7 @@
       mounted() {
         const pageIcon = document.getElementById('pageIcon');
         if (pageIcon) pageIcon.href = this.logoSrc;
+        this.restoreSelectedRegion();
         this.loadGames();
         this.loadHomePicks();
         this.loadStatus();
@@ -1521,6 +1588,27 @@
         window.removeEventListener('hashchange', this.restoreDetailFromUrl);
       },
       methods: {
+        restoreSelectedRegion() {
+          try {
+            const saved = window.localStorage.getItem('steamkb.priceRegion');
+            if (this.priceRegions.some(region => region.code === saved)) {
+              this.selectedRegion = saved;
+            }
+          } catch (_error) {
+            // Storage may be unavailable in privacy-restricted contexts.
+          }
+        },
+        async changeSelectedRegion() {
+          try {
+            window.localStorage.setItem('steamkb.priceRegion', this.selectedRegion);
+          } catch (_error) {
+            // The selection remains active for the current page session.
+          }
+          if (!this.selected) return;
+          await nextTick();
+          this.renderPriceChart();
+          this.resizeCharts();
+        },
         homeRefreshKey(moment) {
           const current = this.businessDateParts(moment);
           const boundary = Date.UTC(current.year, current.month - 1, current.day, 0, 10, 0);
@@ -2021,35 +2109,28 @@
           if (!window.echarts || !this.$refs.priceChart) return;
           this.priceChart = this.priceChart || echarts.init(this.$refs.priceChart);
           this.priceChart.clear();
-          const groupedMaps = {};
-          this.priceHistory.forEach(row => {
+          const points = [...this.selectedRegionPriceHistory.reduce((items, row) => {
             const timestamp = new Date(row.fetched_at).getTime();
-            const cny = this.toCny(row.final, row.currency, row.region);
-            if (!row.region || !Number.isFinite(timestamp) || !Number.isFinite(cny)) return;
-            groupedMaps[row.region] = groupedMaps[row.region] || new Map();
-            groupedMaps[row.region].set(timestamp, {
-              value: [timestamp, cny],
+            const amount = Number(row.final) / 100;
+            if (!Number.isFinite(timestamp) || !Number.isFinite(amount)) return items;
+            items.set(timestamp, {
+              value: [timestamp, amount],
               formatted: row.final_formatted || this.cents(row.final, row.currency),
               currency: row.currency || '',
-              cny,
               fetchedAt: row.fetched_at
             });
-          });
-          const regions = Object.keys(groupedMaps);
-          const grouped = Object.fromEntries(regions.map(region => [
-            region,
-            [...groupedMaps[region].values()].sort((a, b) => a.value[0] - b.value[0])
-          ]));
-          const priceTimes = Object.values(grouped).flat().map(item => item.value[0]);
+            return items;
+          }, new Map()).values()].sort((left, right) => left.value[0] - right.value[0]);
+          const priceTimes = points.map(item => item.value[0]);
           const priceSpan = priceTimes.length > 1
             ? Math.max(...priceTimes) - Math.min(...priceTimes)
             : 0;
           this.priceChart.setOption({
             backgroundColor: 'transparent',
             title: {
-              show: this.priceHistory.length === 0,
+              show: points.length === 0,
               text: '暂无价格快照',
-              subtext: '等待自动采集后生成折线图',
+              subtext: `${this.selectedRegionLabel}价格仍在等待采集`,
               left: 'center',
               top: 'middle',
               textStyle: { color: '#8d9ba8', fontSize: 14 },
@@ -2065,12 +2146,11 @@
               formatter: item => {
                 const data = item.data || {};
                 const time = data.fetchedAt ? this.localTime(data.fetchedAt) : this.localTime(item.value?.[0]);
-                const original = data.formatted || this.cents(item.value?.[1] * 100, data.currency);
-                return `${time}<br>${item.marker} ${item.seriesName}: ¥${Number(data.cny || 0).toFixed(2)}<br><span style="color:#8d9ba8">原始价格：${original}</span>`;
+                const price = data.formatted || this.cents(item.value?.[1] * 100, data.currency);
+                return `${time}<br>${item.marker} ${item.seriesName}: ${price}`;
               }
             },
-            legend: { textStyle: { color: '#8d9ba8' }, top: 8 },
-            grid: { left: 48, right: 18, top: 46, bottom: 58 },
+            grid: { left: 58, right: 18, top: 24, bottom: 58 },
             xAxis: {
               type: 'time',
               splitNumber: 4,
@@ -2089,16 +2169,16 @@
               splitLine: { lineStyle: { color: '#24303a' } },
               axisLabel: {
                 color: '#8d9ba8',
-                formatter: value => `¥${Number(value).toFixed(0)}`
+                formatter: value => `${Number(value).toFixed(0)} ${this.selectedRegionCurrency}`.trim()
               }
             },
-            series: regions.map(region => ({
-              name: region,
+            series: points.length ? [{
+              name: this.selectedRegionLabel,
               type: 'line',
               smooth: true,
               symbolSize: 5,
-              data: grouped[region]
-            }))
+              data: points
+            }] : []
           }, true);
         },
         renderPlayerChart() {
@@ -2182,10 +2262,10 @@
             }
           }
         },
-        currentPrice(region) {
+        currentPrice(region = this.selectedRegion) {
           const row = this.selectedPrices.find(item => item.region === region);
           if (row) return row.final_formatted || this.cents(row.final, row.currency);
-          return this.selected?.is_free ? '免费' : '国区暂无售价';
+          return this.selected?.is_free ? '免费' : `${this.selectedRegionLabel}暂无售价`;
         },
         displayCnPrice(game) {
           if (game?.cn_price_display) return game.cn_price_display;
@@ -2205,31 +2285,33 @@
           if (reviews >= 10000) return `推荐短评：${reviews.toLocaleString()} 条评测撑起的口碑，不只是小圈子自嗨。`;
           return `推荐短评：${score ? `${score.toFixed(0)}% 好评` : '口碑稳定'}，适合从热门榜之外挖到的一次惊喜。`;
         },
-        isHistoricalLow(region) {
+        isHistoricalLow(region = this.selectedRegion) {
           const row = this.selectedPrices.find(item => item.region === region);
           return Boolean(row?.historical_low);
         },
-        isDiscounted(region) {
+        isDiscounted(region = this.selectedRegion) {
           const row = this.selectedPrices.find(item => item.region === region);
           return Boolean(row && !row.historical_low && Number(row.discount_percent || 0) > 0);
         },
-        historicalLowLabel(region) {
+        historicalLowLabel(region = this.selectedRegion) {
           const row = this.selectedPrices.find(item => item.region === region);
           if (!row || row.final === null || row.final === undefined) return '';
           if (row.historical_low_cny === null || row.historical_low_cny === undefined) {
             if (this.historylowRunning) return '史低增强数据同步中';
             return '本站尚未积累价格历史';
           }
-          const price = `¥${Number(row.historical_low_cny).toFixed(2)}`;
+          const amount = row.historical_low_source === 'itad'
+            ? row.historical_low_amount_int
+            : row.observed_low_amount_int;
+          const currency = row.historical_low_source === 'itad'
+            ? row.historical_low_currency
+            : row.currency;
+          const price = amount === null || amount === undefined
+            ? `¥${Number(row.historical_low_cny).toFixed(2)}`
+            : this.cents(amount, currency);
           if (row.historical_low_source === 'itad') return `ITAD 历史最低：${price}`;
           const since = row.observed_low_since ? ` · 自 ${this.localTime(row.observed_low_since, true)} 起记录` : '';
           return `本站观测最低：${price}${since}`;
-        },
-        toCny(value, currency, region) {
-          if (value === null || value === undefined) return 0;
-          const code = currency || (region === 'CN' ? 'CNY' : (region === 'US' || region === 'ITAD-US' ? 'USD' : ''));
-          const rate = this.cnyRates[code] || 1;
-          return (Number(value) / 100) * rate;
         },
         cents(value, currency) {
           if (value === null || value === undefined) return '-';

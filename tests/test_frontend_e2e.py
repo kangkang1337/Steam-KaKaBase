@@ -163,16 +163,21 @@ def mock_frontend_api(page):
                     "refresh_pending": True,
                     "pending_fields": ["prices"],
                 })
-            price = {
+            cn_price = {
                 "region": "CN", "final_formatted": "¥ 20.00", "final": 2000,
                 "currency": "CNY", "discount_percent": 0,
+                "fetched_at": "2026-09-07T10:01:00+00:00",
+            }
+            us_price = {
+                "region": "US", "final_formatted": "$ 10.00", "final": 1000,
+                "currency": "USD", "discount_percent": 0,
                 "fetched_at": "2026-09-07T10:01:00+00:00",
             }
             return reply(route, {
                 **detail,
                 "game": {**detail["game"], "tracked": state["tracked"]},
-                "prices": [price],
-                "priceHistory": [price],
+                "prices": [cn_price, us_price],
+                "priceHistory": [cn_price, us_price],
                 "refresh_pending": False,
                 "pending_fields": [],
             })
@@ -254,6 +259,23 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
         assert [chart["axis"] for chart in chart_axes] == ["time", "time"]
         assert all(chart["width"] > 0 and chart["height"] > 0 and chart["points"] > 0 for chart in chart_axes)
         assert state["detail_calls"] >= 2
+
+        page.get_by_label("选择价格地区").select_option("US")
+        expect(page.locator(".stat").filter(has_text="美国区价格")).to_contain_text("$ 10.00")
+        price_view = page.evaluate("""
+          () => {
+            const chart = window.echarts?.getInstanceByDom(document.querySelector('.chart'));
+            const option = chart?.getOption();
+            return {
+              seriesName: option?.series?.[0]?.name,
+              price: option?.series?.[0]?.data?.[0]?.value?.[1],
+              firstRegion: document.querySelector('table tbody tr.selected')?.textContent
+            };
+          }
+        """)
+        assert price_view["seriesName"] == "美国区"
+        assert price_view["price"] == 10
+        assert price_view["firstRegion"].startswith("US")
         favorite = page.locator(".favorite-btn")
         expect(favorite).to_have_text("收藏")
         favorite.click()

@@ -3652,6 +3652,7 @@ def clean_price(row):
         "historical_low_source": low_source,
         "itad_historical_low_cny": item.get("historical_low_cny"),
         "observed_low_cny": observed_low_cny,
+        "observed_low_amount_int": item.get("observed_low_amount_int"),
         "observed_low_since": item.get("observed_low_since"),
         "observed_snapshot_count": item.get("observed_snapshot_count") or 0,
         "historical_low_currency": item.get("historical_low_currency"),

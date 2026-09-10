@@ -99,6 +99,39 @@ def test_itad_low_has_priority_when_it_is_lower(isolated_runtime, insert_game):
     assert price["historical_low"] is True
 
 
+def test_itad_low_only_applies_to_its_matching_region(isolated_runtime, insert_game):
+    appid = insert_game(6104, "Regional Low")
+    stamp = "2026-09-08T00:00:00+00:00"
+    with isolated_runtime.database_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        conn.executemany(
+            """
+            INSERT INTO price_snapshots(
+                appid, region, currency, initial, final, discount_percent,
+                final_formatted, source, fetched_at
+            ) VALUES (?, ?, ?, ?, ?, 0, ?, 'steam', ?)
+            """,
+            [
+                (appid, "US", "USD", 3000, 2000, "$ 20.00", stamp),
+                (appid, "JP", "JPY", 3000, 2000, "JPY 2000", stamp),
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO historical_lows(
+                appid, itad_game_id, country, currency, amount,
+                amount_int, amount_cny, fetched_at
+            ) VALUES (?, ?, 'US', 'USD', 10.0, 1000, 72.0, ?)
+            """,
+            (appid, f"itad-{appid}", stamp),
+        )
+        prices = {row["region"]: row for row in isolated_runtime.latest_by_region(conn, appid)}
+
+    assert prices["US"]["historical_low_cny"] == 72.0
+    assert prices["JP"]["historical_low_source"] == "site_observed"
+    assert prices["JP"]["itad_historical_low_cny"] is None
+
+
 def test_fresh_timestamp_is_not_due():
     assert _runtime.is_due(_runtime.now_iso(), 30) is False
 

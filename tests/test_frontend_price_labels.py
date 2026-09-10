@@ -5,7 +5,9 @@ HTML = (Path(__file__).parents[1] / "steamkb.html").read_text(encoding="utf-8")
 
 
 def test_detail_price_card_renders_one_historical_low_note():
-    assert HTML.count("historicalLowLabel('CN')") == 2
+    assert HTML.count("historicalLowLabel()") == 2
+    assert "selectedRegionLabel" in HTML
+    assert "选择价格地区" in HTML
     assert "historicalLowNote('CN')" not in HTML
     assert "historicalLowStatus('CN')" not in HTML
 

@@ -185,7 +185,7 @@ def query_latest_prices_by_region(conn, appid):
             GROUP BY region
         ) latest ON latest.region = ps.region AND latest.fetched_at = ps.fetched_at
         LEFT JOIN historical_lows hl ON hl.appid = ps.appid
-            AND hl.country = CASE WHEN ps.region = 'CN' THEN 'CN' ELSE 'US' END
+            AND hl.country = ps.region
         WHERE ps.appid = ?
         ORDER BY ps.region
         """,
@@ -203,12 +203,12 @@ def query_game_detail(conn, appid, history_limit):
         """
         SELECT region, currency, initial, final, discount_percent, final_formatted, source, fetched_at
         FROM (
-            SELECT region, currency, initial, final, discount_percent, final_formatted, source, fetched_at
+            SELECT region, currency, initial, final, discount_percent, final_formatted, source, fetched_at,
+                   ROW_NUMBER() OVER (PARTITION BY region ORDER BY fetched_at DESC) AS row_number
             FROM price_snapshots
-            WHERE appid = ? AND region IN ('US', 'CN', 'ITAD-US')
-            ORDER BY fetched_at DESC
-            LIMIT ?
+            WHERE appid = ? AND source = 'steam'
         )
+        WHERE row_number <= ?
         ORDER BY fetched_at ASC
         """,
         (appid, int(history_limit)),

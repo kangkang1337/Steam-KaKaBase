@@ -2853,6 +2853,39 @@ def fetch_appdetails(appid, region="US"):
     return implementation(appid, region)
 
 
+def refresh_regional_prices(appid, regions=None):
+    """Store one current Steam price snapshot per configured region.
+
+    This is intentionally crawler-only work.  It is serial and bounded to one
+    game at a time so opening the detail view never turns into a burst of Store
+    requests.
+    """
+    appid = int(appid)
+    stamp = now_iso()
+    rows = []
+    for region in (regions or TRACKED_REGIONS):
+        polite_store_delay()
+        details = fetch_appdetails(appid, region) or {}
+        price = details.get("price_overview") or {}
+        if price or details.get("is_free"):
+            rows.append((
+                appid, region, price.get("currency"), price.get("initial", 0),
+                price.get("final", 0), price.get("discount_percent", 0),
+                price.get("final_formatted", "Free"), stamp,
+            ))
+    with database_connection() as conn:
+        conn.executemany(
+            """
+            INSERT INTO price_snapshots(
+                appid, region, currency, initial, final, discount_percent,
+                final_formatted, source, fetched_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'steam', ?)
+            """,
+            rows,
+        )
+    return {"appid": appid, "regions": len(rows), "fetched_at": stamp}
+
+
 def record_catalog_app_type(appid, app_type, stamp=None):
     app_type = str(app_type or "unknown").strip().lower()
     if app_type == "unknown":

@@ -26,7 +26,7 @@ def test_migrate_legacy_database_creates_backup_and_history(tmp_path):
         history = conn.execute(
             "SELECT version, name FROM schema_migrations ORDER BY version"
         ).fetchall()
-    assert [row[0] for row in history] == [1, 2, 3, 4, 5, 6]
+    assert [row[0] for row in history] == [1, 2, 3, 4, 5, 6, 7]
 
 
 def test_search_index_is_seeded_and_kept_in_sync(tmp_path):
@@ -56,6 +56,24 @@ def test_search_index_is_seeded_and_kept_in_sync(tmp_path):
 
     assert match == (367520,)
     assert updated == ("Hollow Knight Updated",)
+
+
+def test_bilingual_search_aliases_are_seeded(tmp_path):
+    database = tmp_path / "search-aliases.sqlite3"
+    migrations.migrate_database(database)
+
+    with sqlite3.connect(database) as conn:
+        english = conn.execute(
+            "SELECT appid FROM game_search_alias_fts WHERE game_search_alias_fts MATCH ?",
+            ('"elden"',),
+        ).fetchone()
+        chinese = conn.execute(
+            "SELECT appid FROM game_search_alias_fts WHERE game_search_alias_fts MATCH ?",
+            ('"艾尔登法环"',),
+        ).fetchone()
+
+    assert english == (1245620,)
+    assert chinese == (1245620,)
 
 
 def test_current_database_does_not_create_redundant_backup(tmp_path):

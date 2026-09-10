@@ -202,7 +202,7 @@ def get_game(appid, history_limit=500):
 def _enqueue_game_refresh(appids, priority=100):
     appids = [int(appid) for appid in appids]
     queued = 0
-    for task_type in ("players", "preview", "reviews", "metadata", "historylow"):
+    for task_type in ("players", "preview", "reviews", "metadata", "regional_prices", "historylow"):
         queued += enqueue_crawl_tasks(appids, task_type, priority)
     return queued
 

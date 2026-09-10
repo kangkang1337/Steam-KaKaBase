@@ -19,7 +19,7 @@ def test_health_and_readiness(api_client):
     assert client.get("/health").json() == {"status": "ok"}
     response = client.get("/ready")
     assert response.status_code == 200
-    assert response.json() == {"ready": True, "database": "ok", "schema_version": 6}
+    assert response.json() == {"ready": True, "database": "ok", "schema_version": 7}
 
 
 def test_status_endpoint(api_client):
@@ -36,7 +36,7 @@ def test_status_endpoint(api_client):
     assert set(payload["service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert set(payload["direct_service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert "proxy" in payload
-    assert payload["database_schema_version"] == 6
+    assert payload["database_schema_version"] == 7
     assert payload["niche_max_reviews"] == 50000
     assert payload["daily_refresh_timezone"] == "Asia/Shanghai"
     assert payload["search"]["storage"] == "sqlite_fts5_trigram"
@@ -309,7 +309,7 @@ def test_web_refresh_endpoints_only_enqueue_tasks(api_client, insert_game):
     with runtime.database_connection() as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM crawl_tasks WHERE appid=?", (appid,)
-        ).fetchone()[0] == 5
+        ).fetchone()[0] == 6
 
 
 def test_cache_only_pages_do_not_start_collection(api_client, monkeypatch):

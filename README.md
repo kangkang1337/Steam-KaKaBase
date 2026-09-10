@@ -344,7 +344,7 @@ GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
 
 ## 搜索策略
 
-普通文本搜索只读取本地数据，不在 HTTP 请求内等待 Steam。SQLite v5 迁移会为游戏名称、AppList 原名和本地化简介建立 FTS5 trigram 索引，并用数据库触发器增量维护。这样 `elden` 可以匹配中文详情，“空洞骑士”也可以匹配 `Hollow Knight`。
+普通文本搜索只读取本地数据，不在 HTTP 请求内等待 Steam。SQLite 会为游戏名称、AppList 原名和本地化简介建立 FTS5 trigram 索引，并用数据库触发器增量维护；另有独立的本地双语别名索引，保证 `elden` 可找到 `艾尔登法环`、`空洞骑士` 可找到 `Hollow Knight`，不依赖该游戏是否已经完成 Catalog 补全。
 
 搜索结果使用有上限的进程内 LRU 作为一级缓存，FTS5 索引作为二级缓存。非空结果默认缓存 15 分钟，空结果只缓存 30 秒，以便 catalog 新数据较快变得可见。`/api/status` 的 `search` 字段提供请求数、缓存命中率、数据库平均/最大查询耗时、缓存条目数和估算内存占用。SQLite 使用每请求短连接而非传统连接池，该策略也会在状态中明确返回。
 

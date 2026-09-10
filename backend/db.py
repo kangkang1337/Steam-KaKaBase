@@ -389,7 +389,7 @@ def query_search_index(term, limit, offset, unknown_name):
             where_sql = "(f.name LIKE ? OR f.catalog_name LIKE ? OR f.description LIKE ?)"
             where_params = (pattern, pattern, pattern)
             rank_sql = "0"
-        return conn.execute(
+        catalog_rows = conn.execute(
             f"""
             SELECT CAST(f.appid AS INTEGER) AS appid,
                    CASE
@@ -413,6 +413,44 @@ def query_search_index(term, limit, offset, unknown_name):
             """,
             (unknown_name, *where_params, int(limit), int(offset)),
         ).fetchall()
+        if term.isdigit():
+            return catalog_rows
+
+        if len(term) >= 3:
+            alias_where_sql = "game_search_alias_fts MATCH ?"
+            alias_params = ('"' + term.replace('"', '""') + '"',)
+        else:
+            alias_where_sql = "a.alias LIKE ?"
+            alias_params = (f"%{term}%",)
+        alias_rows = conn.execute(
+            f"""
+            SELECT CAST(a.appid AS INTEGER) AS appid,
+                   COALESCE(NULLIF(g.name, ''), NULLIF(c.name, ''), a.display_name) AS name,
+                   COALESCE(NULLIF(g.header_image, ''),
+                     'https://cdn.akamai.steamstatic.com/steam/apps/' || a.appid || '/header.jpg') AS header_image,
+                   COALESCE(g.tracked, 0) AS tracked,
+                   gls.current_players, -1000.0 AS search_rank
+            FROM game_search_alias_fts a
+            LEFT JOIN games g ON g.appid=CAST(a.appid AS INTEGER)
+            LEFT JOIN steam_catalog c ON c.appid=CAST(a.appid AS INTEGER)
+            LEFT JOIN game_latest_state gls ON gls.appid=CAST(a.appid AS INTEGER)
+            WHERE {alias_where_sql}
+              AND COALESCE(c.app_type, 'game') IN ('unknown', 'game')
+            ORDER BY tracked DESC, COALESCE(gls.current_players, 0) DESC, name ASC
+            LIMIT ?
+            """,
+            (*alias_params, int(limit)),
+        ).fetchall()
+        merged = []
+        seen = set()
+        for row in [*alias_rows, *catalog_rows]:
+            appid = int(row["appid"])
+            if appid not in seen:
+                merged.append(row)
+                seen.add(appid)
+            if len(merged) >= int(limit):
+                break
+        return merged
 
 
 def query_missing_historylow_appids(limit, missing_game_id):

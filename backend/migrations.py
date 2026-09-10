@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 class DatabaseMigrationError(RuntimeError):
@@ -343,6 +343,37 @@ def _migration_6_process_leases(conn):
     """)
 
 
+def _migration_7_search_aliases(conn):
+    """Add a small, local bilingual alias index independent of catalog progress."""
+    _execute_sql(conn, """
+    CREATE VIRTUAL TABLE IF NOT EXISTS game_search_alias_fts USING fts5(
+        appid UNINDEXED,
+        alias,
+        display_name UNINDEXED,
+        tokenize='trigram'
+    );
+
+    INSERT INTO game_search_alias_fts(appid, alias, display_name) VALUES
+        (1245620, 'ELDEN RING', '艾尔登法环'),
+        (1245620, '艾尔登法环', '艾尔登法环'),
+        (367520, 'Hollow Knight', '空洞骑士'),
+        (367520, '空洞骑士', '空洞骑士');
+
+    -- Bootstrap the richer regional cache only for the current detailed
+    -- hot-list cohort.  The crawler consumes one game at a time.
+    INSERT OR IGNORE INTO crawl_tasks(
+        appid, task_type, priority, status, attempts, next_attempt_at,
+        attempt_count, last_error, locked_until, completed_at, updated_at, generation
+    )
+    SELECT h.appid, 'regional_prices', 70, 'pending', 0,
+           strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'), 0, NULL, NULL, NULL,
+           strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'), NULL
+    FROM hot_games h
+    JOIN games g ON g.appid=h.appid
+    WHERE COALESCE(h.rank, 999999) <= 50;
+    """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_1_initial_schema),
     Migration(2, "legacy_columns", _migration_2_legacy_columns),
@@ -350,6 +381,7 @@ MIGRATIONS = (
     Migration(4, "indexes_triggers_and_cleanup", _migration_4_indexes_triggers_and_cleanup),
     Migration(5, "fts5_trigram_search", _migration_5_search_index),
     Migration(6, "process_leases", _migration_6_process_leases),
+    Migration(7, "bilingual_search_aliases", _migration_7_search_aliases),
 )
 
 

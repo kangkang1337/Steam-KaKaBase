@@ -240,6 +240,13 @@ def test_search_uses_only_local_index(isolated_runtime, monkeypatch):
     assert [row["appid"] for row in results] == [1245620]
 
 
+@pytest.mark.parametrize("term", ["elden", "艾尔登法环"])
+def test_search_bilingual_alias_does_not_wait_for_catalog(isolated_runtime, term):
+    results = isolated_runtime.search_steam(term)
+
+    assert results[0]["appid"] == 1245620
+
+
 def test_search_lru_cache_avoids_second_database_query(isolated_runtime, monkeypatch):
     runtime = isolated_runtime
     runtime.SEARCH_CACHE.clear()

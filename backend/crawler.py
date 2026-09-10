@@ -114,7 +114,13 @@ def _run_appdetails_task(task_type, due_appids, limit, priority, persist, unavai
             runtime.fetch_hot_metadata_async(appids, full=task_type == "metadata", include_reviews=False)
         )
         persist(rows, stamp)
-        runtime.complete_crawl_tasks([row["appid"] for row in rows], task_type)
+        successful_appids = [row["appid"] for row in rows]
+        runtime.complete_crawl_tasks(successful_appids, task_type)
+        if task_type == "metadata" and successful_appids:
+            # The hot-list metadata pass has already earned this game a richer
+            # cache.  Regional prices can now be expanded slowly in a separate
+            # task without making the AppDetails pass fan out by region.
+            runtime.enqueue_crawl_tasks(successful_appids, "regional_prices", 70)
         runtime.mark_crawl_tasks_not_available(unavailable, task_type, unavailable_message)
         runtime.fail_crawl_tasks(retry, task_type, "Steam AppDetails request failed")
         runtime.log_event(
@@ -162,6 +168,36 @@ def run_metadata_task():
         "metadata", runtime.get_hot_full_metadata_due_appids, runtime.HOT_METADATA_BATCH_LIMIT, 80,
         runtime.upsert_hot_metadata_batch, "Steam AppDetails unavailable", "hot metadata refreshed",
     )
+
+
+def run_regional_prices_task():
+    """Expand regional prices only after a game has earned detailed coverage."""
+    if runtime.service_cooldown_remaining_seconds("steam_store"):
+        return False
+    appids = runtime.claim_crawl_tasks("regional_prices", 1)
+    if not appids:
+        return False
+    appid = appids[0]
+    try:
+        result = runtime.refresh_regional_prices(appid)
+        runtime.complete_crawl_tasks([appid], "regional_prices")
+        runtime.log_event(
+            f"regional prices refreshed appid={appid} regions={result['regions']}"
+        )
+        return True
+    except sqlite3.Error as exc:
+        runtime.fail_crawl_tasks([appid], "regional_prices", exc, terminal=True)
+        raise
+    except runtime.SteamRateLimited as exc:
+        runtime.fail_crawl_tasks([appid], "regional_prices", exc, retry_minutes=10)
+        raise
+    except runtime.ExternalDataUnavailable as exc:
+        runtime.mark_crawl_tasks_not_available([appid], "regional_prices", str(exc))
+        return False
+    except Exception as exc:
+        runtime.fail_crawl_tasks([appid], "regional_prices", exc, retry_minutes=60)
+        runtime.log_event(f"regional prices deferred appid={appid}: {exc}")
+        return False
 
 
 def run_review_task():
@@ -351,6 +387,7 @@ def refresh_hot_database_once(force_hotlist=False, quick=False):
             run_preview_task()
             run_review_task()
             run_metadata_task()
+            run_regional_prices_task()
             run_historylow_task()
             runtime.run_niche_pool_task()
             try:

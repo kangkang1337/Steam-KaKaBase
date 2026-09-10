@@ -1311,11 +1311,11 @@
           dailyRefreshTimeZone: 'Asia/Shanghai',
           activePage: 'home',
           priceRegions: [
-            { code: 'CN', label: '中国区', language: '简体中文' },
+            { code: 'CN', label: '中国大陆区', language: '简体中文' },
             { code: 'US', label: '美国区', language: 'English' },
             { code: 'JP', label: '日本区', language: '日本語' },
-            { code: 'HK', label: '香港区', language: '繁體中文' },
-            { code: 'TW', label: '台湾区', language: '繁體中文' },
+            { code: 'HK', label: '中国香港区', language: '繁體中文' },
+            { code: 'TW', label: '中国台湾区', language: '繁體中文' },
             { code: 'KR', label: '韩国区', language: '한국어' },
             { code: 'GB', label: '英国区', language: 'English' },
             { code: 'DE', label: '德国区', language: 'Deutsch' },
@@ -2211,17 +2211,21 @@
               subtextStyle: { color: '#5f6e7b', fontSize: 12 }
             },
             tooltip: {
-              trigger: 'item',
+              // Axis-triggered tooltips are easier to reach on narrow bars,
+              // especially with sparse time-series data on mobile.
+              trigger: 'axis',
               confine: true,
               axisPointer: { type: 'shadow' },
               backgroundColor: '#0b1116',
               borderColor: '#2b3743',
               textStyle: { color: '#dbe4ec' },
-              formatter: item => {
+              formatter: params => {
+                const item = Array.isArray(params) ? params[0] : params;
+                if (!item) return '';
                 const data = item.data || {};
                 const value = Array.isArray(item.value) ? item.value[1] : item.value;
                 const time = data.fetchedAt || item.name || item.axisValue;
-                return `${time}<br>${item.marker} 在线人数: ${this.formatPlayers(value)}`;
+                return `${this.localTime(time)}<br>${item.marker || ''} 在线人数: ${this.formatPlayers(value)}`;
               }
             },
             grid: { left: 56, right: 18, top: 24, bottom: 58 },

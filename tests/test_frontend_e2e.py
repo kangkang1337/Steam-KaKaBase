@@ -244,24 +244,26 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
         page.locator(".suggestion").click()
 
         expect(page.locator(".hero h1")).to_have_text("Test Quest")
-        expect(page.locator(".stat").filter(has_text="国区价格")).to_contain_text("¥ 20.00", timeout=15000)
+        expect(page.locator(".hero")).to_contain_text("¥ 20.00", timeout=15000)
         chart_axes = page.evaluate("""
           () => [...document.querySelectorAll('.chart')].map(element => {
             const chart = window.echarts?.getInstanceByDom(element);
             return {
-              axis: chart?.getOption()?.xAxis?.[0]?.type,
-              width: chart?.getWidth(),
+                  axis: chart?.getOption()?.xAxis?.[0]?.type,
+                  tooltipTrigger: chart?.getOption()?.tooltip?.[0]?.trigger,
+                  width: chart?.getWidth(),
               height: chart?.getHeight(),
               points: chart?.getOption()?.series?.reduce((total, series) => total + (series.data || []).length, 0)
             };
           })
         """)
         assert [chart["axis"] for chart in chart_axes] == ["time", "time"]
+        assert chart_axes[1]["tooltipTrigger"] == "axis"
         assert all(chart["width"] > 0 and chart["height"] > 0 and chart["points"] > 0 for chart in chart_axes)
         assert state["detail_calls"] >= 2
 
         page.get_by_label("选择价格地区").select_option("US")
-        expect(page.locator(".stat").filter(has_text="美国区价格")).to_contain_text("$ 10.00")
+        expect(page.locator(".hero")).to_contain_text("$ 10.00")
         price_view = page.evaluate("""
           () => {
             const chart = window.echarts?.getInstanceByDom(document.querySelector('.chart'));
@@ -276,6 +278,7 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
         assert price_view["seriesName"] == "美国区"
         assert price_view["price"] == 10
         assert price_view["firstRegion"].startswith("US")
+
         favorite = page.locator(".favorite-btn")
         expect(favorite).to_have_text("收藏")
         favorite.click()

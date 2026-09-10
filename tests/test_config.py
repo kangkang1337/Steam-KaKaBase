@@ -39,6 +39,11 @@ def test_env_bool_error_names_the_variable(monkeypatch):
         config.env_bool("STEAMKB_TEST_BOOL")
 
 
+def test_proxy_tls_verification_defaults_to_enabled(monkeypatch):
+    monkeypatch.delenv("STEAMKB_TEST_PROXY_TLS", raising=False)
+    assert config.env_bool("STEAMKB_TEST_PROXY_TLS", True) is True
+
+
 def test_load_dotenv_preserves_existing_environment(monkeypatch):
     temp_dir = Path(__file__).parent / ".tmp"
     temp_dir.mkdir(exist_ok=True)

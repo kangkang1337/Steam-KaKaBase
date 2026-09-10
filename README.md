@@ -185,6 +185,7 @@ Copy-Item .env.example .env
 | `STEAMKB_ADMIN_TOKEN` | 空 | 写接口管理令牌；生产环境至少 32 个字符，否则拒绝启动 |
 | `STEAMKB_CORS_ALLOWED_ORIGINS` | 空 | 允许跨域的完整 Origin，多个值用逗号分隔；同域部署留空 |
 | `STEAMKB_ALLOWED_HOSTS` | 空 | 允许的 Host 名称，多个值用逗号分隔 |
+| `STEAMKB_PROXY_VERIFY_TLS` | `true` | 代理 HTTPS 证书校验；生产环境不应关闭 |
 | `STEAMKB_PORT` | `8765` | 本地 HTTP 端口 |
 | `STEAMKB_CRAWLER_LEASE_SECONDS` | `120` | crawler 单实例租约有效期 |
 | `STEAMKB_CRAWLER_HEARTBEAT_SECONDS` | `20` | crawler 续租和状态心跳间隔 |

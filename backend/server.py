@@ -32,6 +32,8 @@ def _validate_security_config():
         raise RuntimeError("STEAMKB_ENV must be development, test, or production")
     if config.IS_PRODUCTION and len(config.ADMIN_TOKEN) < 32:
         raise RuntimeError("STEAMKB_ADMIN_TOKEN must contain at least 32 characters in production")
+    if config.IS_PRODUCTION and (not config.ALLOWED_HOSTS or "*" in config.ALLOWED_HOSTS):
+        raise RuntimeError("STEAMKB_ALLOWED_HOSTS must be an explicit non-wildcard list in production")
     if config.IS_PRODUCTION and "*" in config.CORS_ALLOWED_ORIGINS:
         raise RuntimeError("wildcard CORS is not allowed in production")
 

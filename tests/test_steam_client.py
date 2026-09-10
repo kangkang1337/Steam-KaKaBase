@@ -81,6 +81,11 @@ def test_external_service_classification(url, expected):
     assert _runtime.external_service_for_url(url) == expected
 
 
+def test_image_redirect_handler_refuses_redirects():
+    handler = _runtime._NoImageRedirect()
+    assert handler.redirect_request(None, None, 302, "Found", {}, "https://example.test") is None
+
+
 def test_service_cooldowns_are_isolated(monkeypatch):
     for service in _runtime.EXTERNAL_SERVICES:
         monkeypatch.setitem(_runtime.SERVICE_COOLDOWN_UNTIL, service, 0)

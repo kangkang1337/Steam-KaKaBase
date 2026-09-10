@@ -37,6 +37,9 @@ jobs:
       - name: Check tracked secrets and runtime files
         run: python scripts/check_secrets.py
 
+      - name: Audit Python dependencies
+        run: python -m pip_audit -r requirements.txt
+
       - name: Compile backend
         run: python -m compileall -q backend steamkb.py
 

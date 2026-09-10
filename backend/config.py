@@ -138,7 +138,7 @@ ITAD_API_KEY = os.getenv("ITAD_API_KEY", "")
 STEAM_API_KEY = os.getenv("STEAM_API_KEY", "").strip()
 STEAM_PROXY_URL = os.getenv("STEAMKB_PROXY_URL", "").strip()
 USE_PROXY = env_bool("USE_PROXY", fallback="UNE_PROXY")
-STEAM_PROXY_VERIFY_TLS = env_bool("STEAMKB_PROXY_VERIFY_TLS")
+STEAM_PROXY_VERIFY_TLS = env_bool("STEAMKB_PROXY_VERIFY_TLS", True)
 STEAM_USER_AGENT = "Steam-KaKaBase/1.0 (+local personal dashboard)"
 STEAM_RETRY_STATUSES = {429, 500, 502, 503}
 

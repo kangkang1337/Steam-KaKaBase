@@ -22,6 +22,17 @@ def test_health_and_readiness(api_client):
     assert response.json() == {"ready": True, "database": "ok", "schema_version": 7}
 
 
+@pytest.mark.parametrize("allowed_hosts", [(), ("*",)])
+def test_production_rejects_missing_or_wildcard_host_allowlist(monkeypatch, allowed_hosts):
+    monkeypatch.setattr(config, "ENVIRONMENT", "production")
+    monkeypatch.setattr(config, "IS_PRODUCTION", True)
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "a" * 32)
+    monkeypatch.setattr(config, "ALLOWED_HOSTS", allowed_hosts)
+
+    with pytest.raises(RuntimeError, match="STEAMKB_ALLOWED_HOSTS"):
+        create_app()
+
+
 def test_status_endpoint(api_client):
     _, client = api_client
     response = client.get("/api/status", headers={"Origin": "http://localhost:8765"})
@@ -258,6 +269,7 @@ def test_production_rejects_wildcard_cors(monkeypatch):
     monkeypatch.setattr(config, "IS_PRODUCTION", True)
     monkeypatch.setattr(config, "ENVIRONMENT", "production")
     monkeypatch.setattr(config, "ADMIN_TOKEN", "a" * 32)
+    monkeypatch.setattr(config, "ALLOWED_HOSTS", ("steam.example",))
     monkeypatch.setattr(config, "CORS_ALLOWED_ORIGINS", ("*",))
     with pytest.raises(RuntimeError, match="wildcard CORS"):
         create_app()
@@ -267,6 +279,7 @@ def test_production_disables_api_documentation(isolated_runtime, monkeypatch):
     monkeypatch.setattr(config, "IS_PRODUCTION", True)
     monkeypatch.setattr(config, "ENVIRONMENT", "production")
     monkeypatch.setattr(config, "ADMIN_TOKEN", "a" * 32)
+    monkeypatch.setattr(config, "ALLOWED_HOSTS", ("testserver",))
     monkeypatch.setattr(config, "CORS_ALLOWED_ORIGINS", ())
     with TestClient(create_app()) as client:
         assert client.get("/docs").status_code == 404

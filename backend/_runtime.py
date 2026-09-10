@@ -442,6 +442,13 @@ def request_json(url, timeout=STEAM_TIMEOUT_SECONDS, headers=None, missing_statu
     return implementation(url, timeout, headers, missing_statuses, max_retries, service)
 
 
+class _NoImageRedirect(urllib.request.HTTPRedirectHandler):
+    """Keep an allowed CDN URL from becoming a request to an arbitrary host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def cache_image(url):
     service = "image_cdn"
     check_service_cooldown(service)
@@ -466,7 +473,10 @@ def cache_image(url):
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=STEAM_TIMEOUT_SECONDS) as res:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoImageRedirect()
+        )
+        with opener.open(req, timeout=STEAM_TIMEOUT_SECONDS) as res:
             content_type = res.headers.get_content_type()
             if not content_type.startswith("image/"):
                 raise ValueError(f"unexpected content type: {content_type}")

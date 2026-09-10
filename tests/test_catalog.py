@@ -202,6 +202,8 @@ def test_local_search_matches_catalog_alias_but_displays_localized_name(isolated
 
     assert results[0]["appid"] == 1245620
     assert results[0]["name"] == "Localized Elden Ring"
+    assert results[0]["name_zh"] == "Localized Elden Ring"
+    assert results[0]["name_en"] == "ELDEN RING"
 
 
 def test_local_search_matches_localized_title_in_description(isolated_runtime):

@@ -196,7 +196,15 @@ def query_latest_prices_by_region(conn, appid):
 def query_game_detail(conn, appid, history_limit):
     """Read a game's cached detail data without scheduling external work."""
     appid = int(appid)
-    game = conn.execute("SELECT * FROM games WHERE appid = ?", (appid,)).fetchone()
+    game = conn.execute(
+        """
+        SELECT g.*, c.name AS name_en
+        FROM games g
+        LEFT JOIN steam_catalog c ON c.appid = g.appid
+        WHERE g.appid = ?
+        """,
+        (appid,),
+    ).fetchone()
     if not game:
         return None
     price_history = conn.execute(
@@ -293,7 +301,7 @@ def query_tracked_games():
     with transaction(rows=True) as conn:
         return conn.execute(
             """
-            SELECT g.*,
+            SELECT g.*, c.name AS name_en,
                    (SELECT player_count FROM player_snapshots WHERE appid = g.appid ORDER BY fetched_at DESC LIMIT 1) AS player_count,
                    (SELECT review_score FROM review_snapshots WHERE appid = g.appid ORDER BY fetched_at DESC LIMIT 1) AS review_score,
                    (SELECT final_formatted FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price,
@@ -305,6 +313,7 @@ def query_tracked_games():
                    (SELECT MIN(fetched_at) FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam') AS cn_observed_low_since,
                    (SELECT COUNT(*) FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam' AND final IS NOT NULL) AS cn_observed_snapshot_count
             FROM games g
+            LEFT JOIN steam_catalog c ON c.appid = g.appid
             WHERE tracked = 1
             ORDER BY player_count DESC, name ASC
             """
@@ -327,6 +336,8 @@ def query_hot_games(limit, unknown_name):
                            WHEN san.name IS NOT NULL AND TRIM(san.name) != '' THEN san.name
                            ELSE ?
                        END AS name,
+                       g.name AS name_zh,
+                       COALESCE(NULLIF(TRIM(c.name), ''), NULLIF(TRIM(san.name), ''), NULLIF(TRIM(h.name), '')) AS name_en,
                        COALESCE(NULLIF(TRIM(g.header_image), ''), NULLIF(TRIM(h.header_image), '')) AS header_image,
                        COALESCE(gls.current_players, h.current_players, 0) AS current_players,
                        h.peak_players, h.source, h.fetched_at, g.tracked, g.is_free,
@@ -339,6 +350,7 @@ def query_hot_games(limit, unknown_name):
                 FROM hot_games h
                 LEFT JOIN games g ON g.appid = h.appid
                 LEFT JOIN steam_app_names san ON san.appid = h.appid
+                LEFT JOIN steam_catalog c ON c.appid = h.appid
                 LEFT JOIN game_latest_state gls ON gls.appid = h.appid
             )
             SELECT * FROM hot
@@ -352,7 +364,8 @@ def query_hot_games(limit, unknown_name):
             return rows
         return conn.execute(
             """
-            SELECT g.appid, NULL AS original_rank, g.name, g.header_image,
+            SELECT g.appid, NULL AS original_rank, g.name, g.name AS name_zh,
+                   c.name AS name_en, g.header_image,
                    COALESCE(gls.current_players, 0) AS current_players,
                    NULL AS peak_players, 'local_snapshots' AS source,
                    g.updated_at AS fetched_at, g.tracked, g.is_free,
@@ -363,6 +376,7 @@ def query_hot_games(limit, unknown_name):
                    (SELECT MIN(ps.fetched_at) FROM price_snapshots ps WHERE ps.appid=g.appid AND ps.region='CN' AND ps.source='steam') AS cn_observed_low_since,
                    (SELECT COUNT(*) FROM price_snapshots ps WHERE ps.appid=g.appid AND ps.region='CN' AND ps.source='steam' AND ps.final IS NOT NULL) AS cn_observed_snapshot_count
             FROM games g
+            LEFT JOIN steam_catalog c ON c.appid = g.appid
             LEFT JOIN game_latest_state gls ON gls.appid = g.appid
             WHERE g.name != ?
             ORDER BY current_players DESC, g.name ASC
@@ -397,6 +411,8 @@ def query_search_index(term, limit, offset, unknown_name):
                      WHEN f.name != '' THEN f.name
                      ELSE f.catalog_name
                    END AS name,
+                   NULLIF(g.name, '') AS name_zh,
+                   COALESCE(NULLIF(c.name, ''), NULLIF(f.catalog_name, '')) AS name_en,
                    COALESCE(NULLIF(g.header_image, ''),
                      'https://cdn.akamai.steamstatic.com/steam/apps/' || f.appid || '/header.jpg') AS header_image,
                    COALESCE(g.tracked, 0) AS tracked,
@@ -426,6 +442,8 @@ def query_search_index(term, limit, offset, unknown_name):
             f"""
             SELECT CAST(a.appid AS INTEGER) AS appid,
                    COALESCE(NULLIF(g.name, ''), NULLIF(c.name, ''), a.display_name) AS name,
+                   NULLIF(g.name, '') AS name_zh,
+                   COALESCE(NULLIF(c.name, ''), NULLIF(a.display_name, '')) AS name_en,
                    COALESCE(NULLIF(g.header_image, ''),
                      'https://cdn.akamai.steamstatic.com/steam/apps/' || a.appid || '/header.jpg') AS header_image,
                    COALESCE(g.tracked, 0) AS tracked,
@@ -477,7 +495,7 @@ def query_popular_historical_low_rows(limit, min_reviews, min_players):
     with transaction(rows=True) as conn:
         return conn.execute(
             """
-            SELECT g.appid, g.name, g.header_image,
+            SELECT g.appid, g.name, c.name AS name_en, g.header_image,
                    COALESCE(s.current_players, 0) AS current_players,
                    s.review_score, s.total_reviews, s.cn_price,
                    s.cn_price_final, s.cn_price_currency,
@@ -561,7 +579,7 @@ def query_daily_niche_snapshot(refresh_key, max_reviews):
     with transaction(rows=True) as conn:
         return conn.execute(
             """
-            SELECT n.*, COALESCE(g.tracked, 0) AS tracked,
+            SELECT n.*, c.name AS name_en, COALESCE(g.tracked, 0) AS tracked,
                    (SELECT amount_cny FROM historical_lows h
                     WHERE h.appid=n.appid AND h.country='CN' LIMIT 1) AS cn_itad_low_cny,
                    (SELECT MIN(ps.final) / 100.0 FROM price_snapshots ps

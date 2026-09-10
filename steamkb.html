@@ -800,6 +800,43 @@
     .chart {
       height: 306px;
       width: 100%;
+      cursor: crosshair;
+    }
+
+    .chart-wrap {
+      position: relative;
+    }
+
+    .chart-hover-tooltip {
+      position: absolute;
+      z-index: 5;
+      pointer-events: none;
+      min-width: 150px;
+      padding: 8px 10px;
+      border: 1px solid #2b3743;
+      border-radius: 4px;
+      background: #0b1116;
+      color: #dbe4ec;
+      font-size: 12px;
+      line-height: 1.55;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+      white-space: nowrap;
+    }
+
+    .chart-hover-surface {
+      position: absolute;
+      z-index: 4;
+      inset: 0;
+      cursor: crosshair;
+    }
+
+    .chart-hover-dot {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      margin-right: 4px;
+      border-radius: 50%;
+      background: #66c0f4;
     }
 
     table {
@@ -860,6 +897,28 @@
       border-color: var(--accent);
       box-shadow: 0 0 0 1px rgba(102, 192, 244, .22);
       outline: none;
+    }
+
+    .language-switch {
+      display: flex;
+      padding: 2px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: #111820;
+    }
+
+    .language-switch button {
+      min-width: 38px;
+      height: 28px;
+      padding: 0 8px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .language-switch button.active {
+      background: #2a475e;
+      color: #fff;
     }
 
     .status {
@@ -998,38 +1057,42 @@
   <div id="app">
     <header class="topbar">
       <div class="nav-wrap">
-        <button class="menu-btn" @click="navOpen = !navOpen" aria-label="打开导航菜单">
+        <button class="menu-btn" @click="navOpen = !navOpen" :aria-label="t('openNav')">
           <span class="menu-lines"></span>
         </button>
         <div v-if="navOpen" class="app-menu">
-          <button :class="{active: activePage === 'home'}" @click="switchPage('home')">主页</button>
-          <button :class="{active: activePage === 'tracker'}" @click="switchPage('tracker')">游戏详情</button>
-          <button :class="{active: activePage === 'hot'}" @click="switchPage('hot')">热门榜</button>
-          <button :class="{active: activePage === 'niche'}" @click="switchPage('niche')">小众池</button>
+          <button :class="{active: activePage === 'home'}" @click="switchPage('home')">{{ t('home') }}</button>
+          <button :class="{active: activePage === 'tracker'}" @click="switchPage('tracker')">{{ t('gameDetail') }}</button>
+          <button :class="{active: activePage === 'hot'}" @click="switchPage('hot')">{{ t('hotList') }}</button>
+          <button :class="{active: activePage === 'niche'}" @click="switchPage('niche')">{{ t('nichePool') }}</button>
         </div>
       </div>
       <div class="brand"><img class="brand-icon" :src="logoSrc" alt=""><span>Steam-KaKaBase</span></div>
       <div class="search">
-        <input v-model.trim="query" @focus="onSearchFocus" @blur="onSearchBlur" @input="queueSearch" placeholder="搜索 Steam 游戏" aria-label="搜索 Steam 游戏">
+        <input v-model.trim="query" @focus="onSearchFocus" @blur="onSearchBlur" @input="queueSearch" :placeholder="t('searchPlaceholder')" :aria-label="t('searchPlaceholder')">
         <div v-if="dropdownItems.length" class="suggestions">
           <button class="suggestion" v-for="item in dropdownItems" :key="item.appid" @mousedown.prevent @click="openSuggestion(item)">
         <img :src="cachedImage(item) || placeholderImage" @error="retryImage" alt="" loading="lazy" decoding="async">
             <span class="suggestion-title">{{ displayGameName(item) }}</span>
-            <span class="suggestion-meta">{{ item.current_players !== undefined ? formatPlayers(item.current_players) + ' 在线' : (item.tracked ? '已收藏' : '查看') }}</span>
+            <span class="suggestion-meta">{{ item.current_players !== undefined ? formatPlayers(item.current_players) + ' ' + t('online') : (item.tracked ? t('favorited') : t('view')) }}</span>
           </button>
         </div>
         <div v-else-if="searchFocused && query.length >= 2" class="suggestions search-empty">
-          {{ searching ? '正在搜索…' : '暂无本地结果，目录仍在持续补充' }}
+          {{ searching ? t('searching') : t('noSearchResults') }}
         </div>
       </div>
       <div class="toolbar">
         <label class="region-picker">
-          <span class="sr-only">选择价格地区</span>
-          <select v-model="selectedRegion" @change="changeSelectedRegion" aria-label="选择价格地区">
-            <option v-for="region in priceRegions" :key="region.code" :value="region.code">{{ region.label }}</option>
+          <span class="sr-only">{{ t('selectPriceRegion') }}</span>
+          <select v-model="selectedRegion" @change="changeSelectedRegion" :aria-label="t('selectPriceRegion')">
+            <option v-for="region in priceRegions" :key="region.code" :value="region.code">{{ regionLabel(region) }}</option>
           </select>
         </label>
-        <button @click="loadGames" :disabled="busy">刷新列表</button>
+        <div class="language-switch" :aria-label="t('selectLanguage')">
+          <button :class="{active: locale === 'zh-CN'}" @click="setLocale('zh-CN')">中文</button>
+          <button :class="{active: locale === 'en-US'}" @click="setLocale('en-US')">EN</button>
+        </div>
+        <button @click="loadGames" :disabled="busy">{{ t('refreshList') }}</button>
       </div>
     </header>
 
@@ -1038,8 +1101,8 @@
       <span v-else-if="directCooldownSeconds">{{ directCooldownText }}。</span>
       <span v-else-if="message">{{ message }}</span>
       <span v-else-if="backendProgress">{{ backendProgress }}</span>
-      <span v-else-if="refreshing">后台自动采集中，页面可正常使用。</span>
-      <span v-else>自动采集：在线人数每 {{ playerRefreshMinutes }} 分钟一次，价格/评价每 {{ priceRefreshHours }} 小时一次。</span>
+      <span v-else-if="refreshing">{{ t('backgroundCollecting') }}</span>
+      <span v-else>{{ t('autoCollection', { players: playerRefreshMinutes, prices: priceRefreshHours }) }}</span>
     </div>
 
     <main v-if="activePage === 'home'" class="shell single">
@@ -1051,32 +1114,32 @@
           </div>
           <img class="home-logo" :src="logoSrc" alt="">
           <div class="home-lines">
-            <div>Welcome to SteamKaKaBase!</div>
-            <div>Hope you can find what you want here!</div>
-            <div>Don't forget to have fun today!</div>
+            <div>{{ t('welcome1') }}</div>
+            <div>{{ t('welcome2') }}</div>
+            <div>{{ t('welcome3') }}</div>
           </div>
           <div class="home-sign">——by KK</div>
           <div class="home-picks">
             <article class="pick-card">
-              <div class="pick-label">今日史低</div>
+              <div class="pick-label">{{ t('todayLow') }}</div>
               <template v-if="homePicks.historical_low">
                 <img class="pick-image" :src="cachedImage(homePicks.historical_low) || placeholderImage" @error="retryImage" alt="" loading="lazy" decoding="async">
                 <div class="pick-content">
                   <div class="pick-title">{{ displayGameName(homePicks.historical_low) }}</div>
                   <div class="pick-meta">
-                    <span>{{ formatPlayers(homePicks.historical_low.current_players) }} 在线</span>
-                    <span>{{ homePicks.historical_low.review_score ?? '-' }}% 好评</span>
+                    <span>{{ formatPlayers(homePicks.historical_low.current_players) }} {{ t('online') }}</span>
+                    <span>{{ homePicks.historical_low.review_score ?? '-' }}% {{ t('positive') }}</span>
                     <span class="pill price-low">{{ displayCnPrice(homePicks.historical_low) }}</span>
                   </div>
-                  <button @click="selectGame(homePicks.historical_low.appid)">查看详情</button>
+                  <button @click="selectGame(homePicks.historical_low.appid)">{{ t('viewDetails') }}</button>
                 </div>
               </template>
-              <div v-else class="pick-empty">暂无国区史低数据</div>
+              <div v-else class="pick-empty">{{ t('noCnLow') }}</div>
             </article>
 
             <article class="pick-card">
               <div class="pick-label-row">
-                <div class="pick-label">每日小众宝藏游戏</div>
+                <div class="pick-label">{{ t('dailyGem') }}</div>
                 <div class="pick-refresh">{{ dailyRecommendationCountdown }}</div>
               </div>
               <template v-if="homePicks.niche">
@@ -1085,22 +1148,22 @@
                   <div class="pick-title">{{ displayGameName(homePicks.niche) }}</div>
                   <div class="pick-blurb">{{ dailyNicheBlurb(homePicks.niche) }}</div>
                   <div class="pick-meta">
-                    <span>{{ formatPlayers(homePicks.niche.current_players) }} 在线</span>
-                    <span>{{ homePicks.niche.review_score ?? '-' }}% 好评</span>
+                    <span>{{ formatPlayers(homePicks.niche.current_players) }} {{ t('online') }}</span>
+                    <span>{{ homePicks.niche.review_score ?? '-' }}% {{ t('positive') }}</span>
                     <span class="pill" :class="{'price-low': homePicks.niche.cn_price_historical_low, 'price-discount': homePicks.niche.cn_price_discounted}">{{ displayCnPrice(homePicks.niche) }}</span>
                   </div>
-                  <button @click="selectGame(homePicks.niche.appid)">查看详情</button>
+                  <button @click="selectGame(homePicks.niche.appid)">{{ t('viewDetails') }}</button>
                 </div>
               </template>
-              <div v-else class="pick-empty">暂无符合条件的游戏</div>
+              <div v-else class="pick-empty">{{ t('noEligibleGames') }}</div>
             </article>
 
             <article class="pick-card">
-              <div class="pick-label">今日表情包</div>
+              <div class="pick-label">{{ t('todayMeme') }}</div>
               <div class="meme-frame" v-if="homePicks.meme && homePicks.meme.url">
                 <img :src="homePicks.meme.url" alt="" loading="lazy" decoding="async">
               </div>
-              <div v-else class="pick-empty">把 gif / webp / png 放进 assets/memes 后会显示</div>
+              <div v-else class="pick-empty">{{ t('noMeme') }}</div>
             </article>
           </div>
         </div>
@@ -1110,7 +1173,7 @@
     <main v-else-if="activePage === 'niche'" class="shell single">
       <section class="panel hot-page">
         <div class="panel-head">
-          <span>小众池</span>
+          <span>{{ t('nichePool') }}</span>
           <span class="muted">{{ nichePoolSummary }}</span>
         </div>
         <div v-if="nicheGames.length" class="hot-list">
@@ -1118,60 +1181,60 @@
             <img :src="cachedImage(game) || placeholderImage" @error="retryImage" alt="" loading="lazy" decoding="async">
             <span class="hot-title">
               <span class="hot-name"><span class="hot-rank">#{{ game.rank }}</span>{{ displayGameName(game) }}</span>
-              <span class="hot-meta">峰值 {{ formatPlayers(game.peak_players) }} · 更新于 {{ localTime(game.fetched_at, true) }}</span>
+              <span class="hot-meta">{{ t('peak') }} {{ formatPlayers(game.peak_players) }} · {{ t('updatedAt') }} {{ localTime(game.fetched_at, true) }}</span>
             </span>
-            <span class="hot-review">{{ game.review_score ?? '-' }}% 好评</span>
-            <span class="hot-players">{{ formatPlayers(game.current_players) }} 在线</span>
+            <span class="hot-review">{{ game.review_score ?? '-' }}% {{ t('positive') }}</span>
+            <span class="hot-players">{{ formatPlayers(game.current_players) }} {{ t('online') }}</span>
             <span class="pill hot-price" :class="{'price-low': game.cn_price_historical_low, 'price-discount': game.cn_price_discounted}">{{ displayCnPrice(game) }}</span>
           </button>
         </div>
-        <div v-else class="empty">小众池正在建立，满足条件的游戏会自动出现在这里。</div>
+        <div v-else class="empty">{{ t('nicheBuilding') }}</div>
       </section>
     </main>
 
     <main v-else-if="activePage === 'hot'" class="shell single">
       <section class="panel hot-page">
         <div class="panel-head">
-          <span>热门榜</span>
-          <span class="muted">{{ filteredHotPageGames.length }} / {{ hotPageGames.length }} apps · 更新于 {{ latestHotUpdatedAt }}</span>
+          <span>{{ t('hotList') }}</span>
+          <span class="muted">{{ filteredHotPageGames.length }} / {{ hotPageGames.length }} apps · {{ t('updatedAt') }} {{ latestHotUpdatedAt }}</span>
         </div>
         <div class="hot-controls">
           <label class="toggle">
             <input type="checkbox" v-model="hotFilterPaid">
-            <span>仅查看付费游戏</span>
+            <span>{{ t('paidOnly') }}</span>
           </label>
           <label class="toggle">
             <input type="checkbox" v-model="hotFilterLow">
-            <span>仅查看史低游戏</span>
+            <span>{{ t('lowOnly') }}</span>
           </label>
           <label class="toggle">
             <input type="checkbox" v-model="hotSortReview">
-            <span>按好评率排序</span>
+            <span>{{ t('sortPositive') }}</span>
           </label>
-          <button @click="refreshHotPage" :disabled="busy">刷新热门榜</button>
+          <button @click="refreshHotPage" :disabled="busy">{{ t('refreshHot') }}</button>
         </div>
         <div v-if="filteredHotPageGames.length" class="hot-list">
           <button v-for="game in filteredHotPageGames" :key="game.appid" class="hot-row" @click="selectGame(game.appid)">
             <img :src="cachedImage(game) || placeholderImage" @error="retryImage" alt="" loading="lazy" decoding="async">
             <span class="hot-title">
               <span class="hot-name"><span class="hot-rank">#{{ game.rank }}</span>{{ displayGameName(game) }}</span>
-              <span class="hot-meta">更新于 {{ localTime(game.fetched_at, true) }}</span>
+              <span class="hot-meta">{{ t('updatedAt') }} {{ localTime(game.fetched_at, true) }}</span>
             </span>
-            <span class="hot-review">{{ game.review_score ?? '-' }}% 好评</span>
-            <span class="hot-players">{{ formatPlayers(game.current_players) }} 在线</span>
+            <span class="hot-review">{{ game.review_score ?? '-' }}% {{ t('positive') }}</span>
+            <span class="hot-players">{{ formatPlayers(game.current_players) }} {{ t('online') }}</span>
             <span class="pill hot-price" :class="{'price-low': game.cn_price_historical_low, 'price-discount': game.cn_price_discounted}">{{ displayCnPrice(game) }}</span>
           </button>
-          <div class="empty-cell">{{ hotPageLimit < 1000 ? '向下滚动继续加载' : '已加载到本地上限' }}</div>
+          <div class="empty-cell">{{ hotPageLimit < 1000 ? t('scrollMore') : t('localLimit') }}</div>
         </div>
-        <div v-else-if="!hotPageGames.length && hotRunning" class="empty">正在建立热门榜，稍后会自动显示本地缓存。</div>
-        <div v-else class="empty">{{ hotPageGames.length ? '暂无符合条件的热门游戏。' : '暂无本地热门榜，后台会自动建立。' }}</div>
+        <div v-else-if="!hotPageGames.length && hotRunning" class="empty">{{ t('hotBuilding') }}</div>
+        <div v-else class="empty">{{ hotPageGames.length ? t('noFilteredHot') : t('noHot') }}</div>
       </section>
     </main>
 
     <main v-else class="shell">
       <aside class="panel">
         <div class="panel-head">
-          <span>已跟踪游戏</span>
+          <span>{{ t('trackedGames') }}</span>
           <span class="muted">{{ games.length }} apps</span>
         </div>
         <div v-if="games.length" class="game-list">
@@ -1179,14 +1242,14 @@
             <span>
               <span class="game-name">{{ displayGameName(game) }}</span>
               <span class="row-meta">
-                <span>{{ formatPlayers(game.player_count) }} 在线</span>
-                <span>{{ game.review_score ?? '-' }}% 好评</span>
+                <span>{{ formatPlayers(game.player_count) }} {{ t('online') }}</span>
+                <span>{{ game.review_score ?? '-' }}% {{ t('positive') }}</span>
               </span>
             </span>
             <span class="pill" :class="{'price-low': game.cn_price_historical_low, 'price-discount': game.cn_price_discounted}">{{ displayCnPrice(game) }}</span>
           </button>
         </div>
-        <div v-else class="empty">暂无数据，搜索游戏后加入跟踪。</div>
+        <div v-else class="empty">{{ t('noTrackedGames') }}</div>
       </aside>
 
       <section class="detail" v-if="selected">
@@ -1197,29 +1260,29 @@
               <div class="hero-title-row">
                 <h1>{{ displayGameName(selected) }}</h1>
                 <button v-if="browserWriteActionsEnabled" class="favorite-btn" :class="{active: selected.tracked}" @click="toggleFavorite" :disabled="favoriteBusy">
-                  {{ selected.tracked ? '已收藏' : '收藏' }}
+                  {{ selected.tracked ? t('favorited') : t('favorite') }}
                 </button>
               </div>
-              <div class="desc">{{ selected.short_description || '暂无简介。' }}</div>
-              <div v-if="selected.release_date" class="release-meta">发行日期：{{ selected.release_date }}</div>
-              <div class="release-meta">数据更新：在线 {{ relativeAge(playerHistory[playerHistory.length - 1]?.fetched_at) }}，{{ selectedRegionLabel }}价格 {{ relativeAge(selectedRegionPrice?.fetched_at) }}，评价 {{ relativeAge(reviews?.fetched_at) }}</div>
+              <div class="desc">{{ selected.short_description || t('noDescription') }}</div>
+              <div v-if="selected.release_date" class="release-meta">{{ t('releaseDate') }}{{ selected.release_date }}</div>
+              <div class="release-meta">{{ t('dataUpdated') }}{{ t('online') }} {{ relativeAge(playerHistory[playerHistory.length - 1]?.fetched_at) }} · {{ selectedRegionLabel }} {{ t('price') }} {{ relativeAge(selectedRegionPrice?.fetched_at) }} · {{ t('reviews') }} {{ relativeAge(reviews?.fetched_at) }}</div>
             </div>
             <div class="stats">
               <div class="stat">
-                <div class="stat-label">当前在线</div>
+                <div class="stat-label">{{ t('currentPlayers') }}</div>
                 <div class="stat-value">{{ formatPlayers(latestPlayers) }}</div>
               </div>
               <div class="stat">
-                <div class="stat-label">本站历史峰值</div>
+                <div class="stat-label">{{ t('sitePeak') }}</div>
                 <div class="stat-value">{{ formatPlayers(selected.site_peak_players) }}</div>
-                <div v-if="selected.site_peak_recorded_since" class="stat-note">自 {{ localTime(selected.site_peak_recorded_since, true) }} 起记录</div>
+                <div v-if="selected.site_peak_recorded_since" class="stat-note">{{ t('recordedSince') }} {{ localTime(selected.site_peak_recorded_since, true) }}</div>
               </div>
               <div class="stat">
-                <div class="stat-label">玩家评价</div>
+                <div class="stat-label">{{ t('playerReviews') }}</div>
                 <div class="stat-value">{{ latestReviewScore }}</div>
               </div>
               <div class="stat" :class="{'price-low': isHistoricalLow(), 'price-discount': isDiscounted()}">
-                <div class="stat-label">{{ selectedRegionLabel }}价格</div>
+                <div class="stat-label">{{ selectedRegionLabel }} {{ t('price') }}</div>
                 <div class="stat-value">{{ currentPrice() }}</div>
                 <div v-if="historicalLowLabel()" class="stat-note">{{ historicalLowLabel() }}</div>
               </div>
@@ -1230,36 +1293,44 @@
         <div class="grid-2">
           <article class="panel">
             <div class="panel-head">
-              <span>{{ selectedRegionLabel }}历史价格</span>
-              <span class="muted">{{ selectedRegionCurrency || '原币' }} 原币价格</span>
+              <span>{{ selectedRegionLabel }} {{ t('priceHistory') }}</span>
+              <span class="muted">{{ selectedRegionCurrency || t('nativeCurrency') }} {{ t('nativePrice') }}</span>
             </div>
             <div ref="priceChart" class="chart"></div>
           </article>
           <article class="panel">
             <div class="panel-head">
-              <span>在线人数</span>
-              <span class="muted">快照柱形图</span>
+              <span>{{ t('onlinePlayers') }}</span>
+              <span class="muted">{{ t('snapshotBars') }}</span>
             </div>
-            <div ref="playerChart" class="chart"></div>
+            <div class="chart-wrap">
+              <div ref="playerChart" class="chart"></div>
+              <div ref="playerChartSurface" class="chart-hover-surface"></div>
+              <div v-if="playerTooltip.visible" class="chart-hover-tooltip" role="status"
+                   :style="{ left: `${playerTooltip.left}px`, top: `${playerTooltip.top}px` }">
+                <div>{{ localTime(playerTooltip.time) }}</div>
+                <div><span class="chart-hover-dot"></span>{{ t('playersTooltip') }}: {{ formatPlayers(playerTooltip.count) }}</div>
+              </div>
+            </div>
           </article>
         </div>
 
         <article class="panel">
           <div class="panel-head">
-            <span>全区价格快照</span>
-            <span class="muted">已缓存 {{ selectedPrices.length }} / 13 个地区</span>
+            <span>{{ t('regionalPrices') }}</span>
+            <span class="muted">{{ t('cachedRegions', { count: selectedPrices.length }) }}</span>
           </div>
           <div style="overflow:auto">
             <table>
               <thead>
                 <tr>
-                  <th>地区</th>
-                  <th>价格</th>
-                  <th>原价</th>
-                  <th>折扣</th>
-                  <th>币种</th>
-                  <th>来源</th>
-                  <th>采集时间</th>
+                  <th>{{ t('region') }}</th>
+                  <th>{{ t('price') }}</th>
+                  <th>{{ t('originalPrice') }}</th>
+                  <th>{{ t('discount') }}</th>
+                  <th>{{ t('currency') }}</th>
+                  <th>{{ t('source') }}</th>
+                  <th>{{ t('collectedAt') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1273,7 +1344,7 @@
                   <td>{{ localTime(price.fetched_at) }}</td>
                 </tr>
                 <tr v-if="!selectedPrices.length">
-                  <td colspan="7" class="empty-cell">还没有价格快照，等待下一次自动采集。</td>
+                  <td colspan="7" class="empty-cell">{{ t('noPriceSnapshot') }}</td>
                 </tr>
               </tbody>
             </table>
@@ -1283,7 +1354,7 @@
       </section>
 
       <section v-else class="panel">
-        <div class="empty">点击搜索栏查看热门榜，或选择左侧已收藏游戏。</div>
+        <div class="empty">{{ t('selectGameHint') }}</div>
       </section>
     </main>
   </div>
@@ -1291,10 +1362,106 @@
   <script>
     const { createApp, nextTick } = Vue;
 
+    const translations = {
+      'zh-CN': {
+        openNav: '打开导航菜单', home: '主页', gameDetail: '游戏详情', hotList: '热门榜', nichePool: '小众池',
+        searchPlaceholder: '搜索 Steam 游戏', online: '在线', favorited: '已收藏', favorite: '收藏', view: '查看',
+        searching: '正在搜索…', noSearchResults: '暂无本地结果，目录仍在持续补充', selectPriceRegion: '选择价格地区',
+        selectLanguage: '选择界面语言', refreshList: '刷新列表', backgroundCollecting: '后台自动采集中，页面可正常使用。',
+        autoCollection: '自动采集：在线人数每 {players} 分钟一次，价格/评价每 {prices} 小时一次。',
+        welcome1: '欢迎来到 SteamKaKaBase！', welcome2: '希望你能在这里找到想要的游戏！', welcome3: '今天也别忘了享受游戏！',
+        todayLow: '今日史低', positive: '好评', viewDetails: '查看详情', noCnLow: '暂无国区史低数据',
+        dailyGem: '每日小众宝藏游戏', noEligibleGames: '暂无符合条件的游戏', todayMeme: '今日表情包',
+        noMeme: '把 gif / webp / png 放进 assets/memes 后会显示', peak: '峰值', updatedAt: '更新于',
+        nicheBuilding: '小众池正在建立，满足条件的游戏会自动出现在这里。', paidOnly: '仅查看付费游戏',
+        lowOnly: '仅查看史低游戏', sortPositive: '按好评率排序', refreshHot: '刷新热门榜', scrollMore: '向下滚动继续加载',
+        localLimit: '已加载到本地上限', hotBuilding: '正在建立热门榜，稍后会自动显示本地缓存。',
+        noFilteredHot: '暂无符合条件的热门游戏。', noHot: '暂无本地热门榜，后台会自动建立。', trackedGames: '已跟踪游戏',
+        noTrackedGames: '暂无数据，搜索游戏后加入跟踪。', noDescription: '暂无简介。', releaseDate: '发行日期：', dataUpdated: '数据更新：',
+        price: '价格', reviews: '评价', currentPlayers: '当前在线', sitePeak: '本站历史峰值', recordedSince: '记录始于', playerReviews: '玩家评价',
+        priceHistory: '历史价格', nativeCurrency: '原币', nativePrice: '原币价格', onlinePlayers: '在线人数', snapshotBars: '快照柱形图',
+        regionalPrices: '全区价格快照', cachedRegions: '已缓存 {count} / 13 个地区', region: '地区', originalPrice: '原价',
+        discount: '折扣', currency: '币种', source: '来源', collectedAt: '采集时间', noPriceSnapshot: '还没有价格快照，等待下一次自动采集。',
+        selectGameHint: '点击搜索栏查看热门榜，或选择左侧已收藏游戏。', namePending: '名称待补全', refreshCountdown: '距刷新 {time}',
+        free: '免费', unavailable: '{region}暂无售价', cnUnavailable: '国区暂无售价', noPriceChart: '暂无价格快照', priceWaiting: '{region}价格仍在等待采集',
+        noPlayerChart: '暂无在线人数快照', playerChartWaiting: '等待自动采集后生成柱形图', playersTooltip: '在线人数',
+        historySyncing: '史低增强数据同步中', noPriceHistory: '本站尚未积累价格历史', itadLow: 'ITAD 历史最低：{price}',
+        observedLow: '本站观测最低：{price}{since}', sinceRecorded: ' · 自 {time} 起记录', pending: '待补全', justNow: '刚刚',
+        minutesAgo: '{count} 分钟前', hoursAgo: '{count} 小时前', daysAgo: '{count} 天前',
+        recommendation95: '推荐短评：{score}% 好评，玩家们几乎一致认为它值得被更多人发现。',
+        recommendationReviews: '推荐短评：{reviews} 条评测撑起的口碑，不只是小圈子自嗨。',
+        recommendationGeneral: '推荐短评：{score}，适合从热门榜之外挖到的一次惊喜。', stableReviews: '口碑稳定',
+        nicheFormula: '加权：好评率 45% · 评测量 30% · 本站峰值 15% · 发行时间 10%（近 8 年，评测不超过 {cap} 条）',
+        nicheUnder20: '当前池未满，展示全部 {count} 条 · {formula}', niche20: '当前池 20 条，展示全部 · {formula}',
+        nicheUnder40: '当前池 {count} 条，展示加权前 20 · 满 40 条后从前 50% 随机抽取 · {formula}',
+        nicheFull: '从加权分前 50% 随机抽取，按分数排序 · {formula}', crawlerOffline: '采集器未运行', catalogWorking: 'Catalog 后台补全中',
+        crawlerReady: 'Steam 采集就绪', apiCooldown: '{service} 接口冷却 {time}', directCooldown: '{service} 直连冷却 {time}',
+        cooldownRemaining: '{services} 接口冷却中，剩余 {time}', directCooldownRemaining: '{services} 直连冷却中，剩余 {time}',
+        catalogLine: '目录已收录 {catalog} · 游戏 {games} · 已排除 {excluded}', scanDone: '全量扫描完成', scanRunning: '全量扫描推进中',
+        queueLine: '{scan} · 补全 {enriched} · 队列 {queued} · 重试 {retries} · 每日配额 {quota}', running: '运行中', stopped: '未运行',
+        crawlerProgress: '采集器：{state}，待处理：{queued}，玩家数：{players}，预览：{preview}，评价：{reviews}，元数据：{metadata}',
+        lastErrors: '上次采集有 {count} 个错误：{error}', detailQueued: '详情已进入优先补全队列，页面会自动更新。',
+        detailQueueFull: '详情补全队列暂满，页面会继续显示已有缓存。', description: '简介', completing: '{fields}正在补全',
+        regionalCaching: '全区价格正在分批缓存', detailCompleting: '详情正在补全', autoUpdateSuffix: '，页面会自动更新。',
+        untracking: '正在取消收藏：{name}...', untracked: '已取消收藏：{name}。', tracking: '正在加入跟踪：{name}...',
+        trackedQueued: '已加入跟踪：{name}，后台正在补数据。', tracked: '已加入跟踪：{name}。',
+        fileModeError: '请先运行 start.ps1 或 python steamkb.py，然后通过 http://127.0.0.1:8765 打开页面。不要直接双击 steamkb.html。',
+        backendError: '无法连接本地后端。请确认 steamkb.py 正在运行，并且当前页面地址是 http://127.0.0.1:8765。',
+        jsonError: '后端返回了非 JSON 响应，请确认访问的是 Steam-KaKaBase 后端端口。', hotSyncing: '热门榜正在后台同步，当前先显示本地已有数据。'
+      },
+      'en-US': {
+        openNav: 'Open navigation', home: 'Home', gameDetail: 'Game details', hotList: 'Popular', nichePool: 'Hidden gems',
+        searchPlaceholder: 'Search Steam games', online: 'online', favorited: 'Saved', favorite: 'Save', view: 'View',
+        searching: 'Searching…', noSearchResults: 'No local results yet; the catalog is still being enriched', selectPriceRegion: 'Select price region',
+        selectLanguage: 'Select interface language', refreshList: 'Refresh', backgroundCollecting: 'Background collection is running; the page remains available.',
+        autoCollection: 'Auto collection: players every {players} min; prices/reviews every {prices} hr.',
+        welcome1: 'Welcome to SteamKaKaBase!', welcome2: 'Hope you can find what you want here!', welcome3: "Don't forget to have fun today!",
+        todayLow: "Today's historical low", positive: 'positive', viewDetails: 'View details', noCnLow: 'No China-region historical low available',
+        dailyGem: 'Daily hidden gem', noEligibleGames: 'No eligible games yet', todayMeme: "Today's meme",
+        noMeme: 'Add a gif / webp / png to assets/memes to show it here', peak: 'Peak', updatedAt: 'Updated',
+        nicheBuilding: 'The hidden-gem pool is being built. Eligible games will appear automatically.', paidOnly: 'Paid games only',
+        lowOnly: 'Historical lows only', sortPositive: 'Sort by positive reviews', refreshHot: 'Refresh list', scrollMore: 'Scroll down to load more',
+        localLimit: 'Local limit reached', hotBuilding: 'Building the popular list; cached results will appear shortly.',
+        noFilteredHot: 'No popular games match these filters.', noHot: 'No local popular list yet; it will be built in the background.', trackedGames: 'Tracked games',
+        noTrackedGames: 'No tracked games. Search for a game to add one.', noDescription: 'No description available.', releaseDate: 'Release date: ', dataUpdated: 'Data updated: ',
+        price: 'Price', reviews: 'Reviews', currentPlayers: 'Players online', sitePeak: 'Site-recorded peak', recordedSince: 'Recorded since', playerReviews: 'Player reviews',
+        priceHistory: 'price history', nativeCurrency: 'Native currency', nativePrice: 'native price', onlinePlayers: 'Players online', snapshotBars: 'Snapshot bar chart',
+        regionalPrices: 'Regional price snapshots', cachedRegions: '{count} / 13 regions cached', region: 'Region', originalPrice: 'Original',
+        discount: 'Discount', currency: 'Currency', source: 'Source', collectedAt: 'Collected at', noPriceSnapshot: 'No price snapshots yet. Waiting for the next collection.',
+        selectGameHint: 'Use search to browse popular games, or select a saved game on the left.', namePending: 'Name pending', refreshCountdown: 'Refresh in {time}',
+        free: 'Free', unavailable: 'Unavailable in {region}', cnUnavailable: 'Unavailable in China', noPriceChart: 'No price snapshots', priceWaiting: 'Waiting for {region} price data',
+        noPlayerChart: 'No player snapshots', playerChartWaiting: 'The chart will appear after automatic collection', playersTooltip: 'Players online',
+        historySyncing: 'Historical-low data is syncing', noPriceHistory: 'No price history recorded by this site yet', itadLow: 'ITAD historical low: {price}',
+        observedLow: 'Site-observed low: {price}{since}', sinceRecorded: ' · recorded since {time}', pending: 'Pending', justNow: 'just now',
+        minutesAgo: '{count} min ago', hoursAgo: '{count} hr ago', daysAgo: '{count} days ago',
+        recommendation95: 'Why it stands out: {score}% positive; players almost unanimously think it deserves more attention.',
+        recommendationReviews: 'Why it stands out: a strong reputation backed by {reviews} reviews.',
+        recommendationGeneral: 'Why it stands out: {score}, a welcome surprise beyond the popular list.', stableReviews: 'consistently positive reviews',
+        nicheFormula: 'Weighted: positive reviews 45% · review count 30% · site peak 15% · release date 10% (last 8 years, up to {cap} reviews)',
+        nicheUnder20: 'Pool still growing; showing all {count} · {formula}', niche20: '20 games in pool; showing all · {formula}',
+        nicheUnder40: '{count} games in pool; showing top 20 · random top-half picks begin at 40 · {formula}',
+        nicheFull: 'Random picks from the top half, sorted by score · {formula}', crawlerOffline: 'Crawler offline', catalogWorking: 'Catalog enrichment running',
+        crawlerReady: 'Steam collection ready', apiCooldown: '{service} API cooldown {time}', directCooldown: '{service} direct cooldown {time}',
+        cooldownRemaining: '{services} API cooldown; {time} remaining', directCooldownRemaining: '{services} direct cooldown; {time} remaining',
+        catalogLine: '{catalog} catalog entries · {games} games · {excluded} excluded', scanDone: 'Full scan complete', scanRunning: 'Full scan in progress',
+        queueLine: '{scan} · {enriched} enriched · {queued} queued · {retries} retries · daily quota {quota}', running: 'running', stopped: 'stopped',
+        crawlerProgress: 'Crawler: {state} · queued: {queued} · players: {players} · previews: {preview} · reviews: {reviews} · metadata: {metadata}',
+        lastErrors: '{count} errors in the last collection: {error}', detailQueued: 'Details were prioritized and will update automatically.',
+        detailQueueFull: 'The details queue is full; existing cached data remains available.', description: 'Description', completing: 'Completing {fields}',
+        regionalCaching: 'Regional prices are being cached in batches', detailCompleting: 'Completing game details', autoUpdateSuffix: '; this page will update automatically.',
+        untracking: 'Removing saved game: {name}...', untracked: 'Removed saved game: {name}.', tracking: 'Adding tracked game: {name}...',
+        trackedQueued: 'Tracking {name}; background data collection is queued.', tracked: 'Now tracking {name}.',
+        fileModeError: 'Run start.ps1 or python steamkb.py, then open http://127.0.0.1:8765. Do not open steamkb.html directly.',
+        backendError: 'Cannot connect to the backend. Confirm steamkb.py is running and use http://127.0.0.1:8765.',
+        jsonError: 'The backend returned a non-JSON response. Confirm you are using the Steam-KaKaBase backend port.', hotSyncing: 'The popular list is syncing; showing existing cached data for now.'
+      }
+    };
+
     createApp({
       data() {
         const birdIcon = 'data:image/png;base64,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';
         return {
+          locale: 'zh-CN',
           games: [],
           selected: null,
           selectedPrices: [],
@@ -1311,19 +1478,19 @@
           dailyRefreshTimeZone: 'Asia/Shanghai',
           activePage: 'home',
           priceRegions: [
-            { code: 'CN', label: '中国大陆区', language: '简体中文' },
-            { code: 'US', label: '美国区', language: 'English' },
-            { code: 'JP', label: '日本区', language: '日本語' },
-            { code: 'HK', label: '中国香港区', language: '繁體中文' },
-            { code: 'TW', label: '中国台湾区', language: '繁體中文' },
-            { code: 'KR', label: '韩国区', language: '한국어' },
-            { code: 'GB', label: '英国区', language: 'English' },
-            { code: 'DE', label: '德国区', language: 'Deutsch' },
-            { code: 'FR', label: '法国区', language: 'Français' },
-            { code: 'BR', label: '巴西区', language: 'Português' },
-            { code: 'RU', label: '俄罗斯区', language: 'Русский' },
-            { code: 'TR', label: '土耳其区', language: 'Türkçe' },
-            { code: 'AR', label: '阿根廷区', language: 'Español' }
+            { code: 'CN', labelZh: '中国', labelEn: 'China' },
+            { code: 'US', labelZh: '美国', labelEn: 'United States' },
+            { code: 'JP', labelZh: '日本', labelEn: 'Japan' },
+            { code: 'HK', labelZh: '中国香港', labelEn: 'Hong Kong' },
+            { code: 'TW', labelZh: '中国台湾', labelEn: 'Taiwan' },
+            { code: 'KR', labelZh: '韩国', labelEn: 'South Korea' },
+            { code: 'GB', labelZh: '英国', labelEn: 'United Kingdom' },
+            { code: 'DE', labelZh: '德国', labelEn: 'Germany' },
+            { code: 'FR', labelZh: '法国', labelEn: 'France' },
+            { code: 'BR', labelZh: '巴西', labelEn: 'Brazil' },
+            { code: 'RU', labelZh: '俄罗斯', labelEn: 'Russia' },
+            { code: 'TR', labelZh: '土耳其', labelEn: 'Türkiye' },
+            { code: 'AR', labelZh: '阿根廷', labelEn: 'Argentina' }
           ],
           selectedRegion: 'CN',
           navOpen: false,
@@ -1384,23 +1551,24 @@
           logoSrc: birdIcon,
           priceChart: null,
           playerChart: null,
+          playerTooltip: { visible: false, time: null, count: 0, left: 0, top: 0 },
           placeholderImage: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="460" height="215"><rect width="100%" height="100%" fill="#0b1116"/><text x="50%" y="50%" fill="#5f6e7b" font-family="Arial" font-size="22" text-anchor="middle">Steam-KaKaBase</text></svg>')
         };
       },
       computed: {
         nichePoolSummary() {
-          const reviewCap = this.nicheMaxReviews.toLocaleString();
-          const formula = `加权：好评率 45% · 评测量 30% · 本站峰值 15% · 发行时间 10%（近 8 年，评测不超过 ${reviewCap} 条）`;
+          const reviewCap = this.nicheMaxReviews.toLocaleString(this.locale);
+          const formula = this.t('nicheFormula', { cap: reviewCap });
           if (this.nichePoolTotal < 20) {
-            return `当前池未满，展示全部 ${this.nicheGames.length} 条 · ${formula}`;
+            return this.t('nicheUnder20', { count: this.nicheGames.length, formula });
           }
           if (this.nichePoolTotal === 20) {
-            return `当前池 20 条，展示全部 · ${formula}`;
+            return this.t('niche20', { formula });
           }
           if (this.nichePoolTotal < 40) {
-            return `当前池 ${this.nichePoolTotal} 条，展示加权前 20 · 满 40 条后从前 50% 随机抽取 · ${formula}`;
+            return this.t('nicheUnder40', { count: this.nichePoolTotal, formula });
           }
-          return `从加权分前 50% 随机抽取，按分数排序 · ${formula}`;
+          return this.t('nicheFull', { formula });
         },
         dropdownItems() {
           if (!this.searchFocused) return [];
@@ -1410,7 +1578,7 @@
           return this.priceRegions.find(region => region.code === this.selectedRegion) || this.priceRegions[0];
         },
         selectedRegionLabel() {
-          return this.selectedRegionMeta?.label || this.selectedRegion;
+          return this.regionLabel(this.selectedRegionMeta) || this.selectedRegion;
         },
         selectedRegionPrice() {
           return this.selectedPrices.find(price => price.region === this.selectedRegion) || null;
@@ -1472,14 +1640,15 @@
           const hours = Math.floor(seconds / 3600);
           const minutes = Math.floor((seconds % 3600) / 60);
           const remainder = seconds % 60;
-          return `距刷新 ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+          const time = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+          return this.t('refreshCountdown', { time });
         },
         rateCooldownState() {
           const labels = {
             steam_api: 'Steam API',
-            steam_store: 'Steam 商店',
+            steam_store: this.locale === 'en-US' ? 'Steam Store' : 'Steam 商店',
             itad: 'ITAD',
-            image_cdn: '图片 CDN'
+            image_cdn: this.locale === 'en-US' ? 'Image CDN' : '图片 CDN'
           };
           const elapsed = Math.max(0, Math.floor((this.nowEpoch - this.steamCooldownObservedAt) / 1000));
           const source = Object.keys(this.serviceCooldowns || {}).length
@@ -1504,15 +1673,15 @@
         rateCooldownText() {
           const state = this.rateCooldownState;
           if (!state.active.length) return '';
-          const services = state.active.map(item => item.label).join('、');
-          return `${services} 接口冷却中，剩余 ${this.formatDuration(state.seconds)}`;
+          const services = state.active.map(item => item.label).join(this.locale === 'en-US' ? ', ' : '、');
+          return this.t('cooldownRemaining', { services, time: this.formatDuration(state.seconds) });
         },
         directCooldownState() {
           const labels = {
             steam_api: 'Steam API',
-            steam_store: 'Steam 商店',
+            steam_store: this.locale === 'en-US' ? 'Steam Store' : 'Steam 商店',
             itad: 'ITAD',
-            image_cdn: '图片 CDN'
+            image_cdn: this.locale === 'en-US' ? 'Image CDN' : '图片 CDN'
           };
           const elapsed = Math.max(0, Math.floor((this.nowEpoch - this.steamCooldownObservedAt) / 1000));
           const active = Object.entries(this.directServiceCooldowns || {})
@@ -1534,15 +1703,15 @@
         directCooldownText() {
           const state = this.directCooldownState;
           if (!state.active.length) return '';
-          const services = state.active.map(item => item.label).join('、');
-          return `${services} 直连冷却中，剩余 ${this.formatDuration(state.seconds)}`;
+          const services = state.active.map(item => item.label).join(this.locale === 'en-US' ? ', ' : '、');
+          return this.t('directCooldownRemaining', { services, time: this.formatDuration(state.seconds) });
         },
         homeMonitorTitle() {
-          if (this.rateCooldownSeconds) return `${this.rateCooldownState.active[0].label} 接口冷却 ${this.formatDuration(this.rateCooldownSeconds)}`;
-          if (this.directCooldownSeconds) return `${this.directCooldownState.active[0].label} 直连冷却 ${this.formatDuration(this.directCooldownSeconds)}`;
-          if (!this.crawlerRunning) return '采集器未运行';
-          if (this.hotRunning) return 'Catalog 后台补全中';
-          return 'Steam 采集就绪';
+          if (this.rateCooldownSeconds) return this.t('apiCooldown', { service: this.rateCooldownState.active[0].label, time: this.formatDuration(this.rateCooldownSeconds) });
+          if (this.directCooldownSeconds) return this.t('directCooldown', { service: this.directCooldownState.active[0].label, time: this.formatDuration(this.directCooldownSeconds) });
+          if (!this.crawlerRunning) return this.t('crawlerOffline');
+          if (this.hotRunning) return this.t('catalogWorking');
+          return this.t('crawlerReady');
         },
         homeMonitorDetailLines() {
           const catalog = this.steamCatalogCount || 0;
@@ -1552,16 +1721,17 @@
           const quota = this.catalogEnrichDailyLimit || 0;
           const queued = Number(this.taskMonitor.active_total || 0);
           const retries = Number(this.taskMonitor.retry_total || 0);
-          const scan = this.steamCatalogScanComplete ? '全量扫描完成' : '全量扫描推进中';
+          const scan = this.t(this.steamCatalogScanComplete ? 'scanDone' : 'scanRunning');
           return [
-            `目录已收录 ${catalog.toLocaleString()} · 游戏 ${games.toLocaleString()} · 已排除 ${excluded.toLocaleString()}`,
-            `${scan} · 补全 ${enriched.toLocaleString()} · 队列 ${queued.toLocaleString()} · 重试 ${retries.toLocaleString()} · 每日配额 ${quota.toLocaleString()}`
+            this.t('catalogLine', { catalog: catalog.toLocaleString(this.locale), games: games.toLocaleString(this.locale), excluded: excluded.toLocaleString(this.locale) }),
+            this.t('queueLine', { scan, enriched: enriched.toLocaleString(this.locale), queued: queued.toLocaleString(this.locale), retries: retries.toLocaleString(this.locale), quota: quota.toLocaleString(this.locale) })
           ];
         }
       },
       mounted() {
         const pageIcon = document.getElementById('pageIcon');
         if (pageIcon) pageIcon.href = this.logoSrc;
+        this.restoreLocale();
         this.restoreSelectedRegion();
         this.loadGames();
         this.loadHomePicks();
@@ -1588,6 +1758,38 @@
         window.removeEventListener('hashchange', this.restoreDetailFromUrl);
       },
       methods: {
+        t(key, values = {}) {
+          const dictionary = translations[this.locale] || translations['zh-CN'];
+          const template = dictionary[key] ?? translations['zh-CN'][key] ?? key;
+          return String(template).replace(/\{(\w+)\}/g, (_match, name) => values[name] ?? `{${name}}`);
+        },
+        restoreLocale() {
+          try {
+            const saved = window.localStorage.getItem('steamkb.locale');
+            if (saved === 'zh-CN' || saved === 'en-US') this.locale = saved;
+          } catch (_error) {
+            // Storage may be unavailable in privacy-restricted contexts.
+          }
+          document.documentElement.lang = this.locale;
+        },
+        async setLocale(locale) {
+          if (locale !== 'zh-CN' && locale !== 'en-US') return;
+          this.locale = locale;
+          document.documentElement.lang = locale;
+          try {
+            window.localStorage.setItem('steamkb.locale', locale);
+          } catch (_error) {
+            // The selection remains active for the current page session.
+          }
+          await nextTick();
+          this.renderCharts();
+          this.resizeCharts();
+          this.loadStatus();
+        },
+        regionLabel(region) {
+          if (!region) return '';
+          return this.locale === 'en-US' ? region.labelEn : region.labelZh;
+        },
         restoreSelectedRegion() {
           try {
             const saved = window.localStorage.getItem('steamkb.priceRegion');
@@ -1631,8 +1833,9 @@
           };
         },
         displayGameName(game) {
-          const name = String(game?.name || '').trim();
-          if (!name || name === '未命名游戏' || /^(Steam\s+)?App\s+\d+$/i.test(name)) return '名称待补全';
+          const preferred = this.locale === 'en-US' ? game?.name_en : game?.name_zh;
+          const name = String(preferred || game?.name || game?.name_en || game?.name_zh || '').trim();
+          if (!name || name === '未命名游戏' || /^(Steam\s+)?App\s+\d+$/i.test(name)) return this.t('namePending');
           return name;
         },
         switchPage(page) {
@@ -1694,7 +1897,7 @@
         },
         async api(path, options) {
           if (window.location.protocol === 'file:') {
-            throw new Error('请先运行 start.ps1 或 python steamkb.py，然后通过 http://127.0.0.1:8765 打开页面。不要直接双击 steamkb.html。');
+            throw new Error(this.t('fileModeError'));
           }
           let res;
           try {
@@ -1703,13 +1906,13 @@
               ...options
             });
           } catch (err) {
-            throw new Error('无法连接本地后端。请确认 steamkb.py 正在运行，并且当前页面地址是 http://127.0.0.1:8765。');
+            throw new Error(this.t('backendError'));
           }
           let data = null;
           try {
             data = await res.json();
           } catch (err) {
-            throw new Error('后端返回了非 JSON 响应，请确认访问的是 Steam-KaKaBase 后端端口。');
+            throw new Error(this.t('jsonError'));
           }
           if (!res.ok) throw new Error(data.error || res.statusText);
           return data;
@@ -1770,10 +1973,14 @@
             const preview = progress.preview || {};
             const reviews = progress.reviews || {};
             const metadata = progress.metadata || {};
-            const crawlerLabel = this.crawlerRunning ? '运行中' : '未运行';
-            this.backendProgress = `采集器：${crawlerLabel}，待处理：${this.taskMonitor.active_total || 0}，玩家数：${players.done || 0}/${players.total || 0}，预览：${preview.done || 0}/${preview.total || 0}，评价：${reviews.done || 0}/${reviews.total || 0}，元数据：${metadata.done || 0}/${metadata.total || 0}`;
+            const crawlerLabel = this.t(this.crawlerRunning ? 'running' : 'stopped');
+            this.backendProgress = this.t('crawlerProgress', {
+              state: crawlerLabel, queued: this.taskMonitor.active_total || 0,
+              players: `${players.done || 0}/${players.total || 0}`, preview: `${preview.done || 0}/${preview.total || 0}`,
+              reviews: `${reviews.done || 0}/${reviews.total || 0}`, metadata: `${metadata.done || 0}/${metadata.total || 0}`
+            });
             if (!this.message && status.last_errors?.length) {
-              this.message = `上次采集有 ${status.last_errors.length} 个错误：${status.last_errors[0]}`;
+              this.message = this.t('lastErrors', { count: status.last_errors.length, error: status.last_errors[0] });
             }
             if (this.activePage === 'hot' && this.hotPageGames.length && status.hot_games_version && status.hot_games_version !== this.hotVersion) {
               await this.loadHotPageGames({ ensure: false, silent: true });
@@ -1789,7 +1996,7 @@
               }
               if (this.activePage === 'hot' && this.hotPageGames.length) {
                 await this.loadHotPageGames({ ensure: false, silent: true });
-                if (this.message === '热门榜正在后台同步，当前先显示本地已有数据。') {
+                if (this.message === this.t('hotSyncing')) {
                   this.message = '';
                 }
               }
@@ -1809,9 +2016,9 @@
           try {
             const result = await this.api(`/api/games/${appid}/interest`, { method: 'POST' });
             if (result.queued) {
-              this.message = '详情已进入优先补全队列，页面会自动更新。';
+              this.message = this.t('detailQueued');
             } else if (result.reason === 'queue_full') {
-              this.message = '详情补全队列暂满，页面会继续显示已有缓存。';
+              this.message = this.t('detailQueueFull');
             }
           } catch (err) {
             this.message = err.message;
@@ -1885,19 +2092,19 @@
             }
             if (updateUrl) this.updateDetailUrl(appid);
             const pendingLabels = {
-              prices: '价格',
-              players: '在线人数',
-              reviews: '评价',
-              metadata: '简介'
+              prices: this.t('price'),
+              players: this.t('onlinePlayers'),
+              reviews: this.t('reviews'),
+              metadata: this.t('description')
             };
             const pendingText = (data.pending_fields || [])
               .map(field => pendingLabels[field] || field)
-              .join('、');
+              .join(this.locale === 'en-US' ? ', ' : '、');
             if (data.refresh_pending || data.data_incomplete || regionalPending) {
               const pieces = [];
-              if (pendingText) pieces.push(`${pendingText}正在补全`);
-              if (regionalPending) pieces.push('全区价格正在分批缓存');
-              this.message = `${pieces.join('，') || '详情正在补全'}，页面会自动更新。`;
+              if (pendingText) pieces.push(this.t('completing', { fields: pendingText }));
+              if (regionalPending) pieces.push(this.t('regionalCaching'));
+              this.message = `${pieces.join(this.locale === 'en-US' ? '; ' : '，') || this.t('detailCompleting')}${this.t('autoUpdateSuffix')}`;
               if (options.requestWork !== false && !silent) await this.requestDetailWork(appid);
             } else if (!silent) {
               this.message = '';
@@ -2039,7 +2246,7 @@
           if (!this.selected) return;
           this.busy = true;
           const itemName = this.displayGameName(this.selected);
-          this.message = `正在取消收藏：${itemName}...`;
+          this.message = this.t('untracking', { name: itemName });
           try {
             await this.api('/api/untrack', {
               method: 'POST',
@@ -2050,7 +2257,7 @@
             this.hotGames = this.hotGames.map(game => game.appid === this.selected.appid ? { ...game, tracked: false } : game);
             this.hotPageGames = this.hotPageGames.map(game => game.appid === this.selected.appid ? { ...game, tracked: false } : game);
             this.suggestions = this.suggestions.map(game => game.appid === this.selected.appid ? { ...game, tracked: false } : game);
-            this.message = `已取消收藏：${itemName}。`;
+            this.message = this.t('untracked', { name: itemName });
           } catch (err) {
             this.message = err.message;
           } finally {
@@ -2060,7 +2267,7 @@
         async track(item, options = {}) {
           this.busy = true;
           const itemName = this.displayGameName(item);
-          this.message = `正在加入跟踪：${itemName}...`;
+          this.message = this.t('tracking', { name: itemName });
           try {
             const result = await this.api('/api/track', {
               method: 'POST',
@@ -2084,8 +2291,8 @@
               await this.selectGame(item.appid);
             }
             this.message = result.queued
-              ? `已加入跟踪：${this.displayGameName(this.selected || item)}，后台正在补数据。`
-              : `已加入跟踪：${this.displayGameName(this.selected || item)}。`;
+              ? this.t('trackedQueued', { name: this.displayGameName(this.selected || item) })
+              : this.t('tracked', { name: this.displayGameName(this.selected || item) });
           } catch (err) {
             this.message = err.message;
           } finally {
@@ -2129,8 +2336,8 @@
             backgroundColor: 'transparent',
             title: {
               show: points.length === 0,
-              text: '暂无价格快照',
-              subtext: `${this.selectedRegionLabel}价格仍在等待采集`,
+              text: this.t('noPriceChart'),
+              subtext: this.t('priceWaiting', { region: this.selectedRegionLabel }),
               left: 'center',
               top: 'middle',
               textStyle: { color: '#8d9ba8', fontSize: 14 },
@@ -2189,45 +2396,25 @@
             const timestamp = new Date(row.fetched_at).getTime();
             const playerCount = Number(row.player_count);
             if (Number.isFinite(timestamp) && Number.isFinite(playerCount)) {
-              points.set(timestamp, {
-                value: [timestamp, playerCount],
-                fetchedAt: row.fetched_at
-              });
+              points.set(timestamp, [timestamp, playerCount]);
             }
             return points;
-          }, new Map()).values()].sort((a, b) => a.value[0] - b.value[0]);
+          }, new Map()).values()].sort((a, b) => a[0] - b[0]);
           const playerSpan = playerPoints.length > 1
-            ? playerPoints[playerPoints.length - 1].value[0] - playerPoints[0].value[0]
+            ? playerPoints[playerPoints.length - 1][0] - playerPoints[0][0]
             : 0;
           this.playerChart.setOption({
             backgroundColor: 'transparent',
             title: {
               show: this.playerHistory.length === 0,
-              text: '暂无在线人数快照',
-              subtext: '等待自动采集后生成柱形图',
+              text: this.t('noPlayerChart'),
+              subtext: this.t('playerChartWaiting'),
               left: 'center',
               top: 'middle',
               textStyle: { color: '#8d9ba8', fontSize: 14 },
               subtextStyle: { color: '#5f6e7b', fontSize: 12 }
             },
-            tooltip: {
-              // Axis-triggered tooltips are easier to reach on narrow bars,
-              // especially with sparse time-series data on mobile.
-              trigger: 'axis',
-              confine: true,
-              axisPointer: { type: 'shadow' },
-              backgroundColor: '#0b1116',
-              borderColor: '#2b3743',
-              textStyle: { color: '#dbe4ec' },
-              formatter: params => {
-                const item = Array.isArray(params) ? params[0] : params;
-                if (!item) return '';
-                const data = item.data || {};
-                const value = Array.isArray(item.value) ? item.value[1] : item.value;
-                const time = data.fetchedAt || item.name || item.axisValue;
-                return `${this.localTime(time)}<br>${item.marker || ''} 在线人数: ${this.formatPlayers(value)}`;
-              }
-            },
+            tooltip: { show: false, triggerOn: 'none' },
             grid: { left: 56, right: 18, top: 24, bottom: 58 },
             xAxis: {
               type: 'time',
@@ -2249,11 +2436,45 @@
             series: [{
               name: 'Players',
               type: 'bar',
+              silent: false,
+              barMinWidth: 6,
               barMaxWidth: 30,
               itemStyle: { color: '#66c0f4' },
+              emphasis: { disabled: true },
               data: playerPoints
             }]
           }, true);
+          const surface = this.$refs.playerChartSurface;
+          if (surface && !surface.__steamkbTooltipBound) {
+            surface.addEventListener('mousemove', event => this.showPlayerTooltip(event));
+            surface.addEventListener('mouseleave', () => this.hidePlayerTooltip());
+            surface.__steamkbTooltipBound = true;
+          }
+        },
+        showPlayerTooltip(event) {
+          const chart = this.playerChart;
+          const element = this.$refs.playerChart;
+          if (!chart || !element || !this.playerHistory.length) return this.hidePlayerTooltip();
+          const localX = event.offsetX;
+          const localY = event.offsetY;
+          const points = this.playerHistory
+            .map(row => ({ time: new Date(row.fetched_at).getTime(), count: Number(row.player_count) }))
+            .filter(point => Number.isFinite(point.time) && Number.isFinite(point.count))
+            .sort((a, b) => a.time - b.time);
+          if (!points.length) return this.hidePlayerTooltip();
+          const plotWidth = Math.max(1, element.clientWidth - 56 - 18);
+          const ratio = Math.max(0, Math.min(1, (localX - 56) / plotWidth));
+          const nearest = points[Math.round(ratio * (points.length - 1))];
+          this.playerTooltip = {
+            visible: true,
+            time: nearest.time,
+            count: nearest.count,
+            left: Math.max(8, Math.min(localX + 12, element.clientWidth - 170)),
+            top: Math.max(8, localY - 64)
+          };
+        },
+        hidePlayerTooltip() {
+          if (this.playerTooltip.visible) this.playerTooltip.visible = false;
         },
         resizeCharts() {
           for (const chart of [this.priceChart, this.playerChart]) {
@@ -2269,12 +2490,17 @@
         currentPrice(region = this.selectedRegion) {
           const row = this.selectedPrices.find(item => item.region === region);
           if (row) return row.final_formatted || this.cents(row.final, row.currency);
-          return this.selected?.is_free ? '免费' : `${this.selectedRegionLabel}暂无售价`;
+          return this.selected?.is_free ? this.t('free') : this.t('unavailable', { region: this.selectedRegionLabel });
         },
         displayCnPrice(game) {
-          if (game?.cn_price_display) return game.cn_price_display;
+          if (game?.cn_price_display) {
+            if (this.locale === 'en-US' && game.cn_price_display === '免费') return this.t('free');
+            if (this.locale === 'en-US' && game.cn_price_display === '国区暂无售价') return this.t('cnUnavailable');
+            return game.cn_price_display;
+          }
           if (game?.cn_price) return game.cn_price;
-          return game?.is_free ? '免费' : '国区暂无售价';
+          if (game?.is_free) return this.t('free');
+          return this.locale === 'en-US' ? this.t('cnUnavailable') : '国区暂无售价';
         },
         formatDuration(seconds) {
           const total = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -2285,9 +2511,10 @@
         dailyNicheBlurb(game) {
           const score = Number(game?.review_score || 0);
           const reviews = Number(game?.total_reviews || 0);
-          if (score >= 95) return `推荐短评：${score.toFixed(0)}% 好评，玩家们几乎一致认为它值得被更多人发现。`;
-          if (reviews >= 10000) return `推荐短评：${reviews.toLocaleString()} 条评测撑起的口碑，不只是小圈子自嗨。`;
-          return `推荐短评：${score ? `${score.toFixed(0)}% 好评` : '口碑稳定'}，适合从热门榜之外挖到的一次惊喜。`;
+          if (score >= 95) return this.t('recommendation95', { score: score.toFixed(0) });
+          if (reviews >= 10000) return this.t('recommendationReviews', { reviews: reviews.toLocaleString(this.locale) });
+          const scoreLabel = score ? `${score.toFixed(0)}% ${this.t('positive')}` : this.t('stableReviews');
+          return this.t('recommendationGeneral', { score: scoreLabel });
         },
         isHistoricalLow(region = this.selectedRegion) {
           const row = this.selectedPrices.find(item => item.region === region);
@@ -2301,8 +2528,8 @@
           const row = this.selectedPrices.find(item => item.region === region);
           if (!row || row.final === null || row.final === undefined) return '';
           if (row.historical_low_cny === null || row.historical_low_cny === undefined) {
-            if (this.historylowRunning) return '史低增强数据同步中';
-            return '本站尚未积累价格历史';
+            if (this.historylowRunning) return this.t('historySyncing');
+            return this.t('noPriceHistory');
           }
           const amount = row.historical_low_source === 'itad'
             ? row.historical_low_amount_int
@@ -2313,9 +2540,9 @@
           const price = amount === null || amount === undefined
             ? `¥${Number(row.historical_low_cny).toFixed(2)}`
             : this.cents(amount, currency);
-          if (row.historical_low_source === 'itad') return `ITAD 历史最低：${price}`;
-          const since = row.observed_low_since ? ` · 自 ${this.localTime(row.observed_low_since, true)} 起记录` : '';
-          return `本站观测最低：${price}${since}`;
+          if (row.historical_low_source === 'itad') return this.t('itadLow', { price });
+          const since = row.observed_low_since ? this.t('sinceRecorded', { time: this.localTime(row.observed_low_since, true) }) : '';
+          return this.t('observedLow', { price, since });
         },
         cents(value, currency) {
           if (value === null || value === undefined) return '-';
@@ -2324,14 +2551,14 @@
         },
         formatPlayers(value) {
           if (value === null || value === undefined) return '-';
-          return Number(value).toLocaleString('zh-CN');
+          return Number(value).toLocaleString(this.locale);
         },
         localTime(value, compact = false) {
           if (!value) return '-';
           const date = new Date(value);
           return compact
-            ? date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-            : date.toLocaleString('zh-CN');
+            ? date.toLocaleString(this.locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+            : date.toLocaleString(this.locale);
         },
         chartAxisTime(value, span = 0) {
           const date = new Date(value);
@@ -2347,12 +2574,12 @@
           return day;
         },
         relativeAge(value) {
-          if (!value) return '待补全';
+          if (!value) return this.t('pending');
           const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
-          if (minutes < 1) return '刚刚';
-          if (minutes < 60) return `${minutes} 分钟前`;
-          if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时前`;
-          return `${Math.floor(minutes / 1440)} 天前`;
+          if (minutes < 1) return this.t('justNow');
+          if (minutes < 60) return this.t('minutesAgo', { count: minutes });
+          if (minutes < 1440) return this.t('hoursAgo', { count: Math.floor(minutes / 60) });
+          return this.t('daysAgo', { count: Math.floor(minutes / 1440) });
         }
       }
     }).mount('#app');

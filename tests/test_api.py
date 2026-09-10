@@ -77,10 +77,18 @@ def test_status_does_not_report_stale_crawler_as_running(api_client):
 
 def test_games_endpoint_reads_local_cache(api_client):
     runtime, client = api_client
-    runtime.quick_track_game(730, "Counter-Strike 2")
+    with sqlite3.connect(runtime.DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO steam_catalog(appid, name, app_type, updated_at) VALUES (?, ?, 'game', ?)",
+            (730, "Counter-Strike 2", runtime.now_iso()),
+        )
+    runtime.quick_track_game(730, "反恐精英 2")
     response = client.get("/api/games")
     assert response.status_code == 200
-    assert response.json()["games"][0]["appid"] == 730
+    game = response.json()["games"][0]
+    assert game["appid"] == 730
+    assert game["name_zh"] == "反恐精英 2"
+    assert game["name_en"] == "Counter-Strike 2"
 
 
 def test_hot_games_endpoint_does_not_require_network(api_client):

@@ -29,3 +29,22 @@ def test_charts_use_deduplicated_time_axes_with_overlap_protection():
     assert source.count("hideOverlap: true") >= 2
     assert "new Map()).values()].sort" in source
     assert "chartAxisTime(value, span = 0)" in source
+
+
+def test_language_switch_is_persistent_and_independent_from_price_region():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert "steamkb.locale" in source
+    assert "steamkb.priceRegion" in source
+    assert "setLocale('zh-CN')" in source
+    assert "setLocale('en-US')" in source
+    assert "document.documentElement.lang = locale" in source
+    assert "this.selectedRegion =" not in source[source.index("async setLocale(locale)"):source.index("regionLabel(region)")]
+
+
+def test_game_name_uses_localized_api_fields_with_fallbacks():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert "game?.name_en" in source
+    assert "game?.name_zh" in source
+    assert "preferred || game?.name" in source

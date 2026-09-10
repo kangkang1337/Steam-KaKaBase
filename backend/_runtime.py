@@ -3591,6 +3591,8 @@ def clean_game(row, summary=False):
         return {
             "appid": item.get("appid"),
             "name": display_name,
+            "name_zh": display_name,
+            "name_en": clean_hot_name(item.get("name_en")),
             "header_image": item.get("header_image"),
             "player_count": item.get("player_count"),
             "review_score": item.get("review_score"),
@@ -3610,6 +3612,8 @@ def clean_game(row, summary=False):
     payload = {
         "appid": item.get("appid"),
         "name": display_name,
+        "name_zh": display_name,
+        "name_en": clean_hot_name(item.get("name_en")),
         "header_image": item.get("header_image"),
         "short_description": item.get("short_description"),
         "developer": item.get("developer"),
@@ -3741,6 +3745,8 @@ def get_game_payload(appid, history_limit=500):
                 "game": {
                     "appid": int(appid),
                     "name": display_name,
+                    "name_zh": display_name,
+                    "name_en": display_name,
                     "header_image": f"https://cdn.akamai.steamstatic.com/steam/apps/{int(appid)}/header.jpg",
                     "short_description": None,
                     "developer": None,
@@ -3822,6 +3828,8 @@ def list_hot_games(limit=100):
             "rank": index,
             "original_rank": row["original_rank"],
             "name": fallback_game_name(row["appid"], row["name"]),
+            "name_zh": fallback_game_name(row["appid"], row["name_zh"] or row["name"]),
+            "name_en": clean_hot_name(row["name_en"]),
             "header_image": row["header_image"],
             "current_players": row["current_players"],
             "peak_players": row["peak_players"],
@@ -3880,7 +3888,7 @@ def list_niche_candidates(limit=24):
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
-            SELECT n.appid, n.name, n.header_image, n.current_players, n.peak_players,
+            SELECT n.appid, n.name, c.name AS name_en, n.header_image, n.current_players, n.peak_players,
                    n.review_score, n.total_reviews, n.cn_price, n.cn_price_final,
                    n.cn_price_currency, n.cn_discount_percent, n.is_free,
                    (SELECT amount_cny FROM historical_lows h
@@ -3912,7 +3920,7 @@ def list_niche_pool_games(limit=NICHE_POOL_DISPLAY_LIMIT):
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
-            SELECT n.appid, n.name, n.header_image, n.current_players, n.peak_players,
+            SELECT n.appid, n.name, c.name AS name_en, n.header_image, n.current_players, n.peak_players,
                    n.review_score, n.total_reviews,
                    CASE WHEN s.price_updated_at >= n.fetched_at THEN s.cn_price ELSE n.cn_price END AS cn_price,
                    CASE WHEN s.price_updated_at >= n.fetched_at THEN s.cn_price_final ELSE n.cn_price_final END AS cn_price_final,
@@ -3971,6 +3979,8 @@ def list_niche_pool_games(limit=NICHE_POOL_DISPLAY_LIMIT):
                 "rank": rank,
                 "original_rank": None,
                 "name": fallback_game_name(row["appid"], row["name"]),
+                "name_zh": fallback_game_name(row["appid"], row["name"]),
+                "name_en": clean_hot_name(row["name_en"]),
                 "header_image": row["header_image"],
                 "current_players": row["current_players"] or 0,
                 "peak_players": row["peak_players"],
@@ -4007,7 +4017,8 @@ def search_local_games(term):
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
-            SELECT g.appid, g.name, g.header_image, g.tracked,
+            SELECT g.appid, g.name, g.name AS name_zh, c.name AS name_en,
+                   g.header_image, g.tracked,
                    (SELECT player_count FROM player_snapshots WHERE appid = g.appid ORDER BY fetched_at DESC LIMIT 1) AS player_count
             FROM games g
             LEFT JOIN steam_catalog c ON c.appid=g.appid
@@ -4030,6 +4041,8 @@ def search_local_games(term):
         {
             "appid": row["appid"],
             "name": clean_name(row["name"]),
+            "name_zh": clean_hot_name(row["name_zh"]),
+            "name_en": clean_hot_name(row["name_en"]),
             "tiny_image": row["header_image"],
             "price": None,
             "current_players": row["player_count"],
@@ -4048,6 +4061,7 @@ def search_catalog_games(term):
             """
             SELECT c.appid,
                    CASE WHEN g.name IS NOT NULL AND g.name != ? THEN g.name ELSE c.name END AS name,
+                   g.name AS name_zh, c.name AS name_en,
                    COALESCE(g.header_image, 'https://cdn.akamai.steamstatic.com/steam/apps/' || c.appid || '/header.jpg') AS header_image,
                    COALESCE(g.tracked, 0) AS tracked
             FROM steam_catalog c
@@ -4063,6 +4077,8 @@ def search_catalog_games(term):
         {
             "appid": row["appid"],
             "name": row["name"],
+            "name_zh": clean_hot_name(row["name_zh"]),
+            "name_en": clean_hot_name(row["name_en"]),
             "tiny_image": row["header_image"],
             "price": None,
             "current_players": None,
@@ -4139,6 +4155,8 @@ def search_index_games(term, limit=12, offset=0):
         {
             "appid": row["appid"],
             "name": clean_name(row["name"]),
+            "name_zh": clean_hot_name(row["name_zh"]),
+            "name_en": clean_hot_name(row["name_en"]),
             "tiny_image": row["header_image"],
             "price": None,
             "current_players": row["current_players"],

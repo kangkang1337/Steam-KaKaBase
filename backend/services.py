@@ -102,6 +102,8 @@ def clean_home_pick(row):
     return {
         "appid": item["appid"],
         "name": _runtime.fallback_game_name(item["appid"], item["name"]),
+        "name_zh": _runtime.fallback_game_name(item["appid"], item["name"]),
+        "name_en": item.get("name_en"),
         "header_image": item["header_image"],
         "current_players": item["current_players"] or 0,
         "review_score": item["review_score"],

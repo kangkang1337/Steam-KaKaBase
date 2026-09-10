@@ -97,6 +97,8 @@ def mock_frontend_api(page):
         "game": {
             "appid": 4242,
             "name": "Test Quest",
+            "name_zh": "测试任务",
+            "name_en": "Test Quest",
             "tracked": False,
             "header_image": "",
             "short_description": "A deterministic browser-test game.",
@@ -106,7 +108,11 @@ def mock_frontend_api(page):
         },
         "prices": [],
         "priceHistory": [],
-        "players": [{"player_count": 42, "fetched_at": "2026-09-07T10:00:00+00:00"}],
+        "players": [
+            {"player_count": 30, "fetched_at": "2026-09-07T08:00:00+00:00"},
+            {"player_count": 42, "fetched_at": "2026-09-07T10:00:00+00:00"},
+            {"player_count": 36, "fetched_at": "2026-09-07T12:00:00+00:00"},
+        ],
         "reviews": {"review_score": 90, "total_reviews": 1000, "fetched_at": "2026-09-07T10:00:00+00:00"},
     }
 
@@ -153,7 +159,7 @@ def mock_frontend_api(page):
                     {"appid": 5000 + index, "name": f"Scroll Result {index + 1}", "tiny_image": ""}
                     for index in range(12)
                 ]})
-            return reply(route, {"items": [{"appid": 4242, "name": "Test Quest", "tiny_image": ""}]})
+            return reply(route, {"items": [{"appid": 4242, "name": "Test Quest", "name_zh": "测试任务", "name_en": "Test Quest", "tiny_image": ""}]})
         if path == "/api/games/4242":
             state["detail_calls"] += 1
             if state["detail_calls"] == 1:
@@ -200,7 +206,7 @@ def mock_frontend_api(page):
 def open_test_page(browser, frontend_server, *, viewport=None):
     page = browser.new_page(viewport=viewport or {"width": 1440, "height": 900})
     errors = []
-    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.on("pageerror", lambda error: errors.append(error.stack or str(error)))
     state = mock_frontend_api(page)
     page.goto(frontend_server, wait_until="domcontentloaded")
     expect(page.locator(".brand")).to_contain_text("Steam-KaKaBase", timeout=15000)
@@ -210,8 +216,12 @@ def open_test_page(browser, frontend_server, *, viewport=None):
 def test_navigation_hot_filters_and_niche_pool(browser, frontend_server):
     page, _, errors = open_test_page(browser, frontend_server)
     try:
-        expect(page.locator(".home-lines")).to_contain_text("Welcome to SteamKaKaBase!")
+        expect(page.locator(".home-lines")).to_contain_text("欢迎来到 SteamKaKaBase！")
         expect(page.locator(".home-monitor span")).to_contain_text("目录已收录 30,000")
+        page.get_by_role("button", name="EN", exact=True).click()
+        expect(page.locator(".home-lines")).to_contain_text("Welcome to SteamKaKaBase!")
+        expect(page.get_by_role("textbox", name="Search Steam games")).to_be_visible()
+        page.get_by_role("button", name="中文", exact=True).click()
         page.get_by_role("button", name="打开导航菜单").click()
         page.locator(".app-menu").get_by_role("button", name="热门榜", exact=True).click()
         expect(page.locator(".hot-row")).to_have_count(2)
@@ -240,10 +250,10 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
     try:
         search = page.get_by_role("textbox", name="搜索 Steam 游戏")
         search.fill("Test Quest")
-        expect(page.locator(".suggestion")).to_contain_text("Test Quest", timeout=5000)
+        expect(page.locator(".suggestion")).to_contain_text("测试任务", timeout=5000)
         page.locator(".suggestion").click()
 
-        expect(page.locator(".hero h1")).to_have_text("Test Quest")
+        expect(page.locator(".hero h1")).to_have_text("测试任务")
         expect(page.locator(".hero")).to_contain_text("¥ 20.00", timeout=15000)
         chart_axes = page.evaluate("""
           () => [...document.querySelectorAll('.chart')].map(element => {
@@ -251,6 +261,9 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
             return {
                   axis: chart?.getOption()?.xAxis?.[0]?.type,
                   tooltipTrigger: chart?.getOption()?.tooltip?.[0]?.trigger,
+                  tooltipTriggerOn: chart?.getOption()?.tooltip?.[0]?.triggerOn,
+                  tooltipShow: chart?.getOption()?.tooltip?.[0]?.show,
+                  barMinWidth: chart?.getOption()?.series?.[0]?.barMinWidth,
                   width: chart?.getWidth(),
               height: chart?.getHeight(),
               points: chart?.getOption()?.series?.reduce((total, series) => total + (series.data || []).length, 0)
@@ -258,8 +271,33 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
           })
         """)
         assert [chart["axis"] for chart in chart_axes] == ["time", "time"]
-        assert chart_axes[1]["tooltipTrigger"] == "axis"
+        assert chart_axes[1]["tooltipShow"] is False
+        assert chart_axes[1]["tooltipTriggerOn"] == "none"
+        assert chart_axes[1]["barMinWidth"] == 6
         assert all(chart["width"] > 0 and chart["height"] > 0 and chart["points"] > 0 for chart in chart_axes)
+        assert page.evaluate("document.querySelector('.chart-hover-surface').__steamkbTooltipBound === true")
+        page.locator(".chart").nth(1).scroll_into_view_if_needed()
+        hover_point = page.evaluate("""
+          () => {
+            const element = document.querySelectorAll('.chart')[1];
+            const chart = window.echarts.getInstanceByDom(element);
+            const bars = chart.getZr().storage.getDisplayList().filter(item => item.style?.fill === '#66c0f4');
+            const bar = bars[Math.floor(bars.length / 2)];
+            const shape = bar.shape;
+            const canvasPoint = bar.transformCoordToGlobal(
+              shape.x + shape.width / 2,
+              shape.y + shape.height / 2
+            );
+            const rect = element.getBoundingClientRect();
+            return {
+              x: rect.left + canvasPoint[0],
+              y: rect.top + canvasPoint[1]
+            };
+          }
+        """)
+        page.mouse.move(hover_point["x"], hover_point["y"])
+        assert errors == []
+        expect(page.locator("body")).to_contain_text("在线人数:", timeout=3000)
         assert state["detail_calls"] >= 2
 
         page.get_by_label("选择价格地区").select_option("US")
@@ -275,9 +313,15 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
             };
           }
         """)
-        assert price_view["seriesName"] == "美国区"
+        assert price_view["seriesName"] == "美国"
         assert price_view["price"] == 10
         assert price_view["firstRegion"].startswith("US")
+
+        page.get_by_role("button", name="EN", exact=True).click()
+        expect(page.locator(".hero h1")).to_have_text("Test Quest")
+        expect(page.locator(".hero")).to_contain_text("$ 10.00")
+        assert page.get_by_label("Select price region").input_value() == "US"
+        page.get_by_role("button", name="中文", exact=True).click()
 
         favorite = page.locator(".favorite-btn")
         expect(favorite).to_have_text("收藏")
@@ -287,7 +331,7 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
 
         favorite.click()
         expect(favorite).to_have_text("收藏")
-        expect(page.locator(".status")).to_contain_text("已取消收藏：Test Quest")
+        expect(page.locator(".status")).to_contain_text("已取消收藏：测试任务")
         assert state["untrack_calls"] == 1
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
         assert errors == []

@@ -314,6 +314,19 @@ python scripts/manage_database.py restore data/backups/备份文件.sqlite3 --co
 
 恢复操作会先额外保存一份当前数据库，再校验目标备份并替换数据库。新增结构变更时，应在 `backend/migrations.py` 追加更高版本的 `Migration`，不能修改已经发布的迁移，也不能重新把补列逻辑放回 `ensure_schema()`。
 
+### 隔离恢复演练
+
+恢复演练不会替换正在使用的数据库：将一份本地或异地 SQLite 备份下载到服务器后，恢复到一个**此前不存在**的新目录并验证。该命令会校验备份、应用必要迁移、运行 `PRAGMA quick_check` 并输出游戏数量；目录已经存在时会拒绝执行。
+
+```bash
+cd /opt/steam-kakabase
+sudo -u steamkb .venv/bin/python scripts/rehearse_database_restore.py \
+  /var/lib/steamkb-restore-drill/下载的备份.sqlite3 \
+  /var/lib/steamkb-restore-drill/result-YYYYMMDD
+```
+
+演练成功后，保留终端输出中的备份时间、文件大小、`quick_check` 和游戏数量作为记录；确认无须保留时再删除整个演练目录。不要对生产库使用此命令的输出路径，也不要在演练中运行 `manage_database.py restore`。
+
 ## 冷却与重试
 
 以下服务分别维护限流冷却，不会因一个服务返回 `429` 而暂停其他服务：

@@ -264,9 +264,9 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
                   tooltipTriggerOn: chart?.getOption()?.tooltip?.[0]?.triggerOn,
                       tooltipShow: chart?.getOption()?.tooltip?.[0]?.show,
                       barWidth: chart?.getOption()?.series?.[0]?.barWidth,
-                      labelCount: chart?.getOption()?.xAxis?.[0]?.axisLabel?.interval
-                        ? (chart.getOption().xAxis[0].data || []).filter((value, index) => chart.getOption().xAxis[0].axisLabel.interval(index, value)).length
-                        : 0,
+                      labelCount: (chart?.getOption()?.xAxis?.[0]?.data || []).filter((value, index) => (
+                        chart.getOption().xAxis[0].axisLabel.formatter(value, index) !== ''
+                      )).length,
                   width: chart?.getWidth(),
               height: chart?.getHeight(),
               points: chart?.getOption()?.series?.reduce((total, series) => total + (series.data || []).length, 0)

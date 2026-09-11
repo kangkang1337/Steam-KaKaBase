@@ -2466,12 +2466,15 @@
               axisLine: { lineStyle: { color: '#2b3743' } },
               axisLabel: {
                 color: '#8d9ba8',
-                // Keep a stable, readable set of six or seven labels even
-                // when hundreds of snapshot columns are present.
-                interval: index => playerLabelIndexes.has(index),
+                // ECharts does not reliably honor a callback in `interval`
+                // for category axes. Render every slot, but make all except
+                // the selected six or seven labels empty.
+                interval: 0,
                 hideOverlap: false,
                 margin: 12,
-                formatter: value => this.chartAxisTime(value, playerSpan)
+                formatter: (value, index) => playerLabelIndexes.has(index)
+                  ? this.chartAxisTime(value, playerSpan)
+                  : ''
               }
             },
             yAxis: {

@@ -28,7 +28,9 @@ cd Steam-KaKaBase
 sudo bash ./deploy/install_ubuntu.sh steam.example.com admin@example.com
 ```
 
-The script refuses to harden SSH unless the current sudo user has `authorized_keys`. It installs the application at `/opt/steam-kakabase`, creates a random admin token, validates Nginx, starts Web and crawler separately, enables UFW, disables root/password SSH, and obtains a Let's Encrypt certificate.
+The script refuses to harden SSH unless the current sudo user has `authorized_keys`. It installs the application at `/opt/steam-kakabase`, creates a random admin token, validates Nginx, starts Web and crawler separately, enables UFW, disables root/password SSH, obtains a Let's Encrypt certificate, forces HTTP to HTTPS, and verifies the HTTPS readiness endpoint before succeeding. Production login cookies are therefore marked `Secure`.
+
+Before each in-place update it creates and integrity-checks a `pre-deploy` SQLite backup in `/opt/steam-kakabase/data/backups/`. On the first v7 → v8 start, the normal migration additionally writes its own `before-v7-to-v8` backup before creating account tables.
 
 Add `STEAM_API_KEY` and `ITAD_API_KEY` to `/opt/steam-kakabase/.env` without printing them into shell history. Then restart only the crawler:
 

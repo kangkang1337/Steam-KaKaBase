@@ -54,9 +54,54 @@ def test_account_session_and_favorite_isolation(api_client):
     assert favorites[0]["player_count"] == 1234
     assert favorites[0]["review_score"] == 95
     assert favorites[0]["cn_price"] == "\u00a5 50.00"
-    assert client.post("/api/favorites/4242/remove", headers={"X-CSRF-Token": csrf}).status_code == 200
-    assert client.post("/api/auth/logout").status_code == 200
+    deleted = client.post(
+        "/api/auth/delete-account",
+        json={"password": credentials["password"]},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert deleted.status_code == 200
     assert client.get("/api/favorites").status_code == 401
+    with runtime.database_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM user_favorites").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM user_sessions").fetchone()[0] == 0
+
+
+def test_auth_rate_limit_is_enforced_by_ip(api_client, monkeypatch):
+    _, client = api_client
+    monkeypatch.setattr(config, "AUTH_RATE_LIMIT", 1)
+    monkeypatch.setattr(config, "AUTH_RATE_WINDOW_SECONDS", 60)
+    first = client.post("/api/auth/login", json={"username": "missing", "password": "password123"})
+    second = client.post("/api/auth/login", json={"username": "missing", "password": "password123"})
+    assert first.status_code == 401
+    assert second.status_code == 429
+    assert int(second.headers["Retry-After"]) >= 1
+
+
+def test_admin_password_reset_invalidates_existing_sessions(api_client):
+    _, client = api_client
+    credentials = {"username": "reset_user", "password": "password123", "remember": False}
+    assert client.post("/api/auth/register", json=credentials).status_code == 200
+    assert client.post("/api/auth/login", json=credentials).status_code == 200
+    from backend import auth
+    auth.reset_password("reset_user", "newpassword123")
+    assert client.get("/api/auth/me").json()["user"] is None
+    assert client.post("/api/auth/login", json=credentials).status_code == 401
+    assert client.post("/api/auth/login", json={**credentials, "password": "newpassword123"}).status_code == 200
+
+
+def test_production_auth_cookie_is_secure_and_https_response_gets_hsts(isolated_runtime, monkeypatch):
+    monkeypatch.setattr(config, "ENVIRONMENT", "production")
+    monkeypatch.setattr(config, "IS_PRODUCTION", True)
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "a" * 32)
+    monkeypatch.setattr(config, "ALLOWED_HOSTS", ("testserver",))
+    with TestClient(create_app()) as client:
+        credentials = {"username": "secure_user", "password": "password123", "remember": True}
+        assert client.post("/api/auth/register", json=credentials).status_code == 200
+        login = client.post("/api/auth/login", json=credentials)
+        assert login.status_code == 200
+        assert "Secure" in login.headers["set-cookie"]
+        assert client.get("/health", headers={"X-Forwarded-Proto": "https"}).headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
 
 
 @pytest.mark.parametrize("allowed_hosts", [(), ("*",)])

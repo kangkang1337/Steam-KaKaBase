@@ -14,8 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from . import config, services
 from .db import init_db
 from .logging_utils import log_event
-from .schemas import TrackRequest, UntrackRequest, LoginRequest
+from .schemas import DeleteAccountRequest, LoginRequest, TrackRequest, UntrackRequest
 from . import auth
+from .rate_limit import IpRateLimiter
 
 
 def _file_response(path: Path, *, media_type=None, max_age=3600):
@@ -63,6 +64,24 @@ def create_app():
     """Build the cache-only web application."""
 
     _validate_security_config()
+    rate_limiter = IpRateLimiter()
+
+    def request_ip(request: Request):
+        # Nginx appends its peer address.  Taking the final value avoids trusting
+        # a client-supplied leading X-Forwarded-For value.
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            return forwarded.rsplit(",", 1)[-1].strip() or "unknown"
+        return request.client.host if request.client else "unknown"
+
+    def enforce_ip_rate(request: Request, bucket: str, *, limit: int, window_seconds: int):
+        retry_after = rate_limiter.check(bucket, request_ip(request), limit=limit, window_seconds=window_seconds)
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=429,
+                detail="请求过于频繁，请稍后再试",
+                headers={"Retry-After": str(retry_after)},
+            )
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -98,7 +117,7 @@ def create_app():
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        if config.IS_PRODUCTION and request.url.scheme == "https":
+        if config.IS_PRODUCTION and request.headers.get("X-Forwarded-Proto", request.url.scheme) == "https":
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
@@ -167,13 +186,15 @@ def create_app():
         return {"user": {"username": user["username"]} if user else None, "csrf_token": user["csrf_token"] if user else None}
 
     @application.post("/api/auth/register")
-    def auth_register(body: LoginRequest):
+    def auth_register(body: LoginRequest, request: Request):
+        enforce_ip_rate(request, "auth", limit=config.AUTH_RATE_LIMIT, window_seconds=config.AUTH_RATE_WINDOW_SECONDS)
         try: auth.register(body.username, body.password)
         except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True}
 
     @application.post("/api/auth/login")
-    def auth_login(body: LoginRequest):
+    def auth_login(body: LoginRequest, request: Request):
+        enforce_ip_rate(request, "auth", limit=config.AUTH_RATE_LIMIT, window_seconds=config.AUTH_RATE_WINDOW_SECONDS)
         try: token, csrf, user, expires = auth.login(body.username, body.password, body.remember)
         except ValueError as exc: raise HTTPException(status_code=401, detail=str(exc)) from exc
         response = JSONResponse({"ok": True, "user": {"username": user["username"]}, "csrf_token": csrf})
@@ -185,6 +206,18 @@ def create_app():
         auth.logout(request.cookies.get(auth.SESSION_COOKIE))
         response = JSONResponse({"ok": True}); response.delete_cookie(auth.SESSION_COOKIE); return response
 
+    @application.post("/api/auth/delete-account")
+    def auth_delete_account(body: DeleteAccountRequest, request: Request):
+        enforce_ip_rate(request, "auth", limit=config.AUTH_RATE_LIMIT, window_seconds=config.AUTH_RATE_WINDOW_SECONDS)
+        user = current_user(request, csrf=True)
+        try:
+            auth.delete_account(user["id"], body.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(auth.SESSION_COOKIE)
+        return response
+
     @application.get("/api/favorites")
     def favorites(request: Request):
         user = current_user(request)
@@ -192,11 +225,13 @@ def create_app():
 
     @application.post("/api/favorites")
     def add_favorite(body: TrackRequest, request: Request):
+        enforce_ip_rate(request, "favorites", limit=config.FAVORITES_RATE_LIMIT, window_seconds=config.FAVORITES_RATE_WINDOW_SECONDS)
         user = current_user(request, csrf=True)
         return services.add_user_favorite(user["id"], body.appid, body.name, body.header_image or body.tiny_image)
 
     @application.post("/api/favorites/{appid}/remove")
     def remove_favorite(appid: int, request: Request):
+        enforce_ip_rate(request, "favorites", limit=config.FAVORITES_RATE_LIMIT, window_seconds=config.FAVORITES_RATE_WINDOW_SECONDS)
         user = current_user(request, csrf=True)
         return services.remove_user_favorite(user["id"], appid)
 

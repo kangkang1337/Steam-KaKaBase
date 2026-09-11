@@ -115,6 +115,7 @@ ln -sfn /etc/nginx/sites-available/steam-kakabase /etc/nginx/sites-enabled/steam
 rm -f /etc/nginx/sites-enabled/default
 
 nginx -t
+runuser -u "${APP_USER}" -- "${APP_DIR}/.venv/bin/python" "${APP_DIR}/scripts/predeploy_backup.py"
 systemctl daemon-reload
 systemctl enable steam-kakabase-web.service steam-kakabase-crawler.service
 systemctl restart steam-kakabase-web.service steam-kakabase-crawler.service
@@ -148,6 +149,7 @@ certbot --nginx --non-interactive --agree-tos --redirect \
   --email "${EMAIL}" --domains "${DOMAIN}"
 nginx -t
 systemctl reload nginx.service
+curl --fail --silent --show-error "https://${DOMAIN}/ready" >/dev/null
 
 echo "Deployment completed: https://${DOMAIN}"
 echo "Offsite backup is not enabled until rclone and STEAMKB_OFFSITE_REMOTE are configured."

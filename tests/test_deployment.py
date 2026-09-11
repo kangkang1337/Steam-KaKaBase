@@ -30,11 +30,15 @@ def test_nginx_limits_public_search_and_admin_routes():
     assert "zone=steamkb_search" in zones
     assert "zone=steamkb_admin" in zones
     assert "zone=steamkb_detail" in zones
+    assert "zone=steamkb_auth" in zones
+    assert "zone=steamkb_favorites" in zones
     assert "proxy_headers_hash_max_size 1024;" in zones
     assert "proxy_headers_hash_bucket_size 128;" in zones
     assert "limit_req zone=steamkb_search" in site
     assert "limit_req zone=steamkb_admin" in site
     assert "limit_req zone=steamkb_detail" in site
+    assert "limit_req zone=steamkb_auth" in site
+    assert "limit_req zone=steamkb_favorites" in site
     assert "proxy_pass http://127.0.0.1:8765" in site
     assert "include /etc/nginx/proxy_params;" in site
     assert "include proxy_params;" not in site
@@ -70,6 +74,8 @@ def test_deployment_restarts_application_processes_after_sync():
     assert "systemctl restart steam-kakabase-web.service steam-kakabase-crawler.service" in installer
     assert "for _attempt in $(seq 1 20); do" in installer
     assert "Steam-KaKaBase web service did not become ready within 20 seconds." in installer
+    assert "scripts/predeploy_backup.py" in installer
+    assert '"https://${DOMAIN}/ready"' in installer
 
 
 def test_offsite_upload_uses_scoped_remote_and_retention(tmp_path):

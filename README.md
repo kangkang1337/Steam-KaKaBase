@@ -8,7 +8,7 @@
 
 一个面向本地运行的 Steam 数据面板，设计参考 SteamDB。用于查看游戏价格与本地历史快照、在线人数趋势、玩家评价、热门榜和每日小众宝藏推荐。
 
-当前版本：`v0.4.2`（开发中）
+当前版本：`v0.5.0`
 
 > 项目支持本地运行和单机 VPS 自托管。生产部署使用 Nginx、HTTPS、UFW、systemd、受限写接口与异地 SQLite 备份；仍建议先在个人规模下运行并持续观察 Steam/ITAD 的限流情况。
 
@@ -196,6 +196,10 @@ Copy-Item .env.example .env
 | `STEAMKB_ALLOWED_HOSTS` | 空 | 允许的 Host 名称，多个值用逗号分隔 |
 | `STEAMKB_PROXY_VERIFY_TLS` | `true` | 代理 HTTPS 证书校验；生产环境不应关闭 |
 | `STEAMKB_PUBLIC_DETAIL_QUEUE_LIMIT` | `60` | 公开详情补全队列的全站 App 上限 |
+| `STEAMKB_AUTH_RATE_LIMIT` | `10` | 每个 IP 在认证窗口内可进行的注册、登录、删号请求数 |
+| `STEAMKB_AUTH_RATE_WINDOW_SECONDS` | `300` | 认证接口 IP 限流窗口（秒） |
+| `STEAMKB_FAVORITES_RATE_LIMIT` | `60` | 每个 IP 在收藏接口窗口内可进行的请求数 |
+| `STEAMKB_FAVORITES_RATE_WINDOW_SECONDS` | `60` | 收藏接口 IP 限流窗口（秒） |
 | `STEAMKB_PORT` | `8765` | 本地 HTTP 端口 |
 | `STEAMKB_CRAWLER_LEASE_SECONDS` | `120` | crawler 单实例租约有效期 |
 | `STEAMKB_CRAWLER_HEARTBEAT_SECONDS` | `20` | crawler 续租和状态心跳间隔 |
@@ -242,13 +246,13 @@ STEAMKB_PROXY_URL=http://127.0.0.1:7890
 
 ## 数据库迁移与备份
 
-SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v7 包含跨进程单实例锁和双语搜索别名索引。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
+SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v8 在 v7 基础上新增账号、会话与账号收藏表。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
 
 迁移中任意一步失败时，事务会整体回滚，服务停止启动，并在错误中给出升级前备份路径。crawler 还会使用 SQLite Backup API 每 24 小时在线创建一次 `daily` 备份，默认保留 14 份；每日备份、手动备份和迁移备份分别轮转，不会互相删除。数据库和备份文件均被 Git 忽略。
 
 ## 生产安全配置
 
-建议让 Uvicorn 只监听 `127.0.0.1`，由同机 Nginx 提供 HTTPS 和公网入口。生成管理令牌：
+建议让 Uvicorn 只监听 `127.0.0.1`，由同机 Nginx 提供 HTTPS 和公网入口。公网部署必须使用 HTTPS：安装脚本会申请证书、强制 HTTP 跳转 HTTPS，并在部署结束前检查 HTTPS `/ready`。生产登录 Cookie 自动带 `Secure`、`HttpOnly` 与 `SameSite=Lax`。生成管理令牌：
 
 ```powershell
 python -c "import secrets; print(secrets.token_urlsafe(48))"
@@ -264,7 +268,16 @@ STEAMKB_ALLOWED_HOSTS=steam.example.com,127.0.0.1,localhost
 STEAMKB_CORS_ALLOWED_ORIGINS=
 ```
 
-前后端同域时 CORS 应保持为空。只有前端确实部署在另一个域名时，才填写类似 `https://www.example.com` 的完整 Origin，不能在生产环境使用 `*`。生产环境会隐藏收藏按钮，因为收藏当前是服务器全局写操作；管理员可通过 API 管理：
+前后端同域时 CORS 应保持为空。只有前端确实部署在另一个域名时，才填写类似 `https://www.example.com` 的完整 Origin，不能在生产环境使用 `*`。认证与收藏接口同时受 Nginx 和应用进程按 IP 限流保护；应用层不会将 IP 写入 SQLite。未登录收藏只保留在本机浏览器，登录收藏只归当前账号。
+
+账号页提供删除账号入口，需输入当前密码确认；会永久移除用户名、密码派生值、会话及该账号的同步收藏。当前不收集邮箱，因此没有自助找回或修改密码；管理员确认账号归属后可在服务器交互式执行下列命令重置密码（不会把新密码写入 shell 历史，并会注销该账号全部会话）：
+
+```bash
+cd /opt/steam-kakabase
+sudo -u steamkb .venv/bin/python scripts/reset_account_password.py USERNAME
+```
+
+管理员仍可通过 API 管理全局采集：
 
 ```bash
 curl -X POST https://steam.example.com/api/games/730/refresh \

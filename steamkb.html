@@ -926,6 +926,9 @@
     .auth-remember { display: inline-flex; align-items: center; justify-content: flex-start; gap: 8px; margin-top: 8px; font-size: 16px; font-weight: 600; cursor: pointer; }
     .auth-remember input { width: 17px; height: 17px; margin: 0; accent-color: #66c0f4; }
     .auth-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+    .auth-note { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    button.danger { color: #ffc2bd; border-color: #a84c46; }
+    button.danger:hover { background: #592724; }
 
     .status {
       min-height: 22px;
@@ -1098,6 +1101,7 @@
           <button :class="{active: locale === 'zh-CN'}" @click="setLocale('zh-CN')">中文</button>
           <button :class="{active: locale === 'en-US'}" @click="setLocale('en-US')">EN</button>
         </div>
+        <button class="danger" @click="deleteAccountOpen = true" v-if="account">{{ t('deleteAccount') }}</button>
         <button @click="logout" v-if="account">{{ t('logout') }}</button>
         <button @click="authOpen = true" v-else>{{ t('login') }}</button>
         <button @click="loadGames" :disabled="busy">{{ t('refreshList') }}</button>
@@ -1371,7 +1375,16 @@
       <input v-model.trim="authUsername" autocomplete="username" :placeholder="t('username')" required>
       <input v-model="authPassword" type="password" autocomplete="current-password" :placeholder="t('password')" required>
       <label class="auth-remember"><input v-model="authRemember" type="checkbox"> <span>{{ t('rememberMe') }}</span></label>
+      <p class="auth-note">{{ t('privacyNotice') }}</p>
       <div class="auth-actions"><button type="button" @click="authMode = authMode === 'login' ? 'register' : 'login'">{{ authMode === 'login' ? t('register') : t('login') }}</button><button type="submit">{{ authMode === 'login' ? t('login') : t('register') }}</button></div>
+    </form>
+  </div>
+  <div v-if="deleteAccountOpen" class="auth-dialog" @click.self="deleteAccountOpen = false">
+    <form class="auth-card" @submit.prevent="deleteAccount">
+      <h3>{{ t('deleteAccount') }}</h3>
+      <p class="auth-note">{{ t('deleteAccountWarning') }}</p>
+      <input v-model="deleteAccountPassword" type="password" autocomplete="current-password" :placeholder="t('password')" required>
+      <div class="auth-actions"><button type="button" @click="deleteAccountOpen = false">{{ t('cancel') }}</button><button class="danger" type="submit">{{ t('confirmDelete') }}</button></div>
     </form>
   </div>
   </div>
@@ -1382,7 +1395,7 @@
     const translations = {
       'zh-CN': {
         openNav: '打开导航菜单', home: '主页', gameDetail: '游戏详情', hotList: '热门榜', nichePool: '小众池',
-        searchPlaceholder: '搜索 Steam 游戏', online: '在线', favorited: '已收藏', favorite: '收藏', view: '查看', login: '登录', logout: '退出登录', register: '注册', username: '用户名', password: '密码', rememberMe: '记住我',
+        searchPlaceholder: '搜索 Steam 游戏', online: '在线', favorited: '已收藏', favorite: '收藏', view: '查看', login: '登录', logout: '退出登录', register: '注册', username: '用户名', password: '密码', rememberMe: '记住我', deleteAccount: '删除账号', cancel: '取消', confirmDelete: '确认删除', privacyNotice: '仅保存用户名、加盐密码派生值、会话和同步收藏；不收集邮箱。可随时删除账号及其同步收藏。', deleteAccountWarning: '此操作会永久删除账号、所有登录会话和同步收藏，无法恢复。请输入当前密码确认。',
         searching: '正在搜索…', noSearchResults: '暂无本地结果，目录仍在持续补充', selectPriceRegion: '选择价格地区',
         selectLanguage: '选择界面语言', refreshList: '刷新列表', backgroundCollecting: '后台自动采集中，页面可正常使用。',
         autoCollection: '自动采集：在线人数每 {players} 分钟一次，价格/评价每 {prices} 小时一次。',
@@ -1428,7 +1441,7 @@
       },
       'en-US': {
         openNav: 'Open navigation', home: 'Home', gameDetail: 'Game details', hotList: 'Popular', nichePool: 'Hidden gems',
-        searchPlaceholder: 'Search Steam games', online: 'online', favorited: 'Saved', favorite: 'Save', view: 'View', login: 'Log in', logout: 'Log out', register: 'Create account', username: 'Username', password: 'Password', rememberMe: 'Remember me',
+        searchPlaceholder: 'Search Steam games', online: 'online', favorited: 'Saved', favorite: 'Save', view: 'View', login: 'Log in', logout: 'Log out', register: 'Create account', username: 'Username', password: 'Password', rememberMe: 'Remember me', deleteAccount: 'Delete account', cancel: 'Cancel', confirmDelete: 'Delete permanently', privacyNotice: 'Only a username, salted password hash, session, and synced favorites are stored. No email is collected. You can delete your account and synced favorites at any time.', deleteAccountWarning: 'This permanently deletes your account, all sessions, and synced favorites. It cannot be undone. Enter your current password to confirm.',
         searching: 'Searching…', noSearchResults: 'No local results yet; the catalog is still being enriched', selectPriceRegion: 'Select price region',
         selectLanguage: 'Select interface language', refreshList: 'Refresh', backgroundCollecting: 'Background collection is running; the page remains available.',
         autoCollection: 'Auto collection: players every {players} min; prices/reviews every {prices} hr.',
@@ -1539,7 +1552,7 @@
           searching: false,
           busy: false,
           favoriteBusy: false,
-          account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true,
+          account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true, deleteAccountOpen: false, deleteAccountPassword: '',
           refreshing: false,
           wasRefreshing: false,
           statusTimer: null,
@@ -1933,7 +1946,7 @@
           } catch (err) {
             throw new Error(this.t('jsonError'));
           }
-          if (!res.ok) throw new Error(data.error || res.statusText);
+          if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
           return data;
         },
         async loadGames() {
@@ -2478,6 +2491,7 @@
         async restoreAuth() { try { const data = await this.api('/api/auth/me'); this.account = data.user; this.csrfToken = data.csrf_token || ''; if (this.account) await this.loadGames(); } catch (_e) {} },
         async submitAuth() { try { const path = this.authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; await this.api(path, {method:'POST', body: JSON.stringify({username:this.authUsername,password:this.authPassword,remember:this.authRemember})}); if (this.authMode === 'register') { this.authMode='login'; this.message='注册成功，请登录'; return; } await this.restoreAuth(); this.authOpen=false; this.authPassword=''; } catch (err) { this.message=err.message; } },
         async logout() { await this.api('/api/auth/logout', {method:'POST'}); this.account=null; this.csrfToken=''; await this.loadGames(); },
+        async deleteAccount() { try { await this.api('/api/auth/delete-account', {method:'POST', body:JSON.stringify({password:this.deleteAccountPassword})}); this.account=null; this.csrfToken=''; this.deleteAccountPassword=''; this.deleteAccountOpen=false; await this.loadGames(); this.message=this.t('deleteAccount') + '。'; } catch (err) { this.message=err.message; } },
         showPlayerTooltip(event) {
           const chart = this.playerChart;
           const element = this.$refs.playerChart;

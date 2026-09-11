@@ -43,3 +43,35 @@ def logout(token):
     if token:
         with transaction() as conn: conn.execute("DELETE FROM user_sessions WHERE token_hash=?", (_hash(token),))
 
+
+def delete_account(user_id, password):
+    """Irreversibly delete an account, its sessions, and its synced favorites."""
+    with transaction(rows=True) as conn:
+        user = conn.execute("SELECT password_hash,password_salt FROM users WHERE id=?", (int(user_id),)).fetchone()
+        if not user or not secrets.compare_digest(user["password_hash"], _password(password, user["password_salt"])):
+            raise ValueError("密码错误")
+        # Keep this explicit as SQLite foreign-key enforcement is connection-local.
+        conn.execute("DELETE FROM user_sessions WHERE user_id=?", (int(user_id),))
+        conn.execute("DELETE FROM user_favorites WHERE user_id=?", (int(user_id),))
+        conn.execute("DELETE FROM users WHERE id=?", (int(user_id),))
+
+
+def reset_password(username, password):
+    """Administrative reset for the no-email account flow; invalidates sessions."""
+    username = username.strip()
+    if not username:
+        raise ValueError("用户名不能为空")
+    if len(password) < 8 or len(password) > 128:
+        raise ValueError("密码需为 8–128 位")
+    salt = secrets.token_hex(16)
+    with transaction() as conn:
+        result = conn.execute(
+            "UPDATE users SET password_hash=?,password_salt=? WHERE username=?",
+            (_password(password, salt), salt, username),
+        )
+        if result.rowcount != 1:
+            raise ValueError("账号不存在")
+        conn.execute(
+            "DELETE FROM user_sessions WHERE user_id=(SELECT id FROM users WHERE username=?)",
+            (username,),
+        )

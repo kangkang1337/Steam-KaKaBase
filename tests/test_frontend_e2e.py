@@ -327,12 +327,12 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
         expect(favorite).to_have_text("收藏")
         favorite.click()
         expect(favorite).to_have_text("已收藏")
-        assert state["track_calls"] == 1
+        assert state["track_calls"] == 0
 
         favorite.click()
         expect(favorite).to_have_text("收藏")
-        expect(page.locator(".status")).to_contain_text("已取消收藏：测试任务")
-        assert state["untrack_calls"] == 1
+        expect(page.locator(".status")).to_contain_text("已取消收藏：Test Quest")
+        assert state["untrack_calls"] == 0
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
         assert errors == []
     finally:

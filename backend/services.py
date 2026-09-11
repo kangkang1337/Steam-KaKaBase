@@ -1,6 +1,7 @@
 """User-facing application operations consumed by the HTTP layer."""
 
 import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 import urllib.parse
 
@@ -221,6 +222,29 @@ def untrack_game(appid):
     appid = int(appid)
     _runtime.untrack_game(appid)
     return {"ok": True, "appid": appid, "tracked": False}
+
+
+def list_user_favorites(user_id):
+    with transaction(rows=True) as conn:
+        rows = conn.execute("""
+            SELECT g.*, c.name AS name_en FROM user_favorites f
+            JOIN games g ON g.appid=f.appid LEFT JOIN steam_catalog c ON c.appid=g.appid
+            WHERE f.user_id=? ORDER BY f.created_at DESC
+        """, (int(user_id),)).fetchall()
+    return [_runtime.clean_game(row, summary=True) for row in rows]
+
+
+def add_user_favorite(user_id, appid, name=None, header_image=None):
+    track_game(appid, name, header_image)
+    with transaction() as conn:
+        conn.execute("INSERT OR IGNORE INTO user_favorites(user_id,appid,created_at) VALUES(?,?,?)", (int(user_id), int(appid), datetime.now(timezone.utc).replace(microsecond=0).isoformat()))
+    return {"ok": True, "appid": int(appid), "tracked": True}
+
+
+def remove_user_favorite(user_id, appid):
+    with transaction() as conn:
+        conn.execute("DELETE FROM user_favorites WHERE user_id=? AND appid=?", (int(user_id), int(appid)))
+    return {"ok": True, "appid": int(appid), "tracked": False}
 
 
 def refresh_all():

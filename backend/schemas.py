@@ -14,3 +14,8 @@ class TrackRequest(BaseModel):
 
 class UntrackRequest(BaseModel):
     appid: int = Field(gt=0)
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=40)
+    password: str = Field(min_length=8, max_length=128)
+    remember: bool = False

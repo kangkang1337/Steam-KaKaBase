@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from . import config, services
 from .db import init_db
 from .logging_utils import log_event
-from .schemas import TrackRequest, UntrackRequest
+from .schemas import TrackRequest, UntrackRequest, LoginRequest
+from . import auth
 
 
 def _file_response(path: Path, *, media_type=None, max_age=3600):
@@ -151,6 +152,53 @@ def create_app():
     @application.get("/api/games")
     def games():
         return {"games": services.list_games()}
+
+    def current_user(request: Request, *, csrf=False):
+        user = auth.session(request.cookies.get(auth.SESSION_COOKIE))
+        if not user:
+            raise HTTPException(status_code=401, detail="请先登录")
+        if csrf and not secrets.compare_digest(request.headers.get("X-CSRF-Token", ""), user["csrf_token"]):
+            raise HTTPException(status_code=403, detail="会话校验失败，请重新登录")
+        return user
+
+    @application.get("/api/auth/me")
+    def auth_me(request: Request):
+        user = auth.session(request.cookies.get(auth.SESSION_COOKIE))
+        return {"user": {"username": user["username"]} if user else None, "csrf_token": user["csrf_token"] if user else None}
+
+    @application.post("/api/auth/register")
+    def auth_register(body: LoginRequest):
+        try: auth.register(body.username, body.password)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
+
+    @application.post("/api/auth/login")
+    def auth_login(body: LoginRequest):
+        try: token, csrf, user, expires = auth.login(body.username, body.password, body.remember)
+        except ValueError as exc: raise HTTPException(status_code=401, detail=str(exc)) from exc
+        response = JSONResponse({"ok": True, "user": {"username": user["username"]}, "csrf_token": csrf})
+        response.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite="lax", secure=config.IS_PRODUCTION, max_age=int((expires - __import__('datetime').datetime.now(__import__('datetime').timezone.utc)).total_seconds()) if body.remember else None)
+        return response
+
+    @application.post("/api/auth/logout")
+    def auth_logout(request: Request):
+        auth.logout(request.cookies.get(auth.SESSION_COOKIE))
+        response = JSONResponse({"ok": True}); response.delete_cookie(auth.SESSION_COOKIE); return response
+
+    @application.get("/api/favorites")
+    def favorites(request: Request):
+        user = current_user(request)
+        return {"games": services.list_user_favorites(user["id"])}
+
+    @application.post("/api/favorites")
+    def add_favorite(body: TrackRequest, request: Request):
+        user = current_user(request, csrf=True)
+        return services.add_user_favorite(user["id"], body.appid, body.name, body.header_image or body.tiny_image)
+
+    @application.post("/api/favorites/{appid}/remove")
+    def remove_favorite(appid: int, request: Request):
+        user = current_user(request, csrf=True)
+        return services.remove_user_favorite(user["id"], appid)
 
     @application.get("/api/games/{appid}")
     def game(appid: int, history_limit: int = Query(default=500, ge=1, le=5000)):

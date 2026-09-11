@@ -19,7 +19,21 @@ def test_health_and_readiness(api_client):
     assert client.get("/health").json() == {"status": "ok"}
     response = client.get("/ready")
     assert response.status_code == 200
-    assert response.json() == {"ready": True, "database": "ok", "schema_version": 7}
+    assert response.json() == {"ready": True, "database": "ok", "schema_version": 8}
+
+
+def test_account_session_and_favorite_isolation(api_client):
+    runtime, client = api_client
+    runtime.quick_track_game(4242, "Test Quest", None)
+    credentials = {"username": "tester_01", "password": "password123", "remember": True}
+    assert client.post("/api/auth/register", json=credentials).status_code == 200
+    login = client.post("/api/auth/login", json=credentials)
+    csrf = login.json()["csrf_token"]
+    assert client.post("/api/favorites", json={"appid": 4242, "name": "Test Quest"}, headers={"X-CSRF-Token": csrf}).status_code == 200
+    assert [game["appid"] for game in client.get("/api/favorites").json()["games"]] == [4242]
+    assert client.post("/api/favorites/4242/remove", headers={"X-CSRF-Token": csrf}).status_code == 200
+    assert client.post("/api/auth/logout").status_code == 200
+    assert client.get("/api/favorites").status_code == 401
 
 
 @pytest.mark.parametrize("allowed_hosts", [(), ("*",)])
@@ -47,7 +61,7 @@ def test_status_endpoint(api_client):
     assert set(payload["service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert set(payload["direct_service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert "proxy" in payload
-    assert payload["database_schema_version"] == 7
+    assert payload["database_schema_version"] == 8
     assert payload["niche_max_reviews"] == 50000
     assert payload["daily_refresh_timezone"] == "Asia/Shanghai"
     assert payload["search"]["storage"] == "sqlite_fts5_trigram"

@@ -920,6 +920,10 @@
       background: #2a475e;
       color: #fff;
     }
+    .auth-dialog { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.6); }
+    .auth-card { width: min(360px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: #111820; box-shadow: 0 16px 48px #000; }
+    .auth-card input { width: 100%; margin: 7px 0; }
+    .auth-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
 
     .status {
       min-height: 22px;
@@ -1092,6 +1096,8 @@
           <button :class="{active: locale === 'zh-CN'}" @click="setLocale('zh-CN')">中文</button>
           <button :class="{active: locale === 'en-US'}" @click="setLocale('en-US')">EN</button>
         </div>
+        <button @click="logout" v-if="account">{{ t('logout') }}</button>
+        <button @click="authOpen = true" v-else>{{ t('login') }}</button>
         <button @click="loadGames" :disabled="busy">{{ t('refreshList') }}</button>
       </div>
     </header>
@@ -1259,7 +1265,7 @@
             <div>
               <div class="hero-title-row">
                 <h1>{{ displayGameName(selected) }}</h1>
-                <button v-if="browserWriteActionsEnabled" class="favorite-btn" :class="{active: selected.tracked}" @click="toggleFavorite" :disabled="favoriteBusy">
+                <button class="favorite-btn" :class="{active: selected.tracked}" @click="toggleFavorite" :disabled="favoriteBusy">
                   {{ selected.tracked ? t('favorited') : t('favorite') }}
                 </button>
               </div>
@@ -1357,6 +1363,15 @@
         <div class="empty">{{ t('selectGameHint') }}</div>
       </section>
     </main>
+  <div v-if="authOpen" class="auth-dialog" @click.self="authOpen = false">
+    <form class="auth-card" @submit.prevent="submitAuth">
+      <h3>{{ authMode === 'login' ? t('login') : t('register') }}</h3>
+      <input v-model.trim="authUsername" autocomplete="username" :placeholder="t('username')" required>
+      <input v-model="authPassword" type="password" autocomplete="current-password" :placeholder="t('password')" required>
+      <label><input v-model="authRemember" type="checkbox"> {{ t('rememberMe') }}</label>
+      <div class="auth-actions"><button type="button" @click="authMode = authMode === 'login' ? 'register' : 'login'">{{ authMode === 'login' ? t('register') : t('login') }}</button><button type="submit">{{ authMode === 'login' ? t('login') : t('register') }}</button></div>
+    </form>
+  </div>
   </div>
 
   <script>
@@ -1365,7 +1380,7 @@
     const translations = {
       'zh-CN': {
         openNav: '打开导航菜单', home: '主页', gameDetail: '游戏详情', hotList: '热门榜', nichePool: '小众池',
-        searchPlaceholder: '搜索 Steam 游戏', online: '在线', favorited: '已收藏', favorite: '收藏', view: '查看',
+        searchPlaceholder: '搜索 Steam 游戏', online: '在线', favorited: '已收藏', favorite: '收藏', view: '查看', login: '登录', logout: '退出登录', register: '注册', username: '用户名', password: '密码', rememberMe: '记住我',
         searching: '正在搜索…', noSearchResults: '暂无本地结果，目录仍在持续补充', selectPriceRegion: '选择价格地区',
         selectLanguage: '选择界面语言', refreshList: '刷新列表', backgroundCollecting: '后台自动采集中，页面可正常使用。',
         autoCollection: '自动采集：在线人数每 {players} 分钟一次，价格/评价每 {prices} 小时一次。',
@@ -1411,7 +1426,7 @@
       },
       'en-US': {
         openNav: 'Open navigation', home: 'Home', gameDetail: 'Game details', hotList: 'Popular', nichePool: 'Hidden gems',
-        searchPlaceholder: 'Search Steam games', online: 'online', favorited: 'Saved', favorite: 'Save', view: 'View',
+        searchPlaceholder: 'Search Steam games', online: 'online', favorited: 'Saved', favorite: 'Save', view: 'View', login: 'Log in', logout: 'Log out', register: 'Create account', username: 'Username', password: 'Password', rememberMe: 'Remember me',
         searching: 'Searching…', noSearchResults: 'No local results yet; the catalog is still being enriched', selectPriceRegion: 'Select price region',
         selectLanguage: 'Select interface language', refreshList: 'Refresh', backgroundCollecting: 'Background collection is running; the page remains available.',
         autoCollection: 'Auto collection: players every {players} min; prices/reviews every {prices} hr.',
@@ -1522,6 +1537,7 @@
           searching: false,
           busy: false,
           favoriteBusy: false,
+          account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true,
           refreshing: false,
           wasRefreshing: false,
           statusTimer: null,
@@ -1733,6 +1749,7 @@
         if (pageIcon) pageIcon.href = this.logoSrc;
         this.restoreLocale();
         this.restoreSelectedRegion();
+        this.restoreAuth();
         this.loadGames();
         this.loadHomePicks();
         this.loadStatus();
@@ -1902,7 +1919,7 @@
           let res;
           try {
             res = await fetch(path, {
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', ...(this.csrfToken ? {'X-CSRF-Token': this.csrfToken} : {}) },
               ...options
             });
           } catch (err) {
@@ -1920,8 +1937,11 @@
         async loadGames() {
           this.busy = true;
           try {
-            const data = await this.api('/api/games');
-            this.games = data.games;
+            if (this.account) {
+              const data = await this.api('/api/favorites'); this.games = data.games;
+            } else {
+              this.games = this.localFavorites();
+            }
           } catch (err) {
             this.message = err.message;
           } finally {
@@ -2070,6 +2090,7 @@
             const chartsChanged = detailSignature !== this.selectedDetailSignature;
             const changedGame = this.selected?.appid !== data.game?.appid;
             this.selected = data.game;
+            this.selected.tracked = this.games.some(game => Number(game.appid) === Number(data.game?.appid));
             this.activePage = 'tracker';
             this.navOpen = false;
             this.selectedPrices = prices;
@@ -2229,15 +2250,14 @@
           if (!this.selected) return;
           this.favoriteBusy = true;
           try {
+            const item = {appid:this.selected.appid, name:this.selected.name, tiny_image:this.selected.header_image};
             if (this.selected.tracked) {
-              await this.untrackSelected();
-              return;
+              if (this.account) await this.api(`/api/favorites/${item.appid}/remove`, {method:'POST'});
+              this.games = this.games.filter(game => game.appid !== item.appid); this.selected.tracked=false; this.saveLocalFavorites(); this.message=this.t('untracked', {name:this.displayGameName(item)}); return;
             }
-            await this.track({
-              appid: this.selected.appid,
-              name: this.selected.name,
-              tiny_image: this.selected.header_image
-            }, { keepSelected: true });
+            if (this.account) await this.api('/api/favorites', {method:'POST', body:JSON.stringify(item)});
+            else { this.games = [item, ...this.games.filter(game => game.appid !== item.appid)]; this.saveLocalFavorites(); }
+            this.selected.tracked=true; await this.loadGames();
           } finally {
             this.favoriteBusy = false;
           }
@@ -2451,6 +2471,11 @@
             surface.__steamkbTooltipBound = true;
           }
         },
+        localFavorites() { try { return JSON.parse(localStorage.getItem('steamkb.localFavorites') || '[]'); } catch (_e) { return []; } },
+        saveLocalFavorites() { try { localStorage.setItem('steamkb.localFavorites', JSON.stringify(this.games)); } catch (_e) {} },
+        async restoreAuth() { try { const data = await this.api('/api/auth/me'); this.account = data.user; this.csrfToken = data.csrf_token || ''; if (this.account) await this.loadGames(); } catch (_e) {} },
+        async submitAuth() { try { const path = this.authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; await this.api(path, {method:'POST', body: JSON.stringify({username:this.authUsername,password:this.authPassword,remember:this.authRemember})}); if (this.authMode === 'register') { this.authMode='login'; this.message='注册成功，请登录'; return; } await this.restoreAuth(); this.authOpen=false; this.authPassword=''; } catch (err) { this.message=err.message; } },
+        async logout() { await this.api('/api/auth/logout', {method:'POST'}); this.account=null; this.csrfToken=''; await this.loadGames(); },
         showPlayerTooltip(event) {
           const chart = this.playerChart;
           const element = this.$refs.playerChart;

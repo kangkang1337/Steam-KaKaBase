@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import socket
 import threading
 import time
@@ -225,7 +226,12 @@ def test_navigation_hot_filters_and_niche_pool(browser, frontend_server):
         page.get_by_role("button", name="打开导航菜单").click()
         page.locator(".app-menu").get_by_role("button", name="热门榜", exact=True).click()
         expect(page.locator(".hot-row")).to_have_count(2)
+        expect(page).to_have_url(re.compile(r"#page=hot$"))
+        page.go_back()
+        expect(page.locator(".home-lines")).to_contain_text("欢迎来到 SteamKaKaBase！")
 
+        page.get_by_role("button", name="打开导航菜单").click()
+        page.locator(".app-menu").get_by_role("button", name="热门榜", exact=True).click()
         page.get_by_text("仅查看付费游戏", exact=True).click()
         expect(page.locator(".hot-row")).to_have_count(1)
         expect(page.locator(".hot-row")).to_contain_text("Paid Bravo")
@@ -339,6 +345,26 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
         expect(page.locator(".status")).to_contain_text("已取消收藏：Test Quest")
         assert state["untrack_calls"] == 0
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+        assert errors == []
+    finally:
+        page.close()
+
+
+def test_detail_poll_cannot_pull_user_back_from_hot_page(browser, frontend_server):
+    page, _, errors = open_test_page(browser, frontend_server)
+    try:
+        search = page.get_by_role("textbox", name="搜索 Steam 游戏")
+        search.fill("Test Quest")
+        page.locator(".suggestion").click()
+        expect(page.locator(".hero h1")).to_have_text("测试任务")
+
+        page.get_by_role("button", name="打开导航菜单").click()
+        page.locator(".app-menu").get_by_role("button", name="热门榜", exact=True).click()
+        expect(page.locator(".hot-row")).to_have_count(2)
+        # The initial detail response is deliberately incomplete and schedules
+        # a ten-second cache poll. It must not force the view back to details.
+        page.wait_for_timeout(10_500)
+        expect(page.locator(".hot-row")).to_have_count(2)
         assert errors == []
     finally:
         page.close()

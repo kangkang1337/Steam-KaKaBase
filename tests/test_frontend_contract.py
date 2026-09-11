@@ -53,3 +53,12 @@ def test_game_name_uses_localized_api_fields_with_fallbacks():
     assert "game?.name_en" in source
     assert "game?.name_zh" in source
     assert "preferred || game?.name" in source
+
+
+def test_navigation_uses_history_and_cancels_stale_detail_updates():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert "window.addEventListener('popstate', this.restoreRouteFromUrl)" in source
+    assert "window.history.pushState(state, '', url)" in source
+    assert "cancelDetailNavigation()" in source
+    assert "navigate: false" in source

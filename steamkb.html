@@ -1784,8 +1784,9 @@
         }, 1000);
         window.addEventListener('resize', this.resizeCharts);
         window.addEventListener('scroll', this.onWindowScroll, { passive: true });
-        window.addEventListener('hashchange', this.restoreDetailFromUrl);
-        this.restoreDetailFromUrl();
+        window.addEventListener('popstate', this.restoreRouteFromUrl);
+        window.addEventListener('hashchange', this.restoreRouteFromUrl);
+        this.restoreRouteFromUrl();
       },
       beforeUnmount() {
         clearInterval(this.statusTimer);
@@ -1793,7 +1794,8 @@
         clearTimeout(this.detailPollTimer);
         window.removeEventListener('resize', this.resizeCharts);
         window.removeEventListener('scroll', this.onWindowScroll);
-        window.removeEventListener('hashchange', this.restoreDetailFromUrl);
+        window.removeEventListener('popstate', this.restoreRouteFromUrl);
+        window.removeEventListener('hashchange', this.restoreRouteFromUrl);
       },
       methods: {
         t(key, values = {}) {
@@ -1876,10 +1878,21 @@
           if (!name || name === '未命名游戏' || /^(Steam\s+)?App\s+\d+$/i.test(name)) return this.t('namePending');
           return name;
         },
-        switchPage(page) {
+        cancelDetailNavigation() {
+          // A detail request or its cache-poll may complete after the user has
+          // already navigated elsewhere. Invalidate it so it cannot pull the
+          // UI back to the tracker view.
+          this.detailSeq++;
+          clearTimeout(this.detailPollTimer);
+          this.detailPollTimer = null;
+          this.selectedDetailIncomplete = false;
+        },
+        switchPage(page, options = {}) {
+          if (!['home', 'hot', 'niche', 'tracker'].includes(page)) page = 'home';
+          if (page !== 'tracker') this.cancelDetailNavigation();
           this.activePage = page;
           this.navOpen = false;
-          if (page !== 'tracker') this.updateDetailUrl(null);
+          if (options.updateUrl !== false) this.updateRouteUrl(page, null, options.replaceUrl);
           if (page === 'home') {
             this.loadHomePicks();
           }
@@ -1894,22 +1907,40 @@
             nextTick(this.resizeCharts);
           }
         },
-        detailAppidFromUrl() {
-          const value = new URLSearchParams(window.location.hash.slice(1)).get('game');
+        routeFromUrl() {
+          const params = new URLSearchParams(window.location.hash.slice(1));
+          const requestedPage = params.get('page');
+          const value = params.get('game');
           const appid = Number(value);
-          return Number.isSafeInteger(appid) && appid > 0 ? appid : null;
+          if (Number.isSafeInteger(appid) && appid > 0) return { page: 'tracker', appid };
+          return {
+            page: ['home', 'hot', 'niche'].includes(requestedPage) ? requestedPage : 'home',
+            appid: null
+          };
         },
-        updateDetailUrl(appid) {
+        updateRouteUrl(page, appid, replace = false) {
           const url = new URL(window.location.href);
-          url.hash = appid ? `game=${appid}` : '';
-          window.history.replaceState(null, '', url);
-        },
-        restoreDetailFromUrl() {
-          const appid = this.detailAppidFromUrl();
+          const params = new URLSearchParams();
           if (appid) {
-            this.selectGame(appid, { updateUrl: false });
-          } else if (this.activePage === 'tracker') {
-            this.activePage = 'home';
+            params.set('page', 'tracker');
+            params.set('game', String(appid));
+          } else if (page && page !== 'home') {
+            params.set('page', page);
+          }
+          url.hash = params.toString();
+          const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+          const next = `${url.pathname}${url.search}${url.hash}`;
+          if (current === next) return;
+          const state = { page: appid ? 'tracker' : page, appid: appid || null };
+          if (replace) window.history.replaceState(state, '', url);
+          else window.history.pushState(state, '', url);
+        },
+        restoreRouteFromUrl() {
+          const route = this.routeFromUrl();
+          if (route.appid) {
+            this.selectGame(route.appid, { updateUrl: false });
+          } else {
+            this.switchPage(route.page, { updateUrl: false });
           }
         },
         cachedImage(game) {
@@ -2089,7 +2120,12 @@
           this.detailLastPollAt = now;
           this.detailPollInFlight = true;
           try {
-            await this.selectGame(this.selected.appid, { silent: true, updateUrl: false, requestWork: false });
+            await this.selectGame(this.selected.appid, {
+              silent: true,
+              updateUrl: false,
+              requestWork: false,
+              navigate: false
+            });
             this.detailPollAttempts++;
           } finally {
             this.detailPollInFlight = false;
@@ -2100,6 +2136,7 @@
           const seq = ++this.detailSeq;
           const silent = Boolean(options.silent);
           const updateUrl = options.updateUrl !== false;
+          const navigate = options.navigate !== false;
           if (!silent) this.busy = true;
           try {
             const data = await this.api(`/api/games/${appid}?history_limit=500`);
@@ -2112,8 +2149,10 @@
             const changedGame = this.selected?.appid !== data.game?.appid;
             this.selected = data.game;
             this.selected.tracked = this.games.some(game => Number(game.appid) === Number(data.game?.appid));
-            this.activePage = 'tracker';
-            this.navOpen = false;
+            if (navigate) {
+              this.activePage = 'tracker';
+              this.navOpen = false;
+            }
             this.selectedPrices = prices;
             this.priceHistory = priceHistory;
             this.playerHistory = players;
@@ -2132,7 +2171,7 @@
             if (this.selectedDetailIncomplete && !silent && this.detailPollAttempts === 0) {
               this.detailLastPollAt = Date.now();
             }
-            if (updateUrl) this.updateDetailUrl(appid);
+            if (updateUrl) this.updateRouteUrl('tracker', appid);
             const pendingLabels = {
               prices: this.t('price'),
               players: this.t('onlinePlayers'),

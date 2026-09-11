@@ -76,6 +76,8 @@ def test_deployment_restarts_application_processes_after_sync():
     assert "Steam-KaKaBase web service did not become ready within 20 seconds." in installer
     assert "scripts/predeploy_backup.py" in installer
     assert '"https://${DOMAIN}/ready"' in installer
+    predeploy_backup = (ROOT / "scripts" / "predeploy_backup.py").read_text(encoding="utf-8")
+    assert "os.chdir(ROOT)" in predeploy_backup
 
 
 def test_offsite_upload_uses_scoped_remote_and_retention(tmp_path):

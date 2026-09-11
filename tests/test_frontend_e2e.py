@@ -262,8 +262,11 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
                   axis: chart?.getOption()?.xAxis?.[0]?.type,
                   tooltipTrigger: chart?.getOption()?.tooltip?.[0]?.trigger,
                   tooltipTriggerOn: chart?.getOption()?.tooltip?.[0]?.triggerOn,
-                  tooltipShow: chart?.getOption()?.tooltip?.[0]?.show,
-                  barWidth: chart?.getOption()?.series?.[0]?.barWidth,
+                      tooltipShow: chart?.getOption()?.tooltip?.[0]?.show,
+                      barWidth: chart?.getOption()?.series?.[0]?.barWidth,
+                      labelCount: chart?.getOption()?.xAxis?.[0]?.axisLabel?.interval
+                        ? (chart.getOption().xAxis[0].data || []).filter((value, index) => chart.getOption().xAxis[0].axisLabel.interval(index, value)).length
+                        : 0,
                   width: chart?.getWidth(),
               height: chart?.getHeight(),
               points: chart?.getOption()?.series?.reduce((total, series) => total + (series.data || []).length, 0)
@@ -274,6 +277,7 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
         assert chart_axes[1]["tooltipShow"] is False
         assert chart_axes[1]["tooltipTriggerOn"] == "none"
         assert chart_axes[1]["barWidth"] == "60%"
+        assert 1 <= chart_axes[1]["labelCount"] <= 7
         assert all(chart["width"] > 0 and chart["height"] > 0 and chart["points"] > 0 for chart in chart_axes)
         assert page.evaluate("document.querySelector('.chart-hover-surface').__steamkbTooltipBound === true")
         page.locator(".chart").nth(1).scroll_into_view_if_needed()

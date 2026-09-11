@@ -2437,6 +2437,12 @@
           const playerSpan = playerPoints.length > 1
             ? playerPoints[playerPoints.length - 1][0] - playerPoints[0][0]
             : 0;
+          const playerLabelCount = Math.min(7, playerPoints.length);
+          const playerLabelIndexes = new Set(
+            Array.from({ length: playerLabelCount }, (_unused, slot) => (
+              playerLabelCount <= 1 ? 0 : Math.round(slot * (playerPoints.length - 1) / (playerLabelCount - 1))
+            ))
+          );
           this.playerChart.setOption({
             backgroundColor: 'transparent',
             title: {
@@ -2460,7 +2466,10 @@
               axisLine: { lineStyle: { color: '#2b3743' } },
               axisLabel: {
                 color: '#8d9ba8',
-                hideOverlap: true,
+                // Keep a stable, readable set of six or seven labels even
+                // when hundreds of snapshot columns are present.
+                interval: index => playerLabelIndexes.has(index),
+                hideOverlap: false,
                 margin: 12,
                 formatter: value => this.chartAxisTime(value, playerSpan)
               }

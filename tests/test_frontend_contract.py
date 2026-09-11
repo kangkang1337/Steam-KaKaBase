@@ -28,7 +28,8 @@ def test_charts_use_deduplicated_axes_with_overlap_protection():
     assert "type: 'time'" in source
     assert "type: 'category'" in source
     assert "playerSnapshotPoints()" in source
-    assert source.count("hideOverlap: true") >= 2
+    assert "hideOverlap: true" in source
+    assert "interval: index => playerLabelIndexes.has(index)" in source
     assert "new Map()).values()].sort" in source
     assert "chartAxisTime(value, span = 0)" in source
 

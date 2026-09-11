@@ -263,17 +263,17 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
                   tooltipTrigger: chart?.getOption()?.tooltip?.[0]?.trigger,
                   tooltipTriggerOn: chart?.getOption()?.tooltip?.[0]?.triggerOn,
                   tooltipShow: chart?.getOption()?.tooltip?.[0]?.show,
-                  barMinWidth: chart?.getOption()?.series?.[0]?.barMinWidth,
+                  barWidth: chart?.getOption()?.series?.[0]?.barWidth,
                   width: chart?.getWidth(),
               height: chart?.getHeight(),
               points: chart?.getOption()?.series?.reduce((total, series) => total + (series.data || []).length, 0)
             };
           })
         """)
-        assert [chart["axis"] for chart in chart_axes] == ["time", "time"]
+        assert [chart["axis"] for chart in chart_axes] == ["time", "category"]
         assert chart_axes[1]["tooltipShow"] is False
         assert chart_axes[1]["tooltipTriggerOn"] == "none"
-        assert chart_axes[1]["barMinWidth"] == 6
+        assert chart_axes[1]["barWidth"] == "60%"
         assert all(chart["width"] > 0 and chart["height"] > 0 and chart["points"] > 0 for chart in chart_axes)
         assert page.evaluate("document.querySelector('.chart-hover-surface').__steamkbTooltipBound === true")
         page.locator(".chart").nth(1).scroll_into_view_if_needed()

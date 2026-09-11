@@ -2433,14 +2433,7 @@
           if (!window.echarts || !this.$refs.playerChart) return;
           this.playerChart = this.playerChart || echarts.init(this.$refs.playerChart);
           this.playerChart.clear();
-          const playerPoints = [...this.playerHistory.reduce((points, row) => {
-            const timestamp = new Date(row.fetched_at).getTime();
-            const playerCount = Number(row.player_count);
-            if (Number.isFinite(timestamp) && Number.isFinite(playerCount)) {
-              points.set(timestamp, [timestamp, playerCount]);
-            }
-            return points;
-          }, new Map()).values()].sort((a, b) => a[0] - b[0]);
+          const playerPoints = this.playerSnapshotPoints();
           const playerSpan = playerPoints.length > 1
             ? playerPoints[playerPoints.length - 1][0] - playerPoints[0][0]
             : 0;
@@ -2458,9 +2451,12 @@
             tooltip: { show: false, triggerOn: 'none' },
             grid: { left: 56, right: 18, top: 24, bottom: 58 },
             xAxis: {
-              type: 'time',
-              splitNumber: 4,
-              boundaryGap: [0.03, 0.03],
+              // These are snapshots, not continuous samples.  A category axis
+              // keeps every collected value equally visible when the crawler
+              // has uneven gaps between runs.
+              type: 'category',
+              data: playerPoints.map(point => point[0]),
+              boundaryGap: true,
               axisLine: { lineStyle: { color: '#2b3743' } },
               axisLabel: {
                 color: '#8d9ba8',
@@ -2478,11 +2474,11 @@
               name: 'Players',
               type: 'bar',
               silent: false,
-              barMinWidth: 6,
-              barMaxWidth: 30,
+              barWidth: '60%',
+              barMaxWidth: 24,
               itemStyle: { color: '#66c0f4' },
               emphasis: { disabled: true },
-              data: playerPoints
+              data: playerPoints.map(point => point[1])
             }]
           }, true);
           const surface = this.$refs.playerChartSurface;
@@ -2498,20 +2494,26 @@
         async submitAuth() { try { const path = this.authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; await this.api(path, {method:'POST', body: JSON.stringify({username:this.authUsername,password:this.authPassword,remember:this.authRemember})}); if (this.authMode === 'register') { this.authMode='login'; this.message=this.t('registerSuccess'); return; } await this.restoreAuth(); this.authOpen=false; this.authPassword=''; } catch (err) { this.message=err.message; } },
         async logout() { await this.api('/api/auth/logout', {method:'POST'}); this.account=null; this.csrfToken=''; await this.loadGames(); },
         async deleteAccount() { try { await this.api('/api/auth/delete-account', {method:'POST', body:JSON.stringify({password:this.deleteAccountPassword})}); this.account=null; this.csrfToken=''; this.deleteAccountPassword=''; this.deleteAccountOpen=false; await this.loadGames(); this.message=this.t('deleteAccount') + '。'; } catch (err) { this.message=err.message; } },
+        playerSnapshotPoints() {
+          return [...this.playerHistory.reduce((points, row) => {
+            const timestamp = new Date(row.fetched_at).getTime();
+            const playerCount = Number(row.player_count);
+            if (Number.isFinite(timestamp) && Number.isFinite(playerCount)) points.set(timestamp, [timestamp, playerCount]);
+            return points;
+          }, new Map()).values()].sort((a, b) => a[0] - b[0]);
+        },
         showPlayerTooltip(event) {
           const chart = this.playerChart;
           const element = this.$refs.playerChart;
           if (!chart || !element || !this.playerHistory.length) return this.hidePlayerTooltip();
           const localX = event.offsetX;
           const localY = event.offsetY;
-          const points = this.playerHistory
-            .map(row => ({ time: new Date(row.fetched_at).getTime(), count: Number(row.player_count) }))
-            .filter(point => Number.isFinite(point.time) && Number.isFinite(point.count))
-            .sort((a, b) => a.time - b.time);
+          const points = this.playerSnapshotPoints().map(([time, count]) => ({ time, count }));
           if (!points.length) return this.hidePlayerTooltip();
           const plotWidth = Math.max(1, element.clientWidth - 56 - 18);
           const ratio = Math.max(0, Math.min(1, (localX - 56) / plotWidth));
-          const nearest = points[Math.round(ratio * (points.length - 1))];
+          const index = Math.round(ratio * (points.length - 1));
+          const nearest = points[index];
           this.playerTooltip = {
             visible: true,
             time: nearest.time,

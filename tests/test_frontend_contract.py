@@ -22,10 +22,12 @@ def test_frontend_consumes_crawler_and_queue_monitoring():
     assert "采集器未运行" in source
 
 
-def test_charts_use_deduplicated_time_axes_with_overlap_protection():
+def test_charts_use_deduplicated_axes_with_overlap_protection():
     source = FRONTEND.read_text(encoding="utf-8")
 
-    assert source.count("type: 'time'") >= 2
+    assert "type: 'time'" in source
+    assert "type: 'category'" in source
+    assert "playerSnapshotPoints()" in source
     assert source.count("hideOverlap: true") >= 2
     assert "new Map()).values()].sort" in source
     assert "chartAxisTime(value, span = 0)" in source

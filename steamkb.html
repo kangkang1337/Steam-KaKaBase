@@ -923,6 +923,8 @@
     .auth-dialog { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.6); }
     .auth-card { width: min(360px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: #111820; box-shadow: 0 16px 48px #000; }
     .auth-card input { width: 100%; margin: 7px 0; }
+    .auth-remember { display: inline-flex; align-items: center; justify-content: flex-start; gap: 8px; margin-top: 8px; font-size: 16px; font-weight: 600; cursor: pointer; }
+    .auth-remember input { width: 17px; height: 17px; margin: 0; accent-color: #66c0f4; }
     .auth-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
 
     .status {
@@ -1368,7 +1370,7 @@
       <h3>{{ authMode === 'login' ? t('login') : t('register') }}</h3>
       <input v-model.trim="authUsername" autocomplete="username" :placeholder="t('username')" required>
       <input v-model="authPassword" type="password" autocomplete="current-password" :placeholder="t('password')" required>
-      <label><input v-model="authRemember" type="checkbox"> {{ t('rememberMe') }}</label>
+      <label class="auth-remember"><input v-model="authRemember" type="checkbox"> <span>{{ t('rememberMe') }}</span></label>
       <div class="auth-actions"><button type="button" @click="authMode = authMode === 'login' ? 'register' : 'login'">{{ authMode === 'login' ? t('register') : t('login') }}</button><button type="submit">{{ authMode === 'login' ? t('login') : t('register') }}</button></div>
     </form>
   </div>

@@ -16,6 +16,7 @@ from .db import (
     query_home_snapshot,
     query_popular_historical_low_rows,
     query_tracked_appids,
+    query_user_favorite_games,
     read_home_snapshot_context,
     transaction,
     upsert_home_snapshot,
@@ -225,13 +226,7 @@ def untrack_game(appid):
 
 
 def list_user_favorites(user_id):
-    with transaction(rows=True) as conn:
-        rows = conn.execute("""
-            SELECT g.*, c.name AS name_en FROM user_favorites f
-            JOIN games g ON g.appid=f.appid LEFT JOIN steam_catalog c ON c.appid=g.appid
-            WHERE f.user_id=? ORDER BY f.created_at DESC
-        """, (int(user_id),)).fetchall()
-    return [_runtime.clean_game(row, summary=True) for row in rows]
+    return [_runtime.clean_game(row, summary=True) for row in query_user_favorite_games(user_id)]
 
 
 def add_user_favorite(user_id, appid, name=None, header_image=None):

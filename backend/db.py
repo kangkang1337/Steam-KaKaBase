@@ -320,6 +320,32 @@ def query_tracked_games():
         ).fetchall()
 
 
+def query_user_favorite_games(user_id):
+    """Return one user's favorites with the same summary fields as tracked games."""
+    with transaction(rows=True) as conn:
+        return conn.execute(
+            """
+            SELECT g.*, c.name AS name_en,
+                   (SELECT player_count FROM player_snapshots WHERE appid = g.appid ORDER BY fetched_at DESC LIMIT 1) AS player_count,
+                   (SELECT review_score FROM review_snapshots WHERE appid = g.appid ORDER BY fetched_at DESC LIMIT 1) AS review_score,
+                   (SELECT final_formatted FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price,
+                   (SELECT final FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price_final,
+                   (SELECT currency FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price_currency,
+                   (SELECT discount_percent FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_discount_percent,
+                   (SELECT amount_cny FROM historical_lows WHERE appid = g.appid AND country = 'CN' LIMIT 1) AS cn_itad_low_cny,
+                   (SELECT MIN(final) / 100.0 FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam' AND final IS NOT NULL) AS cn_observed_low_cny,
+                   (SELECT MIN(fetched_at) FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam') AS cn_observed_low_since,
+                   (SELECT COUNT(*) FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam' AND final IS NOT NULL) AS cn_observed_snapshot_count
+            FROM user_favorites f
+            JOIN games g ON g.appid = f.appid
+            LEFT JOIN steam_catalog c ON c.appid = g.appid
+            WHERE f.user_id = ?
+            ORDER BY f.created_at DESC
+            """,
+            (int(user_id),),
+        ).fetchall()
+
+
 def query_hot_games(limit, unknown_name):
     with transaction(rows=True) as conn:
         rows = conn.execute(
@@ -884,7 +910,7 @@ __all__ = [
     "query_crawl_task_monitor", "recover_abandoned_crawl_tasks",
     "retire_obsolete_crawl_tasks",
     "query_catalog_game_stub", "query_game_detail", "query_header_image_url", "query_hot_games", "query_latest_prices_by_region",
-    "query_missing_historylow_appids", "query_search_index", "query_tracked_games",
+    "query_missing_historylow_appids", "query_search_index", "query_tracked_games", "query_user_favorite_games",
     "query_popular_historical_low_rows", "read_home_snapshot_context",
     "query_daily_niche_snapshot", "query_home_snapshot", "query_tracked_appids",
     "upsert_home_snapshot",

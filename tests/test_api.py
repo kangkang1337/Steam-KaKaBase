@@ -25,12 +25,35 @@ def test_health_and_readiness(api_client):
 def test_account_session_and_favorite_isolation(api_client):
     runtime, client = api_client
     runtime.quick_track_game(4242, "Test Quest", None)
+    stamp = runtime.now_iso()
+    with runtime.database_connection() as conn:
+        conn.execute(
+            "INSERT INTO player_snapshots(appid, player_count, fetched_at) VALUES (?, ?, ?)",
+            (4242, 1234, stamp),
+        )
+        conn.execute(
+            "INSERT INTO review_snapshots(appid, review_score, fetched_at) VALUES (?, ?, ?)",
+            (4242, 95, stamp),
+        )
+        conn.execute(
+            """
+            INSERT INTO price_snapshots(
+                appid, region, currency, initial, final, discount_percent,
+                final_formatted, source, fetched_at
+            ) VALUES (?, 'CN', 'CNY', 10000, 5000, 50, '\u00a5 50.00', 'steam', ?)
+            """,
+            (4242, stamp),
+        )
     credentials = {"username": "tester_01", "password": "password123", "remember": True}
     assert client.post("/api/auth/register", json=credentials).status_code == 200
     login = client.post("/api/auth/login", json=credentials)
     csrf = login.json()["csrf_token"]
     assert client.post("/api/favorites", json={"appid": 4242, "name": "Test Quest"}, headers={"X-CSRF-Token": csrf}).status_code == 200
-    assert [game["appid"] for game in client.get("/api/favorites").json()["games"]] == [4242]
+    favorites = client.get("/api/favorites").json()["games"]
+    assert [game["appid"] for game in favorites] == [4242]
+    assert favorites[0]["player_count"] == 1234
+    assert favorites[0]["review_score"] == 95
+    assert favorites[0]["cn_price"] == "\u00a5 50.00"
     assert client.post("/api/favorites/4242/remove", headers={"X-CSRF-Token": csrf}).status_code == 200
     assert client.post("/api/auth/logout").status_code == 200
     assert client.get("/api/favorites").status_code == 401

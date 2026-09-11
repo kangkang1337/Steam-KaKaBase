@@ -33,6 +33,7 @@ def test_charts_use_deduplicated_axes_with_overlap_protection():
     assert "formatter: (value, index) => playerLabelIndexes.has(index)" in source
     assert "new Map()).values()].sort" in source
     assert "chartAxisTime(value, span = 0)" in source
+    assert "typeof value === 'string' && /^\\d+$/.test(value)" in source
 
 
 def test_language_switch_is_persistent_and_independent_from_price_region():

@@ -2622,7 +2622,13 @@
             : date.toLocaleString(this.locale);
         },
         chartAxisTime(value, span = 0) {
-          const date = new Date(value);
+          // Category axes stringify their data.  `new Date("1757...")` is
+          // invalid in JavaScript even though `new Date(1757...)` is valid,
+          // so restore numeric millisecond timestamps before formatting.
+          const timestamp = typeof value === 'string' && /^\d+$/.test(value)
+            ? Number(value)
+            : value;
+          const date = new Date(timestamp);
           if (!Number.isFinite(date.getTime())) return '';
           const part = number => String(number).padStart(2, '0');
           const day = `${part(date.getFullYear() % 100)}/${part(date.getMonth() + 1)}/${part(date.getDate())}`;

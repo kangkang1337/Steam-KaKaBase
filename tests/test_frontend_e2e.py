@@ -265,7 +265,8 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
                       tooltipShow: chart?.getOption()?.tooltip?.[0]?.show,
                       barWidth: chart?.getOption()?.series?.[0]?.barWidth,
                       labelCount: (chart?.getOption()?.xAxis?.[0]?.data || []).filter((value, index) => (
-                        chart.getOption().xAxis[0].axisLabel.formatter(value, index) !== ''
+                        // ECharts passes category values to the formatter as strings.
+                        chart.getOption().xAxis[0].axisLabel.formatter(String(value), index) !== ''
                       )).length,
                   width: chart?.getWidth(),
               height: chart?.getHeight(),

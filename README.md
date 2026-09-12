@@ -1,5 +1,9 @@
 # Steam-KaKaBase
 
+## v0.6.1: Secure monitoring controls
+
+Fixed the administrator control panel so owner-only maintenance actions work with the production systemd sandbox. The panel now uses a restricted local Unix Socket broker instead of sudo, retains `NoNewPrivileges=true` for the Web service, uses an in-page confirmation dialog, and correctly records manual local backup completion in monitoring.
+
 ## v0.6.0：受保护的管理员监控
 
 管理员可从“更多”进入监控页，查看当日访问聚合、账号与收藏总量、Web/crawler/数据库/备份状态、CPU/内存/磁盘、crawler 最近成功周期、备份与恢复演练，以及脱敏后的最近日志。仅服主可调整管理员名单或执行固定的运维动作：本地/异地备份、隔离恢复演练、重启 Web 与 crawler。普通用户无法读取运行数据，普通管理员也不能调整权限或执行操作。健康摘要会将 5xx、crawler 心跳、备份、恢复演练和磁盘空间的异常以红色提示。
@@ -12,7 +16,7 @@
 
 一个面向本地运行的 Steam 数据面板，设计参考 SteamDB。用于查看游戏价格与本地历史快照、在线人数趋势、玩家评价、热门榜和每日小众宝藏推荐。
 
-当前版本：`v0.6.0`
+当前版本：`v0.6.1`
 
 > 项目支持本地运行和单机 VPS 自托管。生产部署使用 Nginx、HTTPS、UFW、systemd、受限写接口与异地 SQLite 备份；仍建议先在个人规模下运行并持续观察 Steam/ITAD 的限流情况。
 

@@ -1,9 +1,12 @@
 """User-facing application operations consumed by the HTTP layer."""
 
 import hashlib
+import json
 import os
 import re
 import shutil
+import subprocess
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 import urllib.parse
@@ -24,6 +27,16 @@ from .db import (
     transaction,
     upsert_home_snapshot,
 )
+
+
+_ADMIN_CONTROL_ACTIONS = {
+    "local_backup": "创建本地备份",
+    "offsite_backup": "上传异地备份",
+    "recovery_drill": "执行恢复演练",
+    "restart_web": "重启 Web",
+    "restart_crawler": "重启 crawler",
+}
+_admin_control_lock = threading.Lock()
 
 
 def list_games():
@@ -237,13 +250,58 @@ def admin_monitoring():
         drill = None
     return {
         "today": {"day": day, "requests": int(metric["request_count"]) if metric else 0, "visitors": unique_today, "new_visitors": int(metric["new_visitor_count"]) if metric else 0, "server_errors": int(metric["server_error_count"]) if metric else 0, **{key: counts[key] for key in ("new_users_today", "users_total", "favorites_total")}},
-        "server": {"web": "ok", "crawler": status.get("crawler", {}), "database": "ok" if status.get("database_schema_version") else "unavailable", "backup": "configured" if config.DB_DAILY_BACKUP_ENABLED else "disabled", "resources": _system_resources(), "controls": {"read_only": True, "future_actions": ["restart_web", "restart_crawler", "run_backup"]}},
+        "server": {"web": "ok", "crawler": status.get("crawler", {}), "database": "ok" if status.get("database_schema_version") else "unavailable", "backup": "configured" if config.DB_DAILY_BACKUP_ENABLED else "disabled", "resources": _system_resources(), "controls": {"enabled": config.ADMIN_CONTROLS_ENABLED, "actions": list(_ADMIN_CONTROL_ACTIONS), "recent": _recent_admin_controls()}},
         "crawler": {"queue": status.get("task_monitor", {}), "rate_limits": status.get("rate_limits", {}), "heartbeat": status.get("crawler", {}).get("heartbeat_at"), "heartbeat_age_seconds": status.get("crawler", {}).get("heartbeat_age_seconds"), "last_success_at": status.get("crawler", {}).get("last_cycle_at"), "state": status.get("crawler", {}).get("state")},
         "database": {"schema": status.get("database_schema_version"), "storage": status.get("storage", {}), **{key: counts[key] for key in ("games_total", "player_snapshots", "price_snapshots", "review_snapshots")}},
         "backups": {"local": {"at": counts["local_backup_at"], "path": counts["local_backup_path"]}, "offsite": {"at": counts["offsite_backup_at"], "path": counts["offsite_backup_path"]}, "drill": drill},
         "recent_logs": _recent_log_lines(),
         "health_summary": _health_summary(status, counts, drill),
     }
+
+
+def run_admin_control(action, actor):
+    """Run one fixed owner-only maintenance operation through a root helper."""
+    if action not in _ADMIN_CONTROL_ACTIONS:
+        raise ValueError("不支持的控制操作")
+    if not config.ADMIN_CONTROLS_ENABLED:
+        raise RuntimeError("服务器尚未启用管理控制组件")
+    if not _admin_control_lock.acquire(blocking=False):
+        raise RuntimeError("已有管理操作正在启动，请稍后再试")
+    try:
+        result = subprocess.run(["sudo", "-n", config.ADMIN_CONTROL_HELPER, action], check=False, capture_output=True, text=True, timeout=12)
+        detail = (result.stderr or result.stdout or "已提交给 systemd").strip().replace("\n", " ")[:300]
+        event = {"at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(), "actor": actor, "action": action, "success": result.returncode == 0, "detail": detail}
+        _append_admin_control(event)
+        if result.returncode:
+            raise RuntimeError("操作未能启动：" + (detail or "请检查服务日志"))
+        return {"ok": True, "action": action, "message": "操作已提交，状态将在监控页刷新后显示"}
+    except subprocess.TimeoutExpired as exc:
+        _append_admin_control({"at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(), "actor": actor, "action": action, "success": False, "detail": "helper timeout"})
+        raise RuntimeError("操作启动超时") from exc
+    finally:
+        _admin_control_lock.release()
+
+
+def _admin_control_audit_path():
+    return config.DATA_DIR / "runtime" / "admin_controls.jsonl"
+
+
+def _append_admin_control(event):
+    try:
+        path = _admin_control_audit_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = path.read_text(encoding="utf-8").splitlines()[-49:] if path.exists() else []
+        lines.append(json.dumps(event, ensure_ascii=False, separators=(",", ":")))
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _recent_admin_controls(limit=10):
+    try:
+        return [json.loads(line) for line in reversed(_admin_control_audit_path().read_text(encoding="utf-8").splitlines()[-limit:])]
+    except (OSError, ValueError):
+        return []
 
 
 def _system_resources():

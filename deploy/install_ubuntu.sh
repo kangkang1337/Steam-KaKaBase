@@ -89,6 +89,7 @@ set_env STEAMKB_HOST 127.0.0.1
 set_env STEAMKB_PORT 8765
 set_env STEAMKB_ALLOWED_HOSTS "${DOMAIN},127.0.0.1,localhost"
 set_env STEAMKB_CORS_ALLOWED_ORIGINS ""
+set_env STEAMKB_ADMIN_CONTROLS_ENABLED true
 
 grep -qx 'STEAMKB_ENV=production' "${APP_DIR}/.env" || {
   echo "${APP_DIR}/.env must set STEAMKB_ENV=production" >&2
@@ -108,7 +109,15 @@ render_template() {
 render_template "${APP_DIR}/deploy/systemd/steam-kakabase-web.service" /etc/systemd/system/steam-kakabase-web.service
 render_template "${APP_DIR}/deploy/systemd/steam-kakabase-crawler.service" /etc/systemd/system/steam-kakabase-crawler.service
 render_template "${APP_DIR}/deploy/systemd/steam-kakabase-backup.service" /etc/systemd/system/steam-kakabase-backup.service
+render_template "${APP_DIR}/deploy/systemd/steam-kakabase-local-backup.service" /etc/systemd/system/steam-kakabase-local-backup.service
+render_template "${APP_DIR}/deploy/systemd/steam-kakabase-recovery-drill.service" /etc/systemd/system/steam-kakabase-recovery-drill.service
 install -m 644 "${APP_DIR}/deploy/systemd/steam-kakabase-backup.timer" /etc/systemd/system/steam-kakabase-backup.timer
+install -d -m 755 /usr/local/libexec
+install -m 750 -o root -g root "${APP_DIR}/deploy/admin-control.sh" /usr/local/libexec/steam-kakabase-admin-control
+sed "s|@@APP_USER@@|${APP_USER}|g" "${APP_DIR}/deploy/sudoers/steam-kakabase-admin-controls" >/etc/sudoers.d/steam-kakabase-admin-controls
+chmod 440 /etc/sudoers.d/steam-kakabase-admin-controls
+visudo -cf /etc/sudoers.d/steam-kakabase-admin-controls
+install -d -o "${APP_USER}" -g "${APP_USER}" -m 750 /var/lib/steamkb-restore-drill
 install -m 644 "${APP_DIR}/deploy/nginx/steam-kakabase-rate-limits.conf" /etc/nginx/conf.d/steam-kakabase-rate-limits.conf
 render_template "${APP_DIR}/deploy/nginx/steam-kakabase.conf" /etc/nginx/sites-available/steam-kakabase
 ln -sfn /etc/nginx/sites-available/steam-kakabase /etc/nginx/sites-enabled/steam-kakabase

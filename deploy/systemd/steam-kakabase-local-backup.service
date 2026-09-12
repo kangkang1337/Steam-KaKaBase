@@ -1,0 +1,16 @@
+[Unit]
+Description=Create a verified Steam-KaKaBase local SQLite backup
+
+[Service]
+Type=oneshot
+User=@@APP_USER@@
+Group=@@APP_USER@@
+WorkingDirectory=@@APP_DIR@@
+EnvironmentFile=@@APP_DIR@@/.env
+ExecStart=@@APP_DIR@@/.venv/bin/python scripts/manage_database.py backup
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=@@APP_DIR@@/data

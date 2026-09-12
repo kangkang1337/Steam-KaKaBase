@@ -80,6 +80,18 @@ def test_deployment_restarts_application_processes_after_sync():
     assert "os.chdir(ROOT)" in predeploy_backup
 
 
+def test_admin_controls_use_a_fixed_root_helper():
+    installer = (ROOT / "deploy" / "install_ubuntu.sh").read_text(encoding="utf-8")
+    helper = (ROOT / "deploy" / "admin-control.sh").read_text(encoding="utf-8")
+    sudoers = (ROOT / "deploy" / "sudoers" / "steam-kakabase-admin-controls").read_text(encoding="utf-8")
+    assert "visudo -cf" in installer
+    assert "STEAMKB_ADMIN_CONTROLS_ENABLED true" in installer
+    assert "case \"$1\"" in helper
+    assert "local_backup" in helper and "restart_web" in helper
+    assert "@@APP_USER@@" in sudoers
+    assert "*" not in sudoers
+
+
 def test_offsite_upload_uses_scoped_remote_and_retention(tmp_path):
     module = _load_offsite_module()
     backup = tmp_path / "steamkb-daily.sqlite3"

@@ -309,6 +309,17 @@ def create_app():
         dashboard_admin(request)
         return services.admin_monitoring()
 
+    @application.post("/api/admin/controls/{action}")
+    def admin_control(action: str, request: Request):
+        owner = dashboard_admin(request, csrf=True, owner=True)
+        enforce_ip_rate(request, "admin-control", limit=10, window_seconds=300)
+        try:
+            return services.run_admin_control(action, owner["username"])
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @application.get("/api/admin/users")
     def admin_users(request: Request):
         dashboard_admin(request)

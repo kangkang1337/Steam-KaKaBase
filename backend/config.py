@@ -79,6 +79,8 @@ ENVIRONMENT = os.getenv("STEAMKB_ENV", "development").strip().lower()
 IS_PRODUCTION = ENVIRONMENT == "production"
 ADMIN_TOKEN = os.getenv("STEAMKB_ADMIN_TOKEN", "").strip()
 ADMIN_OWNER_USERNAME = os.getenv("STEAMKB_ADMIN_OWNER_USERNAME", "").strip()
+ADMIN_CONTROLS_ENABLED = env_bool("STEAMKB_ADMIN_CONTROLS_ENABLED", False)
+ADMIN_CONTROL_HELPER = os.getenv("STEAMKB_ADMIN_CONTROL_HELPER", "/usr/local/libexec/steam-kakabase-admin-control").strip()
 VISITOR_METRICS_SECRET = os.getenv("STEAMKB_VISITOR_METRICS_SECRET", "").strip() or ADMIN_TOKEN or "steamkb-development-metrics"
 CORS_ALLOWED_ORIGINS = env_list("STEAMKB_CORS_ALLOWED_ORIGINS")
 ALLOWED_HOSTS = env_list("STEAMKB_ALLOWED_HOSTS")
@@ -161,6 +163,6 @@ FAVORITES_RATE_LIMIT = env_int("STEAMKB_FAVORITES_RATE_LIMIT", 60, minimum=1, ma
 FAVORITES_RATE_WINDOW_SECONDS = env_int("STEAMKB_FAVORITES_RATE_WINDOW_SECONDS", 60, minimum=1, maximum=3600)
 APP_NAME_REFRESH_HOURS = env_int("STEAMKB_APP_NAME_REFRESH_HOURS", 24, minimum=24)
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 ITAD_MISSING_GAME_ID = "__itad_missing__"
 EXTERNAL_SERVICES = ("steam_api", "steam_store", "itad", "image_cdn")

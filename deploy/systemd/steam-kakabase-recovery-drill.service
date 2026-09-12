@@ -1,0 +1,21 @@
+[Unit]
+Description=Run an isolated Steam-KaKaBase offsite recovery drill
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@@APP_USER@@
+Group=@@APP_USER@@
+WorkingDirectory=@@APP_DIR@@
+EnvironmentFile=@@APP_DIR@@/.env
+Environment=RCLONE_CONFIG=/etc/rclone/rclone.conf
+ExecStart=@@APP_DIR@@/.venv/bin/python scripts/run_recovery_drill.py
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=@@APP_DIR@@/data /var/lib/steamkb-restore-drill
+ReadOnlyPaths=/etc/rclone/rclone.conf

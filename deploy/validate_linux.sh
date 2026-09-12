@@ -31,12 +31,16 @@ render_unit() {
 render_unit steam-kakabase-web.service
 render_unit steam-kakabase-crawler.service
 render_unit steam-kakabase-backup.service
+render_unit steam-kakabase-local-backup.service
+render_unit steam-kakabase-recovery-drill.service
 cp "${ROOT}/deploy/systemd/steam-kakabase-backup.timer" "${TEMP_DIR}/steam-kakabase-backup.timer"
 
 systemd-analyze verify \
   "${TEMP_DIR}/steam-kakabase-web.service" \
   "${TEMP_DIR}/steam-kakabase-crawler.service" \
   "${TEMP_DIR}/steam-kakabase-backup.service" \
+  "${TEMP_DIR}/steam-kakabase-local-backup.service" \
+  "${TEMP_DIR}/steam-kakabase-recovery-drill.service" \
   "${TEMP_DIR}/steam-kakabase-backup.timer"
 
 sed -e 's|@@DOMAIN@@|steam.example.com|g' \

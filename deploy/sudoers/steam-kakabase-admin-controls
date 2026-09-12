@@ -1,0 +1,1 @@
+@@APP_USER@@ ALL=(root) NOPASSWD: /usr/local/libexec/steam-kakabase-admin-control local_backup, /usr/local/libexec/steam-kakabase-admin-control offsite_backup, /usr/local/libexec/steam-kakabase-admin-control recovery_drill, /usr/local/libexec/steam-kakabase-admin-control restart_crawler, /usr/local/libexec/steam-kakabase-admin-control restart_web

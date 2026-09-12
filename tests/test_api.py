@@ -140,12 +140,17 @@ def test_owner_can_read_monitoring_and_manage_admins(api_client, monkeypatch):
     monitor = client.get("/api/admin/monitoring")
     assert monitor.status_code == 200
     assert {"today", "server", "crawler", "database", "backups"} <= set(monitor.json())
+    with config.LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write("token=private-value monitor test\n")
+    assert "private-value" not in "\n".join(client.get("/api/admin/monitoring").json()["recent_logs"])
     added = client.post("/api/admin/users", json={"username": "member"}, headers={"X-CSRF-Token": csrf})
     assert added.status_code == 200
     assert any(row["username"] == "member" for row in client.get("/api/admin/users").json()["admins"])
     client.post("/api/auth/logout")
-    assert client.post("/api/auth/login", json=member).json()["user"]["is_admin"] is True
+    member_login = client.post("/api/auth/login", json=member)
+    assert member_login.json()["user"]["is_admin"] is True
     assert client.get("/api/admin/monitoring").status_code == 200
+    assert client.post("/api/admin/users", json={"username": "owner"}, headers={"X-CSRF-Token": member_login.json()["csrf_token"]}).status_code == 403
 
 
 def test_status_does_not_report_stale_crawler_as_running(api_client):

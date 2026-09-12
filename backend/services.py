@@ -1,6 +1,9 @@
 """User-facing application operations consumed by the HTTP layer."""
 
 import hashlib
+import os
+import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 import urllib.parse
@@ -231,11 +234,48 @@ def admin_monitoring():
         drill = None
     return {
         "today": {"day": day, "requests": int(metric["request_count"]) if metric else 0, "visitors": unique_today, "new_visitors": int(metric["new_visitor_count"]) if metric else 0, **{key: counts[key] for key in ("new_users_today", "users_total", "favorites_total")}},
-        "server": {"web": "ok", "crawler": status.get("crawler", {}), "database": "ok" if status.get("database_schema_version") else "unavailable", "backup": "configured" if config.DB_DAILY_BACKUP_ENABLED else "disabled", "controls": {"read_only": True, "future_actions": ["restart_web", "restart_crawler", "run_backup"]}},
-        "crawler": {"queue": status.get("task_monitor", {}), "rate_limits": status.get("rate_limits", {}), "heartbeat": status.get("crawler", {}).get("heartbeat_at"), "heartbeat_age_seconds": status.get("crawler", {}).get("heartbeat_age_seconds"), "state": status.get("crawler", {}).get("state")},
+        "server": {"web": "ok", "crawler": status.get("crawler", {}), "database": "ok" if status.get("database_schema_version") else "unavailable", "backup": "configured" if config.DB_DAILY_BACKUP_ENABLED else "disabled", "resources": _system_resources(), "controls": {"read_only": True, "future_actions": ["restart_web", "restart_crawler", "run_backup"]}},
+        "crawler": {"queue": status.get("task_monitor", {}), "rate_limits": status.get("rate_limits", {}), "heartbeat": status.get("crawler", {}).get("heartbeat_at"), "heartbeat_age_seconds": status.get("crawler", {}).get("heartbeat_age_seconds"), "last_success_at": status.get("crawler", {}).get("last_cycle_at"), "state": status.get("crawler", {}).get("state")},
         "database": {"schema": status.get("database_schema_version"), "storage": status.get("storage", {}), **{key: counts[key] for key in ("games_total", "player_snapshots", "price_snapshots", "review_snapshots")}},
         "backups": {"local": {"at": counts["local_backup_at"], "path": counts["local_backup_path"]}, "offsite": {"at": counts["offsite_backup_at"], "path": counts["offsite_backup_path"]}, "drill": drill},
+        "recent_logs": _recent_log_lines(),
     }
+
+
+def _system_resources():
+    disk = shutil.disk_usage(config.DATA_DIR)
+    memory = {"total_bytes": None, "available_bytes": None}
+    try:
+        values = dict(
+            line.split(":", 1) for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines() if ":" in line
+        )
+        memory = {
+            "total_bytes": int(values["MemTotal"].split()[0]) * 1024,
+            "available_bytes": int(values.get("MemAvailable", values["MemFree"]).split()[0]) * 1024,
+        }
+    except (OSError, KeyError, ValueError):
+        pass
+    try:
+        load = list(os.getloadavg())
+    except (AttributeError, OSError):
+        load = []
+    return {
+        "cpu_cores": os.cpu_count() or 0,
+        "load": load,
+        "memory": memory,
+        "disk": {"total_bytes": disk.total, "used_bytes": disk.used, "free_bytes": disk.free},
+    }
+
+
+def _recent_log_lines(limit=20):
+    try:
+        with config.LOG_PATH.open("rb") as handle:
+            handle.seek(max(0, handle.seek(0, 2) - 32_768))
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    secret = re.compile(r"(?i)(authorization:\s*bearer\s+|(?:token|key|password|secret)=)[^\s&]+")
+    return [secret.sub(r"\1[redacted]", line) for line in text.splitlines()[-limit:]]
 
 
 def search(term, limit=12, offset=0):

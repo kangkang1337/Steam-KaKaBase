@@ -86,3 +86,16 @@ def test_api_errors_are_status_aware_and_never_show_proxy_html():
     assert "[502, 503, 504].includes(res.status)" in source
     assert "this.t('requestFailed', {status: res.status})" in source
     assert "jsonError:" not in source
+
+
+def test_auth_form_validates_input_and_prevents_duplicate_submissions():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert 'minlength="3" maxlength="40"' in source
+    assert 'minlength="8" maxlength="128"' in source
+    assert ':disabled="authBusy"' in source
+    assert "authBusy: false" in source
+    assert "if (this.authBusy) return; this.authBusy=true" in source
+    assert "finally { this.authBusy=false; }" in source
+    assert "apiErrorMessage(data)" in source
+    assert "Array.isArray(detail)" in source

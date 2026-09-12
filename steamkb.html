@@ -1420,11 +1420,11 @@
         <button type="button" role="tab" :aria-selected="authMode === 'login'" :class="{active: authMode === 'login'}" @click="authMode = 'login'">{{ t('login') }}</button>
         <button type="button" role="tab" :aria-selected="authMode === 'register'" :class="{active: authMode === 'register'}" @click="authMode = 'register'">{{ t('register') }}</button>
       </div>
-      <input v-model.trim="authUsername" autocomplete="username" :placeholder="t('username')" required>
-      <input v-model="authPassword" type="password" autocomplete="current-password" :placeholder="t('password')" required>
-      <label class="auth-remember"><input v-model="authRemember" type="checkbox"> <span>{{ t('rememberMe') }}</span></label>
+      <input v-model.trim="authUsername" autocomplete="username" :placeholder="t('username')" minlength="3" maxlength="40" required :disabled="authBusy">
+      <input v-model="authPassword" type="password" autocomplete="current-password" :placeholder="t('password')" minlength="8" maxlength="128" required :disabled="authBusy">
+      <label class="auth-remember"><input v-model="authRemember" type="checkbox" :disabled="authBusy"> <span>{{ t('rememberMe') }}</span></label>
       <p class="auth-note">{{ t('privacyNotice') }}</p>
-      <div class="auth-actions"><button type="submit">{{ t('confirm') }}</button></div>
+      <div class="auth-actions"><button type="submit" :disabled="authBusy" :aria-busy="authBusy">{{ authBusy ? t('submitting') : t('confirm') }}</button></div>
     </form>
   </div>
   <div v-if="deleteAccountOpen" class="auth-dialog" @click.self="deleteAccountOpen = false">
@@ -1493,7 +1493,7 @@
         trackedQueued: '已加入跟踪：{name}，后台正在补数据。', tracked: '已加入跟踪：{name}。',
         fileModeError: '请先运行 start.ps1 或 python steamkb.py，然后通过 http://127.0.0.1:8765 打开页面。不要直接双击 steamkb.html。',
         backendError: '无法连接服务器，请检查网络后重试。',
-        rateLimited: '请求过于频繁，请稍后再试。', serviceUnavailable: '服务暂时不可用，请稍后重试。', requestFailed: '请求失败（HTTP {status}），请稍后重试。', invalidServerResponse: '服务返回异常，请稍后重试。', hotSyncing: '热门榜正在后台同步，当前先显示本地已有数据。',
+        submitting: '提交中…', invalidInput: '提交内容不符合要求，请检查用户名和密码。', rateLimited: '请求过于频繁，请稍后再试。', serviceUnavailable: '服务暂时不可用，请稍后重试。', requestFailed: '请求失败（HTTP {status}），请稍后重试。', invalidServerResponse: '服务返回异常，请稍后重试。', hotSyncing: '热门榜正在后台同步，当前先显示本地已有数据。',
         controlConfirmTitle: '确认管理操作', controlConfirmWarning: '该操作将在服务器后台执行，并记录操作账号与结果。'
       },
       'en-US': {
@@ -1540,7 +1540,7 @@
         trackedQueued: 'Tracking {name}; background data collection is queued.', tracked: 'Now tracking {name}.',
         fileModeError: 'Run start.ps1 or python steamkb.py, then open http://127.0.0.1:8765. Do not open steamkb.html directly.',
         backendError: 'Cannot connect to the server. Check your network and try again.',
-        rateLimited: 'Too many requests. Please wait and try again.', serviceUnavailable: 'The service is temporarily unavailable. Please try again later.', requestFailed: 'Request failed (HTTP {status}). Please try again later.', invalidServerResponse: 'The service returned an unexpected response. Please try again later.', hotSyncing: 'The popular list is syncing; showing existing cached data for now.',
+        submitting: 'Submitting…', invalidInput: 'The submitted information is invalid. Check the username and password.', rateLimited: 'Too many requests. Please wait and try again.', serviceUnavailable: 'The service is temporarily unavailable. Please try again later.', requestFailed: 'Request failed (HTTP {status}). Please try again later.', invalidServerResponse: 'The service returned an unexpected response. Please try again later.', hotSyncing: 'The popular list is syncing; showing existing cached data for now.',
         controlConfirmTitle: 'Confirm administrative action', controlConfirmWarning: 'This action runs on the server and records the account and result.'
       }
     };
@@ -1610,7 +1610,7 @@
           searching: false,
           busy: false,
           favoriteBusy: false,
-          account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true, deleteAccountOpen: false, deleteAccountPassword: '',
+          account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true, authBusy: false, deleteAccountOpen: false, deleteAccountPassword: '',
           monitoring: null, admins: [], adminUsername: '', controlBusy: null, controlConfirmAction: null,
           refreshing: false,
           wasRefreshing: false,
@@ -2043,11 +2043,23 @@
           if (!res.ok) {
             if (res.status === 429) throw new Error(this.t('rateLimited'));
             if ([502, 503, 504].includes(res.status)) throw new Error(this.t('serviceUnavailable'));
-            if (data?.detail || data?.error) throw new Error(data.detail || data.error);
+            const errorMessage = this.apiErrorMessage(data);
+            if (errorMessage) throw new Error(errorMessage);
             throw new Error(this.t('requestFailed', {status: res.status}));
           }
           if (!data) throw new Error(this.t('invalidServerResponse'));
           return data;
+        },
+        apiErrorMessage(data) {
+          const detail = data?.detail ?? data?.error;
+          if (typeof detail === 'string') return detail;
+          if (Array.isArray(detail)) {
+            const messages = detail
+              .map(item => typeof item?.msg === 'string' ? item.msg : '')
+              .filter(Boolean);
+            if (messages.length) return messages.join('；');
+          }
+          return detail ? this.t('invalidInput') : '';
         },
         async loadGames() {
           this.busy = true;
@@ -2613,7 +2625,7 @@
         controlLabel(action) { return this.t({local_backup:'localBackupAction',offsite_backup:'offsiteBackupAction',recovery_drill:'recoveryDrillAction',restart_web:'restartWebAction',restart_crawler:'restartCrawlerAction'}[action] || action); },
         confirmControl() { const action=this.controlConfirmAction; this.controlConfirmAction=null; if (action) this.runControl(action); },
         async runControl(action) { this.controlBusy=action; const controller=new AbortController(); const timeout=setTimeout(() => controller.abort(), 15000); try { const result=await this.api(`/api/admin/controls/${encodeURIComponent(action)}`, {method:'POST', signal:controller.signal}); this.message=result.message; setTimeout(() => this.loadMonitoring(), 1200); } catch (err) { this.message=err.message; } finally { clearTimeout(timeout); this.controlBusy=null; } },
-        async submitAuth() { try { const path = this.authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; await this.api(path, {method:'POST', body: JSON.stringify({username:this.authUsername,password:this.authPassword,remember:this.authRemember})}); if (this.authMode === 'register') { this.authMode='login'; this.message=this.t('registerSuccess'); return; } await this.restoreAuth(); this.authOpen=false; this.authPassword=''; } catch (err) { this.message=err.message; } },
+        async submitAuth() { if (this.authBusy) return; this.authBusy=true; try { const path = this.authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; await this.api(path, {method:'POST', body: JSON.stringify({username:this.authUsername,password:this.authPassword,remember:this.authRemember})}); if (this.authMode === 'register') { this.authMode='login'; this.message=this.t('registerSuccess'); return; } await this.restoreAuth(); this.authOpen=false; this.authPassword=''; } catch (err) { this.message=err.message; } finally { this.authBusy=false; } },
         async logout() { await this.api('/api/auth/logout', {method:'POST'}); this.account=null; this.csrfToken=''; await this.loadGames(); },
         async deleteAccount() { try { await this.api('/api/auth/delete-account', {method:'POST', body:JSON.stringify({password:this.deleteAccountPassword})}); this.account=null; this.csrfToken=''; this.deleteAccountPassword=''; this.deleteAccountOpen=false; await this.loadGames(); this.message=this.t('deleteAccount') + '。'; } catch (err) { this.message=err.message; } },
         playerSnapshotPoints() {

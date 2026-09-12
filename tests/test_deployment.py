@@ -95,7 +95,8 @@ def test_admin_controls_use_a_fixed_socket_broker():
     socket_unit = (ROOT / "deploy" / "systemd" / "steam-kakabase-admin-control.socket").read_text(encoding="utf-8")
     assert "STEAMKB_ADMIN_CONTROLS_ENABLED true" in installer
     assert "steam-kakabase-admin-control.socket" in installer
-    assert "admin-control.sock" in socket_unit and "SocketMode=0600" in socket_unit
+    assert "ListenStream=/run/steam-kakabase-admin-control.sock" in socket_unit
+    assert "SocketUser=@@APP_USER@@" in socket_unit and "SocketMode=0600" in socket_unit
     assert '"local_backup"' in broker and '"restart_web"' in broker
     assert "shell=True" not in broker
     assert "visudo" not in installer

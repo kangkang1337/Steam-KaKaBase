@@ -126,7 +126,8 @@ nginx -t
 runuser -u "${APP_USER}" -- "${APP_DIR}/.venv/bin/python" "${APP_DIR}/scripts/predeploy_backup.py"
 systemctl daemon-reload
 systemctl enable steam-kakabase-web.service steam-kakabase-crawler.service
-systemctl enable --now steam-kakabase-admin-control.socket
+systemctl enable steam-kakabase-admin-control.socket
+systemctl restart steam-kakabase-admin-control.socket
 systemctl restart steam-kakabase-admin-control.service
 systemctl restart steam-kakabase-web.service steam-kakabase-crawler.service
 systemctl enable --now nginx.service

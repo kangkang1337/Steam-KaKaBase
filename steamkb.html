@@ -1492,8 +1492,8 @@
         untracking: '正在取消收藏：{name}...', untracked: '已取消收藏：{name}。', tracking: '正在加入跟踪：{name}...',
         trackedQueued: '已加入跟踪：{name}，后台正在补数据。', tracked: '已加入跟踪：{name}。',
         fileModeError: '请先运行 start.ps1 或 python steamkb.py，然后通过 http://127.0.0.1:8765 打开页面。不要直接双击 steamkb.html。',
-        backendError: '无法连接本地后端。请确认 steamkb.py 正在运行，并且当前页面地址是 http://127.0.0.1:8765。',
-        jsonError: '后端返回了非 JSON 响应，请确认访问的是 Steam-KaKaBase 后端端口。', hotSyncing: '热门榜正在后台同步，当前先显示本地已有数据。',
+        backendError: '无法连接服务器，请检查网络后重试。',
+        rateLimited: '请求过于频繁，请稍后再试。', serviceUnavailable: '服务暂时不可用，请稍后重试。', requestFailed: '请求失败（HTTP {status}），请稍后重试。', invalidServerResponse: '服务返回异常，请稍后重试。', hotSyncing: '热门榜正在后台同步，当前先显示本地已有数据。',
         controlConfirmTitle: '确认管理操作', controlConfirmWarning: '该操作将在服务器后台执行，并记录操作账号与结果。'
       },
       'en-US': {
@@ -1539,8 +1539,8 @@
         untracking: 'Removing saved game: {name}...', untracked: 'Removed saved game: {name}.', tracking: 'Adding tracked game: {name}...',
         trackedQueued: 'Tracking {name}; background data collection is queued.', tracked: 'Now tracking {name}.',
         fileModeError: 'Run start.ps1 or python steamkb.py, then open http://127.0.0.1:8765. Do not open steamkb.html directly.',
-        backendError: 'Cannot connect to the backend. Confirm steamkb.py is running and use http://127.0.0.1:8765.',
-        jsonError: 'The backend returned a non-JSON response. Confirm you are using the Steam-KaKaBase backend port.', hotSyncing: 'The popular list is syncing; showing existing cached data for now.',
+        backendError: 'Cannot connect to the server. Check your network and try again.',
+        rateLimited: 'Too many requests. Please wait and try again.', serviceUnavailable: 'The service is temporarily unavailable. Please try again later.', requestFailed: 'Request failed (HTTP {status}). Please try again later.', invalidServerResponse: 'The service returned an unexpected response. Please try again later.', hotSyncing: 'The popular list is syncing; showing existing cached data for now.',
         controlConfirmTitle: 'Confirm administrative action', controlConfirmWarning: 'This action runs on the server and records the account and result.'
       }
     };
@@ -2032,12 +2032,21 @@
             throw new Error(this.t('backendError'));
           }
           let data = null;
-          try {
-            data = await res.json();
-          } catch (err) {
-            throw new Error(this.t('jsonError'));
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            try {
+              data = await res.json();
+            } catch (err) {
+              // Use a safe, user-facing error below instead of exposing a proxy error page.
+            }
           }
-          if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
+          if (!res.ok) {
+            if (res.status === 429) throw new Error(this.t('rateLimited'));
+            if ([502, 503, 504].includes(res.status)) throw new Error(this.t('serviceUnavailable'));
+            if (data?.detail || data?.error) throw new Error(data.detail || data.error);
+            throw new Error(this.t('requestFailed', {status: res.status}));
+          }
+          if (!data) throw new Error(this.t('invalidServerResponse'));
           return data;
         },
         async loadGames() {

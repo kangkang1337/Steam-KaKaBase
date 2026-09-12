@@ -74,3 +74,15 @@ def test_navigation_uses_history_and_cancels_stale_detail_updates():
     assert "window.history.pushState(state, '', url)" in source
     assert "cancelDetailNavigation()" in source
     assert "navigate: false" in source
+
+
+def test_api_errors_are_status_aware_and_never_show_proxy_html():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert "res.headers.get('content-type')" in source
+    assert "contentType.includes('application/json')" in source
+    assert "if (res.status === 429)" in source
+    assert "this.t('rateLimited')" in source
+    assert "[502, 503, 504].includes(res.status)" in source
+    assert "this.t('requestFailed', {status: res.status})" in source
+    assert "jsonError:" not in source

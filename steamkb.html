@@ -1275,7 +1275,7 @@
         </article>
         <article v-if="account?.is_owner" class="panel monitor-card"><h2>{{ t('controls') }}</h2>
           <p class="muted">{{ monitoring.server.controls.enabled ? t('controlNotice') : t('controlsDisabled') }}</p>
-          <div class="monitor-row" v-for="action in monitoring.server.controls.actions" :key="action"><span>{{ controlLabel(action) }}</span><button :disabled="!monitoring.server.controls.enabled || controlBusy" @click="runControl(action)">{{ controlBusy === action ? '…' : t('confirm') }}</button></div>
+          <div class="monitor-row" v-for="action in monitoring.server.controls.actions" :key="action"><span>{{ controlLabel(action) }}</span><button :disabled="!monitoring.server.controls.enabled || !!controlBusy" @click="runControl(action)">{{ controlBusy === action ? '…' : t('confirm') }}</button></div>
           <div class="monitor-row" v-for="event in monitoring.server.controls.recent" :key="event.at + event.action"><span>{{ controlLabel(event.action) }} · {{ formatMonitorTime(event.at) }}</span><strong :class="event.success ? 'good' : 'danger'">{{ event.success ? t('success') : t('failed') }}</strong></div>
         </article>
         <article class="panel monitor-card monitor-admins"><h2>{{ t('adminList') }}</h2>
@@ -1601,7 +1601,7 @@
           busy: false,
           favoriteBusy: false,
           account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true, deleteAccountOpen: false, deleteAccountPassword: '',
-          monitoring: null, admins: [], adminUsername: '', controlBusy: '',
+          monitoring: null, admins: [], adminUsername: '', controlBusy: null,
           refreshing: false,
           wasRefreshing: false,
           statusTimer: null,
@@ -2592,7 +2592,7 @@
         async addAdmin() { try { await this.api('/api/admin/users', {method:'POST', body: JSON.stringify({username:this.adminUsername})}); this.adminUsername=''; await this.loadMonitoring(); } catch (err) { this.message=err.message; } },
         async removeAdmin(username) { try { await this.api(`/api/admin/users/${encodeURIComponent(username)}/remove`, {method:'POST'}); await this.loadMonitoring(); } catch (err) { this.message=err.message; } },
         controlLabel(action) { return this.t({local_backup:'localBackupAction',offsite_backup:'offsiteBackupAction',recovery_drill:'recoveryDrillAction',restart_web:'restartWebAction',restart_crawler:'restartCrawlerAction'}[action] || action); },
-        async runControl(action) { if (!confirm(`${this.controlLabel(action)}？`)) return; this.controlBusy=action; const controller=new AbortController(); const timeout=setTimeout(() => controller.abort(), 15000); try { const result=await this.api(`/api/admin/controls/${encodeURIComponent(action)}`, {method:'POST', signal:controller.signal}); this.message=result.message; setTimeout(() => this.loadMonitoring(), 1200); } catch (err) { this.message=err.message; } finally { clearTimeout(timeout); this.controlBusy=''; } },
+        async runControl(action) { if (!confirm(`${this.controlLabel(action)}？`)) return; this.controlBusy=action; const controller=new AbortController(); const timeout=setTimeout(() => controller.abort(), 15000); try { const result=await this.api(`/api/admin/controls/${encodeURIComponent(action)}`, {method:'POST', signal:controller.signal}); this.message=result.message; setTimeout(() => this.loadMonitoring(), 1200); } catch (err) { this.message=err.message; } finally { clearTimeout(timeout); this.controlBusy=null; } },
         async submitAuth() { try { const path = this.authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; await this.api(path, {method:'POST', body: JSON.stringify({username:this.authUsername,password:this.authPassword,remember:this.authRemember})}); if (this.authMode === 'register') { this.authMode='login'; this.message=this.t('registerSuccess'); return; } await this.restoreAuth(); this.authOpen=false; this.authPassword=''; } catch (err) { this.message=err.message; } },
         async logout() { await this.api('/api/auth/logout', {method:'POST'}); this.account=null; this.csrfToken=''; await this.loadGames(); },
         async deleteAccount() { try { await this.api('/api/auth/delete-account', {method:'POST', body:JSON.stringify({password:this.deleteAccountPassword})}); this.account=null; this.csrfToken=''; this.deleteAccountPassword=''; this.deleteAccountOpen=false; await this.loadGames(); this.message=this.t('deleteAccount') + '。'; } catch (err) { this.message=err.message; } },

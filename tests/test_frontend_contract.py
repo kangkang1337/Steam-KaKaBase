@@ -22,6 +22,15 @@ def test_frontend_consumes_crawler_and_queue_monitoring():
     assert "monitoring.database.storage.database_bytes" in source
 
 
+def test_admin_controls_use_a_real_boolean_disabled_state():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert "controlBusy: null" in source
+    assert "|| !!controlBusy" in source
+    assert "this.controlBusy=null" in source
+    assert "controlBusy: ''" not in source
+
+
 def test_charts_use_deduplicated_axes_with_overlap_protection():
     source = FRONTEND.read_text(encoding="utf-8")
 

@@ -78,6 +78,8 @@ DB_TIMEOUT_SECONDS = 30
 ENVIRONMENT = os.getenv("STEAMKB_ENV", "development").strip().lower()
 IS_PRODUCTION = ENVIRONMENT == "production"
 ADMIN_TOKEN = os.getenv("STEAMKB_ADMIN_TOKEN", "").strip()
+ADMIN_OWNER_USERNAME = os.getenv("STEAMKB_ADMIN_OWNER_USERNAME", "").strip()
+VISITOR_METRICS_SECRET = os.getenv("STEAMKB_VISITOR_METRICS_SECRET", "").strip() or ADMIN_TOKEN or "steamkb-development-metrics"
 CORS_ALLOWED_ORIGINS = env_list("STEAMKB_CORS_ALLOWED_ORIGINS")
 ALLOWED_HOSTS = env_list("STEAMKB_ALLOWED_HOSTS")
 HOST = os.getenv("STEAMKB_HOST", "127.0.0.1").strip() or "127.0.0.1"

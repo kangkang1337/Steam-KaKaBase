@@ -188,6 +188,56 @@ def get_status():
     return _runtime.get_status()
 
 
+def _monitor_day():
+    return datetime.now(config.DAILY_REFRESH_TZINFO).date().isoformat()
+
+
+def record_site_request(visitor_hash):
+    """Store aggregate traffic only; visitor_hash is a server-side HMAC, never an IP."""
+    day = _monitor_day()
+    stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    with transaction() as conn:
+        conn.execute("INSERT INTO daily_request_metrics(day,request_count,new_visitor_count) VALUES(?,1,0) ON CONFLICT(day) DO UPDATE SET request_count=request_count+1", (day,))
+        inserted = conn.execute("INSERT OR IGNORE INTO site_visitors(visitor_hash,first_seen_day,last_seen_day,first_seen_at,last_seen_at) VALUES(?,?,?,?,?)", (visitor_hash, day, day, stamp, stamp)).rowcount
+        conn.execute("UPDATE site_visitors SET last_seen_day=?,last_seen_at=? WHERE visitor_hash=?", (day, stamp, visitor_hash))
+        if inserted:
+            conn.execute("UPDATE daily_request_metrics SET new_visitor_count=new_visitor_count+1 WHERE day=?", (day,))
+
+
+def admin_monitoring():
+    day = _monitor_day()
+    status = get_status()
+    with transaction(rows=True) as conn:
+        metric = conn.execute("SELECT request_count,new_visitor_count FROM daily_request_metrics WHERE day=?", (day,)).fetchone()
+        unique_today = conn.execute("SELECT COUNT(*) FROM site_visitors WHERE last_seen_day=?", (day,)).fetchone()[0]
+        counts = {
+            "users_total": conn.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+            "new_users_today": conn.execute("SELECT COUNT(*) FROM users WHERE substr(created_at,1,10)=?", (day,)).fetchone()[0],
+            "favorites_total": conn.execute("SELECT COUNT(*) FROM user_favorites").fetchone()[0],
+            "games_total": conn.execute("SELECT COUNT(*) FROM games").fetchone()[0],
+            "player_snapshots": conn.execute("SELECT COUNT(*) FROM player_snapshots").fetchone()[0],
+            "price_snapshots": conn.execute("SELECT COUNT(*) FROM price_snapshots").fetchone()[0],
+            "review_snapshots": conn.execute("SELECT COUNT(*) FROM review_snapshots").fetchone()[0],
+            "local_backup_at": _runtime.get_crawl_state(conn, "daily_database_backup_at") or None,
+            "local_backup_path": _runtime.get_crawl_state(conn, "daily_database_backup_path") or None,
+            "offsite_backup_at": _runtime.get_crawl_state(conn, "offsite_database_backup_at") or None,
+            "offsite_backup_path": _runtime.get_crawl_state(conn, "offsite_database_backup_path") or None,
+        }
+    drill_path = config.DATA_DIR / "runtime" / "recovery_drill.json"
+    try:
+        import json
+        drill = json.loads(drill_path.read_text(encoding="utf-8")) if drill_path.is_file() else None
+    except (OSError, ValueError):
+        drill = None
+    return {
+        "today": {"day": day, "requests": int(metric["request_count"]) if metric else 0, "visitors": unique_today, "new_visitors": int(metric["new_visitor_count"]) if metric else 0, **{key: counts[key] for key in ("new_users_today", "users_total", "favorites_total")}},
+        "server": {"web": "ok", "crawler": status.get("crawler", {}), "database": "ok" if status.get("database_schema_version") else "unavailable", "backup": "configured" if config.DB_DAILY_BACKUP_ENABLED else "disabled", "controls": {"read_only": True, "future_actions": ["restart_web", "restart_crawler", "run_backup"]}},
+        "crawler": {"queue": status.get("task_monitor", {}), "rate_limits": status.get("rate_limits", {}), "heartbeat": status.get("crawler", {}).get("heartbeat_at"), "heartbeat_age_seconds": status.get("crawler", {}).get("heartbeat_age_seconds"), "state": status.get("crawler", {}).get("state")},
+        "database": {"schema": status.get("database_schema_version"), "storage": status.get("storage", {}), **{key: counts[key] for key in ("games_total", "player_snapshots", "price_snapshots", "review_snapshots")}},
+        "backups": {"local": {"at": counts["local_backup_at"], "path": counts["local_backup_path"]}, "offsite": {"at": counts["offsite_backup_at"], "path": counts["offsite_backup_path"]}, "drill": drill},
+    }
+
+
 def search(term, limit=12, offset=0):
     if not term:
         return {"items": [], "limit": limit, "offset": offset, "has_more": False}

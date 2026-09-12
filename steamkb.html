@@ -802,6 +802,15 @@
       width: 100%;
       cursor: crosshair;
     }
+    .monitor-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .monitor-card { padding: 14px; }
+    .monitor-card h2 { margin: 0 0 12px; font-size: 16px; }
+    .monitor-row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line-soft); color: var(--muted); }
+    .monitor-row strong { color: var(--text); text-align: right; overflow-wrap: anywhere; }
+    .monitor-admins { margin-top: 14px; }
+    .monitor-admins form { display: flex; gap: 8px; margin-top: 10px; }
+    .monitor-admins input { min-width: 0; flex: 1; }
+    @media (max-width: 900px) { .monitor-grid { grid-template-columns: 1fr; } }
 
     .chart-wrap {
       position: relative;
@@ -1077,6 +1086,7 @@
           <button :class="{active: activePage === 'tracker'}" @click="switchPage('tracker')">{{ t('gameDetail') }}</button>
           <button :class="{active: activePage === 'hot'}" @click="switchPage('hot')">{{ t('hotList') }}</button>
           <button :class="{active: activePage === 'niche'}" @click="switchPage('niche')">{{ t('nichePool') }}</button>
+          <button v-if="account?.is_admin" :class="{active: activePage === 'monitor'}" @click="switchPage('monitor')">{{ t('adminMonitor') }}</button>
         </div>
       </div>
       <div class="brand"><img class="brand-icon" :src="logoSrc" alt=""><span>Steam-KaKaBase</span></div>
@@ -1246,6 +1256,31 @@
       </section>
     </main>
 
+    <main v-else-if="activePage === 'monitor'" class="shell single">
+      <section class="monitor-grid" v-if="monitoring">
+        <article class="panel monitor-card"><h2>{{ t('monitorToday') }}</h2>
+          <div class="monitor-row"><span>{{ t('visitors') }}</span><strong>{{ monitoring.today.visitors }}</strong></div><div class="monitor-row"><span>{{ t('requests') }}</span><strong>{{ monitoring.today.requests }}</strong></div><div class="monitor-row"><span>{{ t('newVisitors') }}</span><strong>{{ monitoring.today.new_visitors }}</strong></div><div class="monitor-row"><span>{{ t('newUsers') }}</span><strong>{{ monitoring.today.new_users_today }}</strong></div><div class="monitor-row"><span>{{ t('totalFavorites') }}</span><strong>{{ monitoring.today.favorites_total }}</strong></div>
+        </article>
+        <article class="panel monitor-card"><h2>{{ t('monitorServer') }}</h2>
+          <div class="monitor-row"><span>Web</span><strong>{{ monitoring.server.web }}</strong></div><div class="monitor-row"><span>Crawler</span><strong>{{ monitoring.server.crawler.running ? t('running') : t('stopped') }}</strong></div><div class="monitor-row"><span>{{ t('database') }}</span><strong>{{ monitoring.server.database }}</strong></div><div class="monitor-row"><span>{{ t('backup') }}</span><strong>{{ monitoring.server.backup }}</strong></div><div class="monitor-row"><span>{{ t('controls') }}</span><strong>{{ t('readOnly') }}</strong></div>
+        </article>
+        <article class="panel monitor-card"><h2>Crawler</h2>
+          <div class="monitor-row"><span>{{ t('queue') }}</span><strong>{{ monitoring.crawler.queue.active_total }}</strong></div><div class="monitor-row"><span>Steam 429</span><strong>{{ monitoring.crawler.rate_limits.steam_api?.count || 0 }}</strong></div><div class="monitor-row"><span>ITAD 429</span><strong>{{ monitoring.crawler.rate_limits.itad?.count || 0 }}</strong></div><div class="monitor-row"><span>{{ t('heartbeat') }}</span><strong>{{ monitoring.crawler.heartbeat_age_seconds ?? '-' }}s</strong></div>
+        </article>
+        <article class="panel monitor-card"><h2>{{ t('database') }}</h2>
+          <div class="monitor-row"><span>{{ t('totalGames') }}</span><strong>{{ monitoring.database.games_total }}</strong></div><div class="monitor-row"><span>{{ t('snapshots') }}</span><strong>{{ monitoring.database.player_snapshots + monitoring.database.price_snapshots + monitoring.database.review_snapshots }}</strong></div><div class="monitor-row"><span>SQLite</span><strong>{{ formatBytes(monitoring.database.storage.database_bytes) }}</strong></div><div class="monitor-row"><span>WAL</span><strong>{{ formatBytes(monitoring.database.storage.wal_bytes) }}</strong></div><div class="monitor-row"><span>Schema</span><strong>v{{ monitoring.database.schema }}</strong></div>
+        </article>
+        <article class="panel monitor-card"><h2>{{ t('backup') }}</h2>
+          <div class="monitor-row"><span>{{ t('localBackup') }}</span><strong>{{ monitoring.backups.local.at || '-' }}</strong></div><div class="monitor-row"><span>{{ t('offsiteBackup') }}</span><strong>{{ monitoring.backups.offsite.at || '-' }}</strong></div><div class="monitor-row"><span>{{ t('recoveryDrill') }}</span><strong>{{ monitoring.backups.drill?.success ? t('success') : '-' }}</strong></div><div class="monitor-row"><span>{{ t('drillAt') }}</span><strong>{{ monitoring.backups.drill?.completed_at || '-' }}</strong></div>
+        </article>
+        <article class="panel monitor-card monitor-admins"><h2>{{ t('adminList') }}</h2>
+          <div class="monitor-row" v-for="admin in admins" :key="admin.username"><span>{{ admin.username }}{{ admin.owner ? ' · Owner' : '' }}</span><button v-if="account?.is_owner && !admin.owner" class="danger" @click="removeAdmin(admin.username)">{{ t('remove') }}</button></div>
+          <form v-if="account?.is_owner" @submit.prevent="addAdmin"><input v-model.trim="adminUsername" :placeholder="t('username')" required><button>{{ t('addAdmin') }}</button></form>
+        </article>
+      </section>
+      <section v-else class="panel empty">{{ t('loadingMonitor') }}</section>
+    </main>
+
     <main v-else class="shell">
       <aside class="panel">
         <div class="panel-head">
@@ -1400,7 +1435,7 @@
 
     const translations = {
       'zh-CN': {
-        openNav: '打开导航菜单', home: '主页', gameDetail: '游戏详情', hotList: '热门榜', nichePool: '小众池',
+        openNav: '打开导航菜单', home: '主页', gameDetail: '游戏详情', hotList: '热门榜', nichePool: '小众池', adminMonitor: '管理监控', monitorToday: '今天', monitorServer: '服务器', visitors: '访问人数', requests: '请求次数', newVisitors: '新访问人数', newUsers: '新加入用户', totalFavorites: '总收藏数', database: '数据库', backup: '备份', controls: '控制组件', readOnly: '只读（控制接口已预留）', queue: '队列任务', heartbeat: 'Crawler 心跳', totalGames: '总游戏数', snapshots: '快照数', localBackup: '上次本地备份', offsiteBackup: '上次异地备份', recoveryDrill: '恢复演练', drillAt: '演练时间', success: '成功', adminList: '管理员列表', addAdmin: '添加管理员', remove: '移除', loadingMonitor: '正在加载管理监控…',
         searchPlaceholder: '搜索 Steam 游戏', online: '在线', favorited: '已收藏', favorite: '收藏', view: '查看', login: '登录', logout: '退出登录', register: '注册', username: '用户名', password: '密码', rememberMe: '记住我', accountAccess: '账号操作', confirm: '确认', registerSuccess: '注册成功，请登录', deleteAccount: '删除账号', cancel: '取消', confirmDelete: '确认删除', privacyNotice: '仅保存用户名、加盐密码派生值、会话和同步收藏；不收集邮箱。可随时删除账号及其同步收藏。', deleteAccountWarning: '此操作会永久删除账号、所有登录会话和同步收藏，无法恢复。请输入当前密码确认。',
         searching: '正在搜索…', noSearchResults: '暂无本地结果，目录仍在持续补充', selectPriceRegion: '选择价格地区',
         selectLanguage: '选择界面语言', refreshList: '刷新列表', backgroundCollecting: '后台自动采集中，页面可正常使用。',
@@ -1446,7 +1481,7 @@
         jsonError: '后端返回了非 JSON 响应，请确认访问的是 Steam-KaKaBase 后端端口。', hotSyncing: '热门榜正在后台同步，当前先显示本地已有数据。'
       },
       'en-US': {
-        openNav: 'Open navigation', home: 'Home', gameDetail: 'Game details', hotList: 'Popular', nichePool: 'Hidden gems',
+        openNav: 'Open navigation', home: 'Home', gameDetail: 'Game details', hotList: 'Popular', nichePool: 'Hidden gems', adminMonitor: 'Admin monitor', monitorToday: 'Today', monitorServer: 'Server', visitors: 'Visitors', requests: 'Requests', newVisitors: 'New visitors', newUsers: 'New users', totalFavorites: 'Favorites', database: 'Database', backup: 'Backups', controls: 'Controls', readOnly: 'Read-only (control API reserved)', queue: 'Queue tasks', heartbeat: 'Crawler heartbeat', totalGames: 'Games', snapshots: 'Snapshots', localBackup: 'Latest local backup', offsiteBackup: 'Latest offsite backup', recoveryDrill: 'Recovery drill', drillAt: 'Drill time', success: 'Success', adminList: 'Administrators', addAdmin: 'Add admin', remove: 'Remove', loadingMonitor: 'Loading admin monitor…',
         searchPlaceholder: 'Search Steam games', online: 'online', favorited: 'Saved', favorite: 'Save', view: 'View', login: 'Log in', logout: 'Log out', register: 'Create account', username: 'Username', password: 'Password', rememberMe: 'Remember me', accountAccess: 'Account access', confirm: 'Confirm', registerSuccess: 'Account created. Please log in.', deleteAccount: 'Delete account', cancel: 'Cancel', confirmDelete: 'Delete permanently', privacyNotice: 'Only a username, salted password hash, session, and synced favorites are stored. No email is collected. You can delete your account and synced favorites at any time.', deleteAccountWarning: 'This permanently deletes your account, all sessions, and synced favorites. It cannot be undone. Enter your current password to confirm.',
         searching: 'Searching…', noSearchResults: 'No local results yet; the catalog is still being enriched', selectPriceRegion: 'Select price region',
         selectLanguage: 'Select interface language', refreshList: 'Refresh', backgroundCollecting: 'Background collection is running; the page remains available.',
@@ -1559,6 +1594,7 @@
           busy: false,
           favoriteBusy: false,
           account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true, deleteAccountOpen: false, deleteAccountPassword: '',
+          monitoring: null, admins: [], adminUsername: '',
           refreshing: false,
           wasRefreshing: false,
           statusTimer: null,
@@ -1888,7 +1924,8 @@
           this.selectedDetailIncomplete = false;
         },
         switchPage(page, options = {}) {
-          if (!['home', 'hot', 'niche', 'tracker'].includes(page)) page = 'home';
+          if (!['home', 'hot', 'niche', 'tracker', 'monitor'].includes(page)) page = 'home';
+          if (page === 'monitor' && !this.account?.is_admin) page = 'home';
           if (page !== 'tracker') this.cancelDetailNavigation();
           this.activePage = page;
           this.navOpen = false;
@@ -1903,6 +1940,9 @@
           if (page === 'niche') {
             this.loadNichePool();
           }
+          if (page === 'monitor' && this.account?.is_admin) {
+            this.loadMonitoring();
+          }
           if (page === 'tracker') {
             nextTick(this.resizeCharts);
           }
@@ -1914,7 +1954,7 @@
           const appid = Number(value);
           if (Number.isSafeInteger(appid) && appid > 0) return { page: 'tracker', appid };
           return {
-            page: ['home', 'hot', 'niche'].includes(requestedPage) ? requestedPage : 'home',
+            page: ['home', 'hot', 'niche', 'monitor'].includes(requestedPage) ? requestedPage : 'home',
             appid: null
           };
         },
@@ -2542,6 +2582,10 @@
         localFavorites() { try { return JSON.parse(localStorage.getItem('steamkb.localFavorites') || '[]'); } catch (_e) { return []; } },
         saveLocalFavorites() { try { localStorage.setItem('steamkb.localFavorites', JSON.stringify(this.games)); } catch (_e) {} },
         async restoreAuth() { try { const data = await this.api('/api/auth/me'); this.account = data.user; this.csrfToken = data.csrf_token || ''; if (this.account) await this.loadGames(); } catch (_e) {} },
+        formatBytes(value) { const bytes = Number(value || 0); if (bytes < 1024) return `${bytes} B`; const units = ['KB', 'MB', 'GB']; let amount = bytes / 1024; let index = 0; while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index++; } return `${amount.toFixed(1)} ${units[index]}`; },
+        async loadMonitoring() { try { const [monitor, users] = await Promise.all([this.api('/api/admin/monitoring'), this.api('/api/admin/users')]); this.monitoring = monitor; this.admins = users.admins || []; } catch (err) { this.message = err.message; this.switchPage('home'); } },
+        async addAdmin() { try { await this.api('/api/admin/users', {method:'POST', body: JSON.stringify({username:this.adminUsername})}); this.adminUsername=''; await this.loadMonitoring(); } catch (err) { this.message=err.message; } },
+        async removeAdmin(username) { try { await this.api(`/api/admin/users/${encodeURIComponent(username)}/remove`, {method:'POST'}); await this.loadMonitoring(); } catch (err) { this.message=err.message; } },
         async submitAuth() { try { const path = this.authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; await this.api(path, {method:'POST', body: JSON.stringify({username:this.authUsername,password:this.authPassword,remember:this.authRemember})}); if (this.authMode === 'register') { this.authMode='login'; this.message=this.t('registerSuccess'); return; } await this.restoreAuth(); this.authOpen=false; this.authPassword=''; } catch (err) { this.message=err.message; } },
         async logout() { await this.api('/api/auth/logout', {method:'POST'}); this.account=null; this.csrfToken=''; await this.loadGames(); },
         async deleteAccount() { try { await this.api('/api/auth/delete-account', {method:'POST', body:JSON.stringify({password:this.deleteAccountPassword})}); this.account=null; this.csrfToken=''; this.deleteAccountPassword=''; this.deleteAccountOpen=false; await this.loadGames(); this.message=this.t('deleteAccount') + '。'; } catch (err) { this.message=err.message; } },

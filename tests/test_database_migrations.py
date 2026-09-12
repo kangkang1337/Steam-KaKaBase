@@ -26,7 +26,7 @@ def test_migrate_legacy_database_creates_backup_and_history(tmp_path):
         history = conn.execute(
             "SELECT version, name FROM schema_migrations ORDER BY version"
         ).fetchall()
-    assert [row[0] for row in history] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [row[0] for row in history] == list(range(1, migrations.CURRENT_SCHEMA_VERSION + 1))
 
 
 def test_search_index_is_seeded_and_kept_in_sync(tmp_path):

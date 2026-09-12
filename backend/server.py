@@ -2,6 +2,8 @@
 
 import mimetypes
 import secrets
+import hashlib
+import hmac
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from . import config, services
 from .db import init_db
 from .logging_utils import log_event
-from .schemas import DeleteAccountRequest, LoginRequest, TrackRequest, UntrackRequest
+from .schemas import AdminUserRequest, DeleteAccountRequest, LoginRequest, TrackRequest, UntrackRequest
 from . import auth
 from .rate_limit import IpRateLimiter
 
@@ -121,6 +123,21 @@ def create_app():
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
+    @application.middleware("http")
+    async def traffic_metrics(request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if request.method == "GET" and not path.startswith(("/assets/", "/api/admin/")) and path not in {"/health", "/ready", "/favicon.ico"}:
+            token = request.cookies.get("steamkb_visitor") or secrets.token_urlsafe(24)
+            digest = hmac.new(config.VISITOR_METRICS_SECRET.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
+            try:
+                services.record_site_request(digest)
+                if "steamkb_visitor" not in request.cookies:
+                    response.set_cookie("steamkb_visitor", token, max_age=31536000, httponly=True, samesite="lax", secure=config.IS_PRODUCTION)
+            except Exception as exc:
+                log_event(f"traffic metrics failed: {exc}")
+        return response
+
     @application.exception_handler(Exception)
     async def unhandled_exception(request, exc):
         log_event(f"http request failed path={request.url.path}: {exc}")
@@ -180,10 +197,17 @@ def create_app():
             raise HTTPException(status_code=403, detail="会话校验失败，请重新登录")
         return user
 
+    def dashboard_admin(request: Request, *, csrf=False, owner=False):
+        user = current_user(request, csrf=csrf)
+        allowed = auth.is_owner(user) if owner else auth.is_admin(user)
+        if not allowed:
+            raise HTTPException(status_code=403, detail="管理员权限不足")
+        return user
+
     @application.get("/api/auth/me")
     def auth_me(request: Request):
         user = auth.session(request.cookies.get(auth.SESSION_COOKIE))
-        return {"user": {"username": user["username"]} if user else None, "csrf_token": user["csrf_token"] if user else None}
+        return {"user": {"username": user["username"], "is_admin": auth.is_admin(user), "is_owner": auth.is_owner(user)} if user else None, "csrf_token": user["csrf_token"] if user else None}
 
     @application.post("/api/auth/register")
     def auth_register(body: LoginRequest, request: Request):
@@ -197,7 +221,7 @@ def create_app():
         enforce_ip_rate(request, "auth", limit=config.AUTH_RATE_LIMIT, window_seconds=config.AUTH_RATE_WINDOW_SECONDS)
         try: token, csrf, user, expires = auth.login(body.username, body.password, body.remember)
         except ValueError as exc: raise HTTPException(status_code=401, detail=str(exc)) from exc
-        response = JSONResponse({"ok": True, "user": {"username": user["username"]}, "csrf_token": csrf})
+        response = JSONResponse({"ok": True, "user": {"username": user["username"], "is_admin": auth.is_admin(user), "is_owner": auth.is_owner(user)}, "csrf_token": csrf})
         response.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite="lax", secure=config.IS_PRODUCTION, max_age=int((expires - __import__('datetime').datetime.now(__import__('datetime').timezone.utc)).total_seconds()) if body.remember else None)
         return response
 
@@ -275,6 +299,33 @@ def create_app():
             if str(proxy.get("message") or "").startswith("代理回退失败"):
                 proxy["message"] = "代理回退暂不可用"
         return payload
+
+    @application.get("/api/admin/monitoring")
+    def admin_monitoring(request: Request):
+        dashboard_admin(request)
+        return services.admin_monitoring()
+
+    @application.get("/api/admin/users")
+    def admin_users(request: Request):
+        dashboard_admin(request)
+        return {"admins": auth.list_admins()}
+
+    @application.post("/api/admin/users")
+    def add_admin(body: AdminUserRequest, request: Request):
+        owner = dashboard_admin(request, csrf=True, owner=True)
+        try:
+            username = auth.grant_admin(body.username, owner["username"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "username": username}
+
+    @application.post("/api/admin/users/{username}/remove")
+    def remove_admin(username: str, request: Request):
+        dashboard_admin(request, csrf=True, owner=True)
+        if config.ADMIN_OWNER_USERNAME and username.casefold() == config.ADMIN_OWNER_USERNAME.casefold():
+            raise HTTPException(status_code=400, detail="服主账号由服务器环境变量保护，不能在页面移除")
+        auth.revoke_admin(username)
+        return {"ok": True}
 
     @application.post("/api/games/{appid}/interest")
     def request_game_detail(appid: int):

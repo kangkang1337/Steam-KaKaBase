@@ -4,6 +4,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from .db import now_iso, transaction
+from . import config
 
 SESSION_COOKIE = "steamkb_session"
 
@@ -75,3 +76,38 @@ def reset_password(username, password):
             "DELETE FROM user_sessions WHERE user_id=(SELECT id FROM users WHERE username=?)",
             (username,),
         )
+
+
+def is_owner(user):
+    return bool(user and config.ADMIN_OWNER_USERNAME and user["username"].casefold() == config.ADMIN_OWNER_USERNAME.casefold())
+
+
+def is_admin(user):
+    if is_owner(user):
+        return True
+    if not user:
+        return False
+    with transaction(rows=True) as conn:
+        return bool(conn.execute("SELECT 1 FROM admin_users WHERE user_id=?", (int(user["id"]),)).fetchone())
+
+
+def list_admins():
+    with transaction(rows=True) as conn:
+        rows = conn.execute("SELECT u.username,a.granted_at,a.granted_by FROM admin_users a JOIN users u ON u.id=a.user_id ORDER BY u.username COLLATE NOCASE").fetchall()
+    admins = [{"username": config.ADMIN_OWNER_USERNAME, "owner": True, "granted_at": None, "granted_by": "environment"}] if config.ADMIN_OWNER_USERNAME else []
+    admins.extend({"username": row["username"], "owner": False, "granted_at": row["granted_at"], "granted_by": row["granted_by"]} for row in rows if row["username"].casefold() != config.ADMIN_OWNER_USERNAME.casefold())
+    return admins
+
+
+def grant_admin(username, granted_by):
+    with transaction(rows=True) as conn:
+        user = conn.execute("SELECT id,username FROM users WHERE username=?", (username.strip(),)).fetchone()
+        if not user:
+            raise ValueError("账号不存在")
+        conn.execute("INSERT OR REPLACE INTO admin_users(user_id,granted_at,granted_by) VALUES(?,?,?)", (user["id"], now_iso(), granted_by))
+    return user["username"]
+
+
+def revoke_admin(username):
+    with transaction() as conn:
+        conn.execute("DELETE FROM admin_users WHERE user_id=(SELECT id FROM users WHERE username=?)", (username.strip(),))

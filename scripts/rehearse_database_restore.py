@@ -6,8 +6,10 @@ directory.  Use it for recovery drills, including downloaded offsite backups.
 """
 
 import argparse
+import json
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -16,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.migrations import CURRENT_SCHEMA_VERSION, get_schema_version, migrate_database, restore_database_backup
+from backend import config
 
 
 def main():
@@ -44,6 +47,17 @@ def main():
         raise RuntimeError(
             f"restore verification failed: quick_check={quick_check!r}, schema=v{schema_version}"
         )
+
+    marker = config.DATA_DIR / "runtime" / "recovery_drill.json"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({
+        "success": True,
+        "completed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "source_name": backup.name,
+        "schema": schema_version,
+        "games": games,
+        "quick_check": quick_check,
+    }, ensure_ascii=False), encoding="utf-8")
 
     print(f"Restored copy: {restored}")
     print(f"Schema: v{schema_version}; games: {games}; quick_check: {quick_check}")

@@ -4,7 +4,7 @@
 
 未登录时，收藏仅保存在当前浏览器的 `localStorage`；登录后，收藏会按账号写入 SQLite，可在不同设备同步查看。账号使用用户名与密码注册，勾选“记住我”会保存最长 30 天的 `Secure`、HttpOnly 会话 Cookie（生产环境）。密码仅保存 PBKDF2-SHA256 派生值和随机盐，不保存明文。登录、注册、删号与收藏写操作受 Nginx 和应用内双层 IP 限流保护。
 
-公网部署务必使用 HTTPS，并备份 SQLite；账号、会话和收藏均在数据库迁移 v8 中创建。
+公网部署务必使用 HTTPS，并备份 SQLite；账号、会话和收藏在数据库迁移 v8 中创建，管理员监控与权限名单在 v9 中创建。
 
 一个面向本地运行的 Steam 数据面板，设计参考 SteamDB。用于查看游戏价格与本地历史快照、在线人数趋势、玩家评价、热门榜和每日小众宝藏推荐。
 
@@ -213,6 +213,8 @@ Copy-Item .env.example .env
 | `STEAMKB_DAILY_BACKUP_KEEP` | `14` | 每日备份保留份数，不影响手动和迁移备份 |
 | `STEAMKB_OFFSITE_REMOTE` | 空 | rclone 异地备份目标，例如 `vultr:bucket/steam-kakabase` |
 | `STEAMKB_OFFSITE_RETENTION_DAYS` | `30` | 异地 SQLite 备份保留天数 |
+| `STEAMKB_ADMIN_OWNER_USERNAME` | 空 | 服主账号名；该账号可查看监控并增删其他管理员 |
+| `STEAMKB_VISITOR_METRICS_SECRET` | 回退到管理员令牌 | 用于匿名访客 Cookie 的 HMAC；不保存 IP |
 | `STEAMKB_PLAYER_REFRESH_MINUTES` | `30` | 在线人数刷新间隔，最小 30 分钟 |
 | `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 价格刷新间隔，最小 24 小时 |
 | `STEAMKB_HOTLIST_TARGET` | `100` | 本地热门榜目标数量 |
@@ -246,7 +248,7 @@ STEAMKB_PROXY_URL=http://127.0.0.1:7890
 
 ## 数据库迁移与备份
 
-SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v8 在 v7 基础上新增账号、会话与账号收藏表。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
+SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v9 在 v8 基础上新增管理员权限与匿名访问聚合表。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
 
 迁移中任意一步失败时，事务会整体回滚，服务停止启动，并在错误中给出升级前备份路径。crawler 还会使用 SQLite Backup API 每 24 小时在线创建一次 `daily` 备份，默认保留 14 份；每日备份、手动备份和迁移备份分别轮转，不会互相删除。数据库和备份文件均被 Git 忽略。
 

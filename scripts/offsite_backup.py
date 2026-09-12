@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend import config
+from backend.db import set_crawl_state, transaction
 from backend.migrations import create_database_backup
 
 
@@ -74,6 +75,9 @@ def main():
     backup = ensure_fresh_backup()
     validate_backup(backup)
     target = upload_backup(backup, remote, retention_days=retention_days)
+    with transaction() as conn:
+        set_crawl_state(conn, "offsite_database_backup_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        set_crawl_state(conn, "offsite_database_backup_path", target)
     print(f"Uploaded verified database backup: {target}")
 
 

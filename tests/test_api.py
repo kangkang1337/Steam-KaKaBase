@@ -4,7 +4,7 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import config, services
+from backend import config, services, migrations
 from backend.server import create_app
 
 
@@ -19,7 +19,7 @@ def test_health_and_readiness(api_client):
     assert client.get("/health").json() == {"status": "ok"}
     response = client.get("/ready")
     assert response.status_code == 200
-    assert response.json() == {"ready": True, "database": "ok", "schema_version": 8}
+    assert response.json() == {"ready": True, "database": "ok", "schema_version": migrations.CURRENT_SCHEMA_VERSION}
 
 
 def test_account_session_and_favorite_isolation(api_client):
@@ -129,7 +129,7 @@ def test_status_endpoint(api_client):
     assert set(payload["service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert set(payload["direct_service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
     assert "proxy" in payload
-    assert payload["database_schema_version"] == 8
+    assert payload["database_schema_version"] == migrations.CURRENT_SCHEMA_VERSION
     assert payload["niche_max_reviews"] == 50000
     assert payload["daily_refresh_timezone"] == "Asia/Shanghai"
     assert payload["search"]["storage"] == "sqlite_fts5_trigram"
@@ -140,6 +140,27 @@ def test_status_endpoint(api_client):
     assert payload["crawler"]["lease_remaining_seconds"] == 0
     assert payload["storage"]["database_bytes"] > 0
     assert payload["storage"]["wal_bytes"] >= 0
+
+
+def test_owner_can_read_monitoring_and_manage_admins(api_client, monkeypatch):
+    _, client = api_client
+    monkeypatch.setattr(config, "ADMIN_OWNER_USERNAME", "owner")
+    owner = {"username": "owner", "password": "password123", "remember": True}
+    member = {"username": "member", "password": "password123", "remember": True}
+    assert client.post("/api/auth/register", json=owner).status_code == 200
+    assert client.post("/api/auth/register", json=member).status_code == 200
+    login = client.post("/api/auth/login", json=owner)
+    csrf = login.json()["csrf_token"]
+    assert login.json()["user"]["is_owner"] is True
+    monitor = client.get("/api/admin/monitoring")
+    assert monitor.status_code == 200
+    assert {"today", "server", "crawler", "database", "backups"} <= set(monitor.json())
+    added = client.post("/api/admin/users", json={"username": "member"}, headers={"X-CSRF-Token": csrf})
+    assert added.status_code == 200
+    assert any(row["username"] == "member" for row in client.get("/api/admin/users").json()["admins"])
+    client.post("/api/auth/logout")
+    assert client.post("/api/auth/login", json=member).json()["user"]["is_admin"] is True
+    assert client.get("/api/admin/monitoring").status_code == 200
 
 
 def test_status_does_not_report_stale_crawler_as_running(api_client):

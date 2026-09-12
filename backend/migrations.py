@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 
 class DatabaseMigrationError(RuntimeError):
@@ -404,6 +404,29 @@ def _migration_8_user_favorites(conn):
     """)
 
 
+def _migration_9_admin_monitoring(conn):
+    _execute_sql(conn, """
+    CREATE TABLE IF NOT EXISTS admin_users (
+        user_id INTEGER PRIMARY KEY,
+        granted_at TEXT NOT NULL,
+        granted_by TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS site_visitors (
+        visitor_hash TEXT PRIMARY KEY,
+        first_seen_day TEXT NOT NULL,
+        last_seen_day TEXT NOT NULL,
+        first_seen_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS daily_request_metrics (
+        day TEXT PRIMARY KEY,
+        request_count INTEGER NOT NULL DEFAULT 0,
+        new_visitor_count INTEGER NOT NULL DEFAULT 0
+    );
+    """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_1_initial_schema),
     Migration(2, "legacy_columns", _migration_2_legacy_columns),
@@ -413,6 +436,7 @@ MIGRATIONS = (
     Migration(6, "process_leases", _migration_6_process_leases),
     Migration(7, "bilingual_search_aliases", _migration_7_search_aliases),
     Migration(8, "user_favorites", _migration_8_user_favorites),
+    Migration(9, "admin_monitoring", _migration_9_admin_monitoring),
 )
 
 

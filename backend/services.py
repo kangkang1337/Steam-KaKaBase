@@ -247,7 +247,14 @@ def admin_monitoring():
 
 
 def _system_resources():
-    disk = shutil.disk_usage(config.DATA_DIR)
+    disk_path = config.DB_PATH.parent if config.DB_PATH.parent.is_dir() else config.ROOT
+    try:
+        disk = shutil.disk_usage(disk_path)
+        disk_stats = {"total_bytes": disk.total, "used_bytes": disk.used, "free_bytes": disk.free}
+    except OSError:
+        # A temporary test database may live below a directory that does not
+        # exist in the checkout. Monitoring must remain available in that case.
+        disk_stats = {"total_bytes": 0, "used_bytes": 0, "free_bytes": 0}
     memory = {"total_bytes": None, "available_bytes": None}
     try:
         values = dict(
@@ -267,7 +274,7 @@ def _system_resources():
         "cpu_cores": os.cpu_count() or 0,
         "load": load,
         "memory": memory,
-        "disk": {"total_bytes": disk.total, "used_bytes": disk.used, "free_bytes": disk.free},
+        "disk": disk_stats,
     }
 
 

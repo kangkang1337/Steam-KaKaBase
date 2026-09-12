@@ -163,6 +163,6 @@ FAVORITES_RATE_LIMIT = env_int("STEAMKB_FAVORITES_RATE_LIMIT", 60, minimum=1, ma
 FAVORITES_RATE_WINDOW_SECONDS = env_int("STEAMKB_FAVORITES_RATE_WINDOW_SECONDS", 60, minimum=1, maximum=3600)
 APP_NAME_REFRESH_HOURS = env_int("STEAMKB_APP_NAME_REFRESH_HOURS", 24, minimum=24)
 
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.6.2"
 ITAD_MISSING_GAME_ID = "__itad_missing__"
 EXTERNAL_SERVICES = ("steam_api", "steam_store", "itad", "image_cdn")

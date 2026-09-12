@@ -218,7 +218,8 @@ Copy-Item .env.example .env
 | `STEAMKB_DAILY_BACKUP_KEEP` | `14` | 每日备份保留份数，不影响手动和迁移备份 |
 | `STEAMKB_OFFSITE_REMOTE` | 空 | rclone 异地备份目标，例如 `vultr:bucket/steam-kakabase` |
 | `STEAMKB_OFFSITE_RETENTION_DAYS` | `30` | 异地 SQLite 备份保留天数 |
-| `STEAMKB_ADMIN_OWNER_USERNAME` | 空 | 服主账号名；该账号可查看监控并增删其他管理员 |
+| `STEAMKB_ADMIN_OWNER_USERNAME` | 空 | 服主账号名；该账号可查看监控、管理管理员并执行固定运维动作 |
+| `STEAMKB_ADMIN_CONTROLS_ENABLED` | `false` | 是否启用服主专用的备份、演练和服务重启控制组件；Ubuntu 安装脚本会启用 |
 | `STEAMKB_VISITOR_METRICS_SECRET` | 回退到管理员令牌 | 用于匿名访客 Cookie 的 HMAC；不保存 IP |
 | `STEAMKB_PLAYER_REFRESH_MINUTES` | `30` | 在线人数刷新间隔，最小 30 分钟 |
 | `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 价格刷新间隔，最小 24 小时 |
@@ -302,6 +303,8 @@ curl -X POST https://steam.example.com/api/games/730/refresh \
 - 不新增第二层反向代理；如确有 CDN/负载均衡，需先正确传递并限制真实客户端 IP，避免破坏 Nginx 限流的 IP 识别。
 
 Ubuntu 24.04 的 Nginx、HTTPS、systemd、UFW、SSH 加固和 rclone 部署步骤见 [`deploy/README.md`](deploy/README.md)。安装脚本会在修改配置后依次执行健康检查；没有已验证的非 root SSH 公钥时会拒绝关闭密码和 root 登录。
+
+管理控制不关闭 Web 服务的 `NoNewPrivileges` 沙箱，也不通过 `sudo` 执行。Web 仅能连接权限为 `0600` 的本机 Unix Socket；root 控制代理只接受代码中固定的五种动作，不接收任意命令、路径或 systemd 服务名。部署脚本会删除旧版 sudo bridge 与对应 sudoers 规则。
 
 常用维护命令：
 

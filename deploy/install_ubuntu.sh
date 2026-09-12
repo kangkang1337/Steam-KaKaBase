@@ -111,12 +111,11 @@ render_template "${APP_DIR}/deploy/systemd/steam-kakabase-crawler.service" /etc/
 render_template "${APP_DIR}/deploy/systemd/steam-kakabase-backup.service" /etc/systemd/system/steam-kakabase-backup.service
 render_template "${APP_DIR}/deploy/systemd/steam-kakabase-local-backup.service" /etc/systemd/system/steam-kakabase-local-backup.service
 render_template "${APP_DIR}/deploy/systemd/steam-kakabase-recovery-drill.service" /etc/systemd/system/steam-kakabase-recovery-drill.service
+render_template "${APP_DIR}/deploy/systemd/steam-kakabase-admin-control.service" /etc/systemd/system/steam-kakabase-admin-control.service
+render_template "${APP_DIR}/deploy/systemd/steam-kakabase-admin-control.socket" /etc/systemd/system/steam-kakabase-admin-control.socket
 install -m 644 "${APP_DIR}/deploy/systemd/steam-kakabase-backup.timer" /etc/systemd/system/steam-kakabase-backup.timer
-install -d -m 755 /usr/local/libexec
-install -m 750 -o root -g root "${APP_DIR}/deploy/admin-control.sh" /usr/local/libexec/steam-kakabase-admin-control
-sed "s|@@APP_USER@@|${APP_USER}|g" "${APP_DIR}/deploy/sudoers/steam-kakabase-admin-controls" >/etc/sudoers.d/steam-kakabase-admin-controls
-chmod 440 /etc/sudoers.d/steam-kakabase-admin-controls
-visudo -cf /etc/sudoers.d/steam-kakabase-admin-controls
+# Remove the obsolete sudo bridge; the web sandbox keeps NoNewPrivileges=true.
+rm -f /usr/local/libexec/steam-kakabase-admin-control /etc/sudoers.d/steam-kakabase-admin-controls
 install -d -o "${APP_USER}" -g "${APP_USER}" -m 750 /var/lib/steamkb-restore-drill
 install -m 644 "${APP_DIR}/deploy/nginx/steam-kakabase-rate-limits.conf" /etc/nginx/conf.d/steam-kakabase-rate-limits.conf
 render_template "${APP_DIR}/deploy/nginx/steam-kakabase.conf" /etc/nginx/sites-available/steam-kakabase
@@ -127,6 +126,8 @@ nginx -t
 runuser -u "${APP_USER}" -- "${APP_DIR}/.venv/bin/python" "${APP_DIR}/scripts/predeploy_backup.py"
 systemctl daemon-reload
 systemctl enable steam-kakabase-web.service steam-kakabase-crawler.service
+systemctl enable --now steam-kakabase-admin-control.socket
+systemctl restart steam-kakabase-admin-control.service
 systemctl restart steam-kakabase-web.service steam-kakabase-crawler.service
 systemctl enable --now nginx.service
 

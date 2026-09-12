@@ -1,7 +1,7 @@
 [Unit]
 Description=Steam-KaKaBase FastAPI web service
-After=network-online.target
-Wants=network-online.target
+After=network-online.target steam-kakabase-admin-control.socket
+Wants=network-online.target steam-kakabase-admin-control.socket
 
 [Service]
 Type=simple

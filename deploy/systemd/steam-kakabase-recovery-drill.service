@@ -17,5 +17,5 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=@@APP_DIR@@/data /var/lib/steamkb-restore-drill
+ReadWritePaths=@@APP_DIR@@/data -/var/lib/steamkb-restore-drill
 ReadOnlyPaths=/etc/rclone/rclone.conf

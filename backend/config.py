@@ -80,7 +80,7 @@ IS_PRODUCTION = ENVIRONMENT == "production"
 ADMIN_TOKEN = os.getenv("STEAMKB_ADMIN_TOKEN", "").strip()
 ADMIN_OWNER_USERNAME = os.getenv("STEAMKB_ADMIN_OWNER_USERNAME", "").strip()
 ADMIN_CONTROLS_ENABLED = env_bool("STEAMKB_ADMIN_CONTROLS_ENABLED", False)
-ADMIN_CONTROL_HELPER = os.getenv("STEAMKB_ADMIN_CONTROL_HELPER", "/usr/local/libexec/steam-kakabase-admin-control").strip()
+ADMIN_CONTROL_SOCKET = os.getenv("STEAMKB_ADMIN_CONTROL_SOCKET", "/run/steam-kakabase/admin-control.sock").strip()
 VISITOR_METRICS_SECRET = os.getenv("STEAMKB_VISITOR_METRICS_SECRET", "").strip() or ADMIN_TOKEN or "steamkb-development-metrics"
 CORS_ALLOWED_ORIGINS = env_list("STEAMKB_CORS_ALLOWED_ORIGINS")
 ALLOWED_HOSTS = env_list("STEAMKB_ALLOWED_HOSTS")

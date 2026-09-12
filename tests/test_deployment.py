@@ -14,6 +14,15 @@ def _load_offsite_module():
     return module
 
 
+def _load_control_module():
+    spec = importlib.util.spec_from_file_location(
+        "admin_control_broker", ROOT / "scripts" / "admin_control_broker.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_frontend_dependencies_are_same_origin_and_pinned():
     html = (ROOT / "steamkb.html").read_text(encoding="utf-8")
     assert 'src="/assets/vendor/vue-3.5.13.global.prod.js"' in html
@@ -80,16 +89,32 @@ def test_deployment_restarts_application_processes_after_sync():
     assert "os.chdir(ROOT)" in predeploy_backup
 
 
-def test_admin_controls_use_a_fixed_root_helper():
+def test_admin_controls_use_a_fixed_socket_broker():
     installer = (ROOT / "deploy" / "install_ubuntu.sh").read_text(encoding="utf-8")
-    helper = (ROOT / "deploy" / "admin-control.sh").read_text(encoding="utf-8")
-    sudoers = (ROOT / "deploy" / "sudoers" / "steam-kakabase-admin-controls").read_text(encoding="utf-8")
-    assert "visudo -cf" in installer
+    broker = (ROOT / "scripts" / "admin_control_broker.py").read_text(encoding="utf-8")
+    socket_unit = (ROOT / "deploy" / "systemd" / "steam-kakabase-admin-control.socket").read_text(encoding="utf-8")
     assert "STEAMKB_ADMIN_CONTROLS_ENABLED true" in installer
-    assert "case \"$1\"" in helper
-    assert "local_backup" in helper and "restart_web" in helper
-    assert "@@APP_USER@@" in sudoers
-    assert "*" not in sudoers
+    assert "steam-kakabase-admin-control.socket" in installer
+    assert "admin-control.sock" in socket_unit and "SocketMode=0600" in socket_unit
+    assert '"local_backup"' in broker and '"restart_web"' in broker
+    assert "shell=True" not in broker
+    assert "visudo" not in installer
+
+
+def test_admin_control_broker_rejects_unknown_actions():
+    module = _load_control_module()
+    calls = []
+    class Result:
+        returncode = 0
+        stdout = "queued"
+        stderr = ""
+    def runner(command, **kwargs):
+        calls.append(command)
+        return Result()
+    assert module.execute("unknown", runner=runner)["ok"] is False
+    assert calls == []
+    assert module.execute("local_backup", runner=runner)["ok"] is True
+    assert calls[0] == module.ACTIONS["local_backup"]
 
 
 def test_offsite_upload_uses_scoped_remote_and_retention(tmp_path):

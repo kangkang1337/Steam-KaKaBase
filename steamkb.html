@@ -1275,7 +1275,7 @@
         </article>
         <article v-if="account?.is_owner" class="panel monitor-card"><h2>{{ t('controls') }}</h2>
           <p class="muted">{{ monitoring.server.controls.enabled ? t('controlNotice') : t('controlsDisabled') }}</p>
-          <div class="monitor-row" v-for="action in monitoring.server.controls.actions" :key="action"><span>{{ controlLabel(action) }}</span><button :disabled="!monitoring.server.controls.enabled || !!controlBusy" @click="runControl(action)">{{ controlBusy === action ? '…' : t('confirm') }}</button></div>
+          <div class="monitor-row" v-for="action in monitoring.server.controls.actions" :key="action"><span>{{ controlLabel(action) }}</span><button :disabled="!monitoring.server.controls.enabled || !!controlBusy" @click="controlConfirmAction=action">{{ controlBusy === action ? '…' : t('confirm') }}</button></div>
           <div class="monitor-row" v-for="event in monitoring.server.controls.recent" :key="event.at + event.action"><span>{{ controlLabel(event.action) }} · {{ formatMonitorTime(event.at) }}</span><strong :class="event.success ? 'good' : 'danger'">{{ event.success ? t('success') : t('failed') }}</strong></div>
         </article>
         <article class="panel monitor-card monitor-admins"><h2>{{ t('adminList') }}</h2>
@@ -1435,6 +1435,14 @@
       <div class="auth-actions"><button type="button" @click="deleteAccountOpen = false">{{ t('cancel') }}</button><button class="danger" type="submit">{{ t('confirmDelete') }}</button></div>
     </form>
   </div>
+  <div v-if="controlConfirmAction" class="auth-dialog" @click.self="controlConfirmAction = null">
+    <section class="auth-card" role="dialog" aria-modal="true" :aria-label="t('controlConfirmTitle')">
+      <h3>{{ t('controlConfirmTitle') }}</h3>
+      <p>{{ controlLabel(controlConfirmAction) }}</p>
+      <p class="auth-note">{{ t('controlConfirmWarning') }}</p>
+      <div class="auth-actions"><button type="button" @click="controlConfirmAction = null">{{ t('cancel') }}</button><button type="button" @click="confirmControl">{{ t('confirm') }}</button></div>
+    </section>
+  </div>
   </div>
 
   <script>
@@ -1485,7 +1493,8 @@
         trackedQueued: '已加入跟踪：{name}，后台正在补数据。', tracked: '已加入跟踪：{name}。',
         fileModeError: '请先运行 start.ps1 或 python steamkb.py，然后通过 http://127.0.0.1:8765 打开页面。不要直接双击 steamkb.html。',
         backendError: '无法连接本地后端。请确认 steamkb.py 正在运行，并且当前页面地址是 http://127.0.0.1:8765。',
-        jsonError: '后端返回了非 JSON 响应，请确认访问的是 Steam-KaKaBase 后端端口。', hotSyncing: '热门榜正在后台同步，当前先显示本地已有数据。'
+        jsonError: '后端返回了非 JSON 响应，请确认访问的是 Steam-KaKaBase 后端端口。', hotSyncing: '热门榜正在后台同步，当前先显示本地已有数据。',
+        controlConfirmTitle: '确认管理操作', controlConfirmWarning: '该操作将在服务器后台执行，并记录操作账号与结果。'
       },
       'en-US': {
         openNav: 'Open navigation', home: 'Home', gameDetail: 'Game details', hotList: 'Popular', nichePool: 'Hidden gems', adminMonitor: 'Admin monitor', monitorToday: 'Today', monitorServer: 'Server', visitors: 'Visitors', requests: 'Requests', newVisitors: 'New visitors', newUsers: 'New users', totalFavorites: 'Favorites', database: 'Database', backup: 'Backups', controls: 'Controls', enabled: 'Enabled', disabled: 'Disabled', controlsDisabled: 'Server controls are not enabled.', controlNotice: 'Owner only; systemd runs each action in the background.', localBackupAction: 'Create local backup', offsiteBackupAction: 'Upload offsite backup', recoveryDrillAction: 'Run recovery drill', restartWebAction: 'Restart web', restartCrawlerAction: 'Restart crawler', failed: 'Failed', queue: 'Queue tasks', heartbeat: 'Crawler heartbeat', lastSuccess: 'Last successful cycle', totalGames: 'Games', snapshots: 'Snapshots', localBackup: 'Latest local backup', offsiteBackup: 'Latest offsite backup', recoveryDrill: 'Recovery drill', drillAt: 'Drill time', success: 'Success', adminList: 'Administrators', addAdmin: 'Add admin', remove: 'Remove', loadingMonitor: 'Loading admin monitor…', serverResources: 'Server resources', cores: 'cores', recentLogs: 'Latest 20 service logs', healthSummary: 'Health summary', healthy: 'Healthy', needsAttention: 'Needs attention',
@@ -1531,7 +1540,8 @@
         trackedQueued: 'Tracking {name}; background data collection is queued.', tracked: 'Now tracking {name}.',
         fileModeError: 'Run start.ps1 or python steamkb.py, then open http://127.0.0.1:8765. Do not open steamkb.html directly.',
         backendError: 'Cannot connect to the backend. Confirm steamkb.py is running and use http://127.0.0.1:8765.',
-        jsonError: 'The backend returned a non-JSON response. Confirm you are using the Steam-KaKaBase backend port.', hotSyncing: 'The popular list is syncing; showing existing cached data for now.'
+        jsonError: 'The backend returned a non-JSON response. Confirm you are using the Steam-KaKaBase backend port.', hotSyncing: 'The popular list is syncing; showing existing cached data for now.',
+        controlConfirmTitle: 'Confirm administrative action', controlConfirmWarning: 'This action runs on the server and records the account and result.'
       }
     };
 
@@ -1601,7 +1611,7 @@
           busy: false,
           favoriteBusy: false,
           account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true, deleteAccountOpen: false, deleteAccountPassword: '',
-          monitoring: null, admins: [], adminUsername: '', controlBusy: null,
+          monitoring: null, admins: [], adminUsername: '', controlBusy: null, controlConfirmAction: null,
           refreshing: false,
           wasRefreshing: false,
           statusTimer: null,
@@ -2592,7 +2602,8 @@
         async addAdmin() { try { await this.api('/api/admin/users', {method:'POST', body: JSON.stringify({username:this.adminUsername})}); this.adminUsername=''; await this.loadMonitoring(); } catch (err) { this.message=err.message; } },
         async removeAdmin(username) { try { await this.api(`/api/admin/users/${encodeURIComponent(username)}/remove`, {method:'POST'}); await this.loadMonitoring(); } catch (err) { this.message=err.message; } },
         controlLabel(action) { return this.t({local_backup:'localBackupAction',offsite_backup:'offsiteBackupAction',recovery_drill:'recoveryDrillAction',restart_web:'restartWebAction',restart_crawler:'restartCrawlerAction'}[action] || action); },
-        async runControl(action) { if (!confirm(`${this.controlLabel(action)}？`)) return; this.controlBusy=action; const controller=new AbortController(); const timeout=setTimeout(() => controller.abort(), 15000); try { const result=await this.api(`/api/admin/controls/${encodeURIComponent(action)}`, {method:'POST', signal:controller.signal}); this.message=result.message; setTimeout(() => this.loadMonitoring(), 1200); } catch (err) { this.message=err.message; } finally { clearTimeout(timeout); this.controlBusy=null; } },
+        confirmControl() { const action=this.controlConfirmAction; this.controlConfirmAction=null; if (action) this.runControl(action); },
+        async runControl(action) { this.controlBusy=action; const controller=new AbortController(); const timeout=setTimeout(() => controller.abort(), 15000); try { const result=await this.api(`/api/admin/controls/${encodeURIComponent(action)}`, {method:'POST', signal:controller.signal}); this.message=result.message; setTimeout(() => this.loadMonitoring(), 1200); } catch (err) { this.message=err.message; } finally { clearTimeout(timeout); this.controlBusy=null; } },
         async submitAuth() { try { const path = this.authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; await this.api(path, {method:'POST', body: JSON.stringify({username:this.authUsername,password:this.authPassword,remember:this.authRemember})}); if (this.authMode === 'register') { this.authMode='login'; this.message=this.t('registerSuccess'); return; } await this.restoreAuth(); this.authOpen=false; this.authPassword=''; } catch (err) { this.message=err.message; } },
         async logout() { await this.api('/api/auth/logout', {method:'POST'}); this.account=null; this.csrfToken=''; await this.loadGames(); },
         async deleteAccount() { try { await this.api('/api/auth/delete-account', {method:'POST', body:JSON.stringify({password:this.deleteAccountPassword})}); this.account=null; this.csrfToken=''; this.deleteAccountPassword=''; this.deleteAccountOpen=false; await this.loadGames(); this.message=this.t('deleteAccount') + '。'; } catch (err) { this.message=err.message; } },

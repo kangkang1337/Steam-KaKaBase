@@ -29,6 +29,9 @@ def test_admin_controls_use_a_real_boolean_disabled_state():
     assert "|| !!controlBusy" in source
     assert "this.controlBusy=null" in source
     assert "controlBusy: ''" not in source
+    assert "controlConfirmAction: null" in source
+    assert "@click=\"confirmControl\"" in source
+    assert "confirm(`${this.controlLabel(action)}？`)" not in source
 
 
 def test_charts_use_deduplicated_axes_with_overlap_protection():

@@ -1,6 +1,5 @@
 import json
 import sqlite3
-import subprocess
 
 import pytest
 from fastapi.testclient import TestClient
@@ -163,17 +162,17 @@ def test_only_owner_can_start_fixed_admin_controls(api_client, monkeypatch):
     monkeypatch.setattr(config, "ADMIN_OWNER_USERNAME", "owner")
     monkeypatch.setattr(config, "ADMIN_CONTROLS_ENABLED", True)
     calls = []
-    def runner(command, **kwargs):
-        calls.append(command)
-        return subprocess.CompletedProcess(command, 0, "queued", "")
-    monkeypatch.setattr(services.subprocess, "run", runner)
+    def send(action):
+        calls.append(action)
+        return {"ok": True, "detail": "queued"}
+    monkeypatch.setattr(services, "_send_admin_control", send)
     owner = {"username": "owner", "password": "password123", "remember": False}
     member = {"username": "member", "password": "password123", "remember": False}
     assert client.post("/api/auth/register", json=owner).status_code == 200
     assert client.post("/api/auth/register", json=member).status_code == 200
     csrf = client.post("/api/auth/login", json=owner).json()["csrf_token"]
     assert client.post("/api/admin/controls/restart_crawler", headers={"X-CSRF-Token": csrf}).status_code == 200
-    assert calls[0][-1] == "restart_crawler"
+    assert calls == ["restart_crawler"]
     client.post("/api/auth/logout")
     member_csrf = client.post("/api/auth/login", json=member).json()["csrf_token"]
     assert client.post("/api/admin/controls/restart_web", headers={"X-CSRF-Token": member_csrf}).status_code == 403

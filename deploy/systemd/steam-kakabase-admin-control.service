@@ -1,0 +1,22 @@
+[Unit]
+Description=Steam-KaKaBase restricted administrator control broker
+Requires=steam-kakabase-admin-control.socket
+After=steam-kakabase-admin-control.socket
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=@@APP_DIR@@
+ExecStart=@@APP_DIR@@/.venv/bin/python scripts/admin_control_broker.py
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true

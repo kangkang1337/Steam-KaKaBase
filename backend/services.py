@@ -5,7 +5,7 @@ import json
 import os
 import re
 import shutil
-import subprocess
+import socket
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -268,18 +268,32 @@ def run_admin_control(action, actor):
     if not _admin_control_lock.acquire(blocking=False):
         raise RuntimeError("已有管理操作正在启动，请稍后再试")
     try:
-        result = subprocess.run(["sudo", "-n", config.ADMIN_CONTROL_HELPER, action], check=False, capture_output=True, text=True, timeout=12)
-        detail = (result.stderr or result.stdout or "已提交给 systemd").strip().replace("\n", " ")[:300]
-        event = {"at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(), "actor": actor, "action": action, "success": result.returncode == 0, "detail": detail}
+        response = _send_admin_control(action)
+        detail = str(response.get("detail") or "已提交给 systemd").strip().replace("\n", " ")[:300]
+        success = bool(response.get("ok"))
+        event = {"at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(), "actor": actor, "action": action, "success": success, "detail": detail}
         _append_admin_control(event)
-        if result.returncode:
+        if not success:
             raise RuntimeError("操作未能启动：" + (detail or "请检查服务日志"))
         return {"ok": True, "action": action, "message": "操作已提交，状态将在监控页刷新后显示"}
-    except subprocess.TimeoutExpired as exc:
+    except (OSError, TimeoutError, ValueError) as exc:
         _append_admin_control({"at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(), "actor": actor, "action": action, "success": False, "detail": "helper timeout"})
-        raise RuntimeError("操作启动超时") from exc
+        raise RuntimeError("控制代理不可用，请检查 steam-kakabase-admin-control.socket") from exc
     finally:
         _admin_control_lock.release()
+
+
+def _send_admin_control(action):
+    payload = (json.dumps({"action": action}, separators=(",", ":")) + "\n").encode("utf-8")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(10)
+        client.connect(config.ADMIN_CONTROL_SOCKET)
+        client.sendall(payload)
+        client.shutdown(socket.SHUT_WR)
+        raw = client.recv(4096)
+    if not raw:
+        raise ValueError("empty control response")
+    return json.loads(raw.decode("utf-8"))
 
 
 def _admin_control_audit_path():

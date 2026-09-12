@@ -1,0 +1,13 @@
+[Unit]
+Description=Steam-KaKaBase restricted administrator control socket
+
+[Socket]
+ListenStream=/run/steam-kakabase/admin-control.sock
+SocketUser=@@APP_USER@@
+SocketGroup=@@APP_USER@@
+SocketMode=0600
+DirectoryMode=0750
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

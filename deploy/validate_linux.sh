@@ -33,6 +33,8 @@ render_unit steam-kakabase-crawler.service
 render_unit steam-kakabase-backup.service
 render_unit steam-kakabase-local-backup.service
 render_unit steam-kakabase-recovery-drill.service
+render_unit steam-kakabase-admin-control.service
+render_unit steam-kakabase-admin-control.socket
 cp "${ROOT}/deploy/systemd/steam-kakabase-backup.timer" "${TEMP_DIR}/steam-kakabase-backup.timer"
 
 systemd-analyze verify \
@@ -41,6 +43,8 @@ systemd-analyze verify \
   "${TEMP_DIR}/steam-kakabase-backup.service" \
   "${TEMP_DIR}/steam-kakabase-local-backup.service" \
   "${TEMP_DIR}/steam-kakabase-recovery-drill.service" \
+  "${TEMP_DIR}/steam-kakabase-admin-control.service" \
+  "${TEMP_DIR}/steam-kakabase-admin-control.socket" \
   "${TEMP_DIR}/steam-kakabase-backup.timer"
 
 sed -e 's|@@DOMAIN@@|steam.example.com|g' \

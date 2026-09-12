@@ -124,22 +124,7 @@ def test_status_endpoint(api_client):
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Cache-Control"] == "no-store"
-    assert "steam_cooldown_remaining_seconds" in payload
-    assert "direct_cooldown_remaining_seconds" in payload
-    assert set(payload["service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
-    assert set(payload["direct_service_cooldowns"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
-    assert "proxy" in payload
-    assert payload["database_schema_version"] == migrations.CURRENT_SCHEMA_VERSION
-    assert payload["niche_max_reviews"] == 50000
-    assert payload["daily_refresh_timezone"] == "Asia/Shanghai"
-    assert payload["search"]["storage"] == "sqlite_fts5_trigram"
-    assert payload["search"]["connection_strategy"] == "short_lived_per_request"
-    assert payload["task_monitor"]["active_total"] == 0
-    assert set(payload["rate_limits"]) == {"steam_api", "steam_store", "itad", "image_cdn"}
-    assert payload["crawler"]["heartbeat_age_seconds"] is None
-    assert payload["crawler"]["lease_remaining_seconds"] == 0
-    assert payload["storage"]["database_bytes"] > 0
-    assert payload["storage"]["wal_bytes"] >= 0
+    assert payload == {"status": "ok"}
 
 
 def test_owner_can_read_monitoring_and_manage_admins(api_client, monkeypatch):
@@ -172,7 +157,7 @@ def test_status_does_not_report_stale_crawler_as_running(api_client):
             json.dumps({"state": "running", "error": None}),
         )
 
-    payload = client.get("/api/status").json()
+    payload = services.get_status()
 
     assert payload["crawler"]["running"] is False
     assert payload["crawler"]["state"] == "stopped"

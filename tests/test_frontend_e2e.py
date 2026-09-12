@@ -218,7 +218,7 @@ def test_navigation_hot_filters_and_niche_pool(browser, frontend_server):
     page, _, errors = open_test_page(browser, frontend_server)
     try:
         expect(page.locator(".home-lines")).to_contain_text("欢迎来到 SteamKaKaBase！")
-        expect(page.locator(".home-monitor span")).to_contain_text("目录已收录 30,000")
+        expect(page.locator(".home-monitor")).to_have_count(0)
         page.get_by_role("button", name="EN", exact=True).click()
         expect(page.locator(".home-lines")).to_contain_text("Welcome to SteamKaKaBase!")
         expect(page.get_by_role("textbox", name="Search Steam games")).to_be_visible()

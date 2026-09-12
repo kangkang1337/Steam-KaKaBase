@@ -17,9 +17,9 @@ def test_frontend_consumes_cooldown_and_proxy_status():
 def test_frontend_consumes_crawler_and_queue_monitoring():
     source = FRONTEND.read_text(encoding="utf-8")
 
-    assert "status.crawler?.running" in source
-    assert "status.task_monitor" in source
-    assert "采集器未运行" in source
+    assert "activePage === 'monitor'" in source
+    assert "monitoring.crawler.queue.active_total" in source
+    assert "monitoring.database.storage.database_bytes" in source
 
 
 def test_charts_use_deduplicated_axes_with_overlap_protection():

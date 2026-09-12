@@ -285,7 +285,11 @@ def create_app():
         return services.get_home_picks()
 
     @application.get("/api/status")
-    def status():
+    def status(request: Request):
+        # Detailed process, queue, quota, storage and third-party cooldown
+        # data belongs exclusively to the administrator monitor.
+        if not auth.is_admin(auth.session(request.cookies.get(auth.SESSION_COOKIE))):
+            return {"status": "ok"}
         payload = services.get_status()
         payload["browser_write_actions_enabled"] = not bool(config.ADMIN_TOKEN)
         if config.IS_PRODUCTION:

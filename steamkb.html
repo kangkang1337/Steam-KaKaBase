@@ -1121,22 +1121,11 @@
       </div>
     </header>
 
-    <div class="status">
-      <span v-if="rateCooldownSeconds">{{ rateCooldownText }}。</span>
-      <span v-else-if="directCooldownSeconds">{{ directCooldownText }}。</span>
-      <span v-else-if="message">{{ message }}</span>
-      <span v-else-if="backendProgress">{{ backendProgress }}</span>
-      <span v-else-if="refreshing">{{ t('backgroundCollecting') }}</span>
-      <span v-else>{{ t('autoCollection', { players: playerRefreshMinutes, prices: priceRefreshHours }) }}</span>
-    </div>
+    <div class="status" v-if="message" role="status">{{ message }}</div>
 
     <main v-if="activePage === 'home'" class="shell single">
       <section class="panel home-placeholder">
         <div class="home-card">
-          <div class="home-monitor" :class="{cooling: rateCooldownSeconds || directCooldownSeconds}">
-            <strong>{{ homeMonitorTitle }}</strong>
-            <span class="home-monitor-detail">{{ homeMonitorDetailLines[0] }}<br>{{ homeMonitorDetailLines[1] }}</span>
-          </div>
           <img class="home-logo" :src="logoSrc" alt="">
           <div class="home-lines">
             <div>{{ t('welcome1') }}</div>
@@ -1809,8 +1798,6 @@
         this.restoreAuth();
         this.loadGames();
         this.loadHomePicks();
-        this.loadStatus();
-        this.statusTimer = setInterval(this.loadStatus, 5000);
         this.clockTimer = setInterval(() => {
           this.nowEpoch = Date.now();
           const expectedKey = this.homeRefreshKey(new Date(this.nowEpoch));
@@ -1860,7 +1847,6 @@
           await nextTick();
           this.renderCharts();
           this.resizeCharts();
-          this.loadStatus();
         },
         regionLabel(region) {
           if (!region) return '';

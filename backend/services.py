@@ -195,14 +195,16 @@ def _monitor_day():
     return datetime.now(config.DAILY_REFRESH_TZINFO).date().isoformat()
 
 
-def record_site_request(visitor_hash):
+def record_site_request(visitor_hash, status_code=200):
     """Store aggregate traffic only; visitor_hash is a server-side HMAC, never an IP."""
     day = _monitor_day()
     stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     with transaction() as conn:
-        conn.execute("INSERT INTO daily_request_metrics(day,request_count,new_visitor_count) VALUES(?,1,0) ON CONFLICT(day) DO UPDATE SET request_count=request_count+1", (day,))
-        inserted = conn.execute("INSERT OR IGNORE INTO site_visitors(visitor_hash,first_seen_day,last_seen_day,first_seen_at,last_seen_at) VALUES(?,?,?,?,?)", (visitor_hash, day, day, stamp, stamp)).rowcount
-        conn.execute("UPDATE site_visitors SET last_seen_day=?,last_seen_at=? WHERE visitor_hash=?", (day, stamp, visitor_hash))
+        errors = 1 if int(status_code) >= 500 else 0
+        conn.execute("INSERT INTO daily_request_metrics(day,request_count,new_visitor_count,server_error_count) VALUES(?,1,0,?) ON CONFLICT(day) DO UPDATE SET request_count=request_count+1,server_error_count=server_error_count+excluded.server_error_count", (day, errors))
+        inserted = conn.execute("INSERT OR IGNORE INTO site_visitors(visitor_hash,first_seen_day,last_seen_day,first_seen_at,last_seen_at) VALUES(?,?,?,?,?)", (visitor_hash, day, day, stamp, stamp)).rowcount if visitor_hash else False
+        if visitor_hash:
+            conn.execute("UPDATE site_visitors SET last_seen_day=?,last_seen_at=? WHERE visitor_hash=?", (day, stamp, visitor_hash))
         if inserted:
             conn.execute("UPDATE daily_request_metrics SET new_visitor_count=new_visitor_count+1 WHERE day=?", (day,))
 
@@ -211,9 +213,10 @@ def admin_monitoring():
     day = _monitor_day()
     status = get_status()
     with transaction(rows=True) as conn:
-        metric = conn.execute("SELECT request_count,new_visitor_count FROM daily_request_metrics WHERE day=?", (day,)).fetchone()
+        metric = conn.execute("SELECT request_count,new_visitor_count,server_error_count FROM daily_request_metrics WHERE day=?", (day,)).fetchone()
         unique_today = conn.execute("SELECT COUNT(*) FROM site_visitors WHERE last_seen_day=?", (day,)).fetchone()[0]
         counts = {
+            "server_errors": int(metric["server_error_count"]) if metric else 0,
             "users_total": conn.execute("SELECT COUNT(*) FROM users").fetchone()[0],
             "new_users_today": conn.execute("SELECT COUNT(*) FROM users WHERE substr(created_at,1,10)=?", (day,)).fetchone()[0],
             "favorites_total": conn.execute("SELECT COUNT(*) FROM user_favorites").fetchone()[0],
@@ -233,12 +236,13 @@ def admin_monitoring():
     except (OSError, ValueError):
         drill = None
     return {
-        "today": {"day": day, "requests": int(metric["request_count"]) if metric else 0, "visitors": unique_today, "new_visitors": int(metric["new_visitor_count"]) if metric else 0, **{key: counts[key] for key in ("new_users_today", "users_total", "favorites_total")}},
+        "today": {"day": day, "requests": int(metric["request_count"]) if metric else 0, "visitors": unique_today, "new_visitors": int(metric["new_visitor_count"]) if metric else 0, "server_errors": int(metric["server_error_count"]) if metric else 0, **{key: counts[key] for key in ("new_users_today", "users_total", "favorites_total")}},
         "server": {"web": "ok", "crawler": status.get("crawler", {}), "database": "ok" if status.get("database_schema_version") else "unavailable", "backup": "configured" if config.DB_DAILY_BACKUP_ENABLED else "disabled", "resources": _system_resources(), "controls": {"read_only": True, "future_actions": ["restart_web", "restart_crawler", "run_backup"]}},
         "crawler": {"queue": status.get("task_monitor", {}), "rate_limits": status.get("rate_limits", {}), "heartbeat": status.get("crawler", {}).get("heartbeat_at"), "heartbeat_age_seconds": status.get("crawler", {}).get("heartbeat_age_seconds"), "last_success_at": status.get("crawler", {}).get("last_cycle_at"), "state": status.get("crawler", {}).get("state")},
         "database": {"schema": status.get("database_schema_version"), "storage": status.get("storage", {}), **{key: counts[key] for key in ("games_total", "player_snapshots", "price_snapshots", "review_snapshots")}},
         "backups": {"local": {"at": counts["local_backup_at"], "path": counts["local_backup_path"]}, "offsite": {"at": counts["offsite_backup_at"], "path": counts["offsite_backup_path"]}, "drill": drill},
         "recent_logs": _recent_log_lines(),
+        "health_summary": _health_summary(status, counts, drill),
     }
 
 
@@ -276,6 +280,29 @@ def _recent_log_lines(limit=20):
         return []
     secret = re.compile(r"(?i)(authorization:\s*bearer\s+|(?:token|key|password|secret)=)[^\s&]+")
     return [secret.sub(r"\1[redacted]", line) for line in text.splitlines()[-limit:]]
+
+
+def _health_summary(status, counts, drill):
+    resources = _system_resources()
+    disk = resources["disk"]
+    disk_percent = round(disk["used_bytes"] * 100 / max(1, disk["total_bytes"]))
+    crawler = status.get("crawler", {})
+    heartbeat_age = crawler.get("heartbeat_age_seconds")
+    now = datetime.now(timezone.utc)
+    def fresh(stamp, hours=30):
+        try:
+            return (now - datetime.fromisoformat(stamp)).total_seconds() <= hours * 3600
+        except (TypeError, ValueError):
+            return False
+    items = [
+        {"label": "5xx", "value": counts.get("server_errors", 0), "ok": not counts.get("server_errors", 0), "detail": "当天没有 5xx" if not counts.get("server_errors", 0) else "当天出现 5xx，请查看日志"},
+        {"label": "Crawler", "value": crawler.get("state", "stopped"), "ok": bool(crawler.get("running")) and heartbeat_age is not None and heartbeat_age <= 180, "detail": "心跳正常" if bool(crawler.get("running")) and heartbeat_age is not None and heartbeat_age <= 180 else "Crawler 未运行或心跳超过 3 分钟"},
+        {"label": "本地备份", "value": counts.get("local_backup_at") or "-", "ok": fresh(counts.get("local_backup_at")), "detail": "最近 30 小时内完成" if fresh(counts.get("local_backup_at")) else "本地备份超过 30 小时未更新"},
+        {"label": "异地备份", "value": counts.get("offsite_backup_at") or "-", "ok": fresh(counts.get("offsite_backup_at")), "detail": "最近 30 小时内完成" if fresh(counts.get("offsite_backup_at")) else "异地备份超过 30 小时未更新"},
+        {"label": "恢复演练", "value": "成功" if drill and drill.get("success") else "-", "ok": bool(drill and drill.get("success")), "detail": "恢复演练已通过" if drill and drill.get("success") else "尚未记录成功的恢复演练"},
+        {"label": "磁盘", "value": f"{disk_percent}%", "ok": disk_percent < 85, "detail": "磁盘空间充足" if disk_percent < 85 else "磁盘使用率达到 85%，请清理或扩容"},
+    ]
+    return {"ok": all(item["ok"] for item in items), "items": items}
 
 
 def search(term, limit=12, offset=0):

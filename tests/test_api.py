@@ -140,6 +140,10 @@ def test_owner_can_read_monitoring_and_manage_admins(api_client, monkeypatch):
     monitor = client.get("/api/admin/monitoring")
     assert monitor.status_code == 200
     assert {"today", "server", "crawler", "database", "backups"} <= set(monitor.json())
+    assert {"resources", "health_summary", "recent_logs"} <= set(monitor.json()["server"]) | set(monitor.json())
+    services.record_site_request(None, 500)
+    health = client.get("/api/admin/monitoring").json()["health_summary"]
+    assert any(item["label"] == "5xx" and not item["ok"] for item in health["items"])
     with config.LOG_PATH.open("a", encoding="utf-8") as handle:
         handle.write("token=private-value monitor test\n")
     assert "private-value" not in "\n".join(client.get("/api/admin/monitoring").json()["recent_logs"])

@@ -127,12 +127,12 @@ def create_app():
     async def traffic_metrics(request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if request.method == "GET" and not path.startswith(("/assets/", "/api/admin/")) and path not in {"/health", "/ready", "/favicon.ico"}:
-            token = request.cookies.get("steamkb_visitor") or secrets.token_urlsafe(24)
-            digest = hmac.new(config.VISITOR_METRICS_SECRET.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not path.startswith(("/assets/", "/api/admin/")) and path not in {"/health", "/ready", "/favicon.ico"}:
+            token = request.cookies.get("steamkb_visitor") or (secrets.token_urlsafe(24) if request.method == "GET" else None)
+            digest = hmac.new(config.VISITOR_METRICS_SECRET.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest() if token else None
             try:
-                services.record_site_request(digest)
-                if "steamkb_visitor" not in request.cookies:
+                services.record_site_request(digest, response.status_code)
+                if token and "steamkb_visitor" not in request.cookies:
                     response.set_cookie("steamkb_visitor", token, max_age=31536000, httponly=True, samesite="lax", secure=config.IS_PRODUCTION)
             except Exception as exc:
                 log_event(f"traffic metrics failed: {exc}")

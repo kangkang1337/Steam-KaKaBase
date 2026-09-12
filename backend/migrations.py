@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 
 
 class DatabaseMigrationError(RuntimeError):
@@ -427,6 +427,10 @@ def _migration_9_admin_monitoring(conn):
     """)
 
 
+def _migration_10_monitor_errors(conn):
+    _add_column(conn, "daily_request_metrics", "server_error_count", "INTEGER NOT NULL DEFAULT 0")
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_1_initial_schema),
     Migration(2, "legacy_columns", _migration_2_legacy_columns),
@@ -437,6 +441,7 @@ MIGRATIONS = (
     Migration(7, "bilingual_search_aliases", _migration_7_search_aliases),
     Migration(8, "user_favorites", _migration_8_user_favorites),
     Migration(9, "admin_monitoring", _migration_9_admin_monitoring),
+    Migration(10, "monitor_error_counts", _migration_10_monitor_errors),
 )
 
 

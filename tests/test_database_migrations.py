@@ -4,7 +4,37 @@ from pathlib import Path
 
 import pytest
 
-from backend import migrations
+from backend import db, migrations
+
+
+def test_database_module_has_no_runtime_dependency_and_initializes_current_schema(tmp_path, monkeypatch):
+    """The persistence layer must remain usable without importing the crawler runtime."""
+    database = tmp_path / "fresh.sqlite3"
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(db, "DB_PATH", database)
+    monkeypatch.setattr(db.config, "DB_MIGRATION_BACKUP_DIR", backups)
+
+    db.init_db()
+
+    source = Path(db.__file__).read_text(encoding="utf-8")
+    assert "_runtime" not in source
+    with sqlite3.connect(database) as conn:
+        assert migrations.get_schema_version(conn) == migrations.CURRENT_SCHEMA_VERSION
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+        conn.execute(
+            "INSERT INTO games(appid, name, updated_at) VALUES (1, 'Recovered game', '2026-01-01T00:00:00+00:00')"
+        )
+        conn.execute(
+            "INSERT INTO player_snapshots(appid, player_count, fetched_at) VALUES (1, 42, '2026-01-02T00:00:00+00:00')"
+        )
+        conn.execute("DELETE FROM game_latest_state WHERE appid=1")
+
+    db.init_db()
+
+    with sqlite3.connect(database) as conn:
+        assert conn.execute(
+            "SELECT current_players FROM game_latest_state WHERE appid=1"
+        ).fetchone() == (42,)
 
 
 def test_migrate_legacy_database_creates_backup_and_history(tmp_path):

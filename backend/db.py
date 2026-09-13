@@ -4,7 +4,9 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
+from . import config
 from .config import DB_PATH, DB_TIMEOUT_SECONDS
+from .logging_utils import log_event
 from .migrations import (
     CURRENT_SCHEMA_VERSION,
     DatabaseMigrationError,
@@ -13,13 +15,10 @@ from .migrations import (
     migrate_database,
     restore_database_backup,
 )
-from ._runtime import (
-    cleanup_old_records_once,
-    compact_player_snapshots_once,
-    compact_price_snapshots_once,
-    ensure_schema,
-    init_db,
-)
+from .utils import age_minutes, infer_name_from_description, is_placeholder_name, now_iso
+
+
+_SEEDED_DEFAULT_APPIDS = (730, 570, 1172470, 578080)
 
 
 def connect(*, rows=False):
@@ -42,8 +41,132 @@ def transaction(*, rows=False):
         conn.close()
 
 
-def now_iso():
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+def is_due(last_fetched_at, interval_minutes):
+    current_age = age_minutes(last_fetched_at)
+    return current_age is None or current_age >= interval_minutes
+
+
+def init_db():
+    """Migrate and validate the SQLite database without importing application runtime."""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    result = migrate_database(
+        DB_PATH,
+        timeout=DB_TIMEOUT_SECONDS,
+        backup_dir=config.DB_MIGRATION_BACKUP_DIR,
+        backup_keep=config.DB_MIGRATION_BACKUP_KEEP,
+    )
+    if result["applied"]:
+        log_event(
+            f"database migrated v{result['from_version']} -> "
+            f"v{result['to_version']} backup={result['backup_path'] or 'not-needed'}"
+        )
+    with transaction() as conn:
+        conn.execute("PRAGMA journal_mode = WAL")
+        ensure_schema(conn)
+        _reconcile_latest_state(conn)
+        _clear_legacy_seeded_defaults(conn)
+        _repair_placeholder_names(conn)
+        _enqueue_due_niche_price_previews(conn)
+        conn.execute("PRAGMA optimize")
+
+
+def ensure_schema(conn):
+    """Compatibility validator; schema changes are defined in migrations.py."""
+    from .migrations import validate_schema
+
+    return validate_schema(conn)
+
+
+def _reconcile_latest_state(conn):
+    """Rebuild absent latest-state rows from snapshots left by older releases."""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO game_latest_state(
+            appid, current_players, players_updated_at, cn_price, cn_price_final,
+            cn_price_currency, cn_discount_percent, price_updated_at, review_score,
+            total_reviews, review_updated_at, historical_low_cny,
+            historical_low_updated_at, updated_at
+        )
+        SELECT g.appid,
+          (SELECT p.player_count FROM player_snapshots p WHERE p.appid=g.appid ORDER BY p.fetched_at DESC LIMIT 1),
+          (SELECT p.fetched_at FROM player_snapshots p WHERE p.appid=g.appid ORDER BY p.fetched_at DESC LIMIT 1),
+          (SELECT p.final_formatted FROM price_snapshots p WHERE p.appid=g.appid AND p.region='CN' ORDER BY p.fetched_at DESC LIMIT 1),
+          (SELECT p.final FROM price_snapshots p WHERE p.appid=g.appid AND p.region='CN' ORDER BY p.fetched_at DESC LIMIT 1),
+          (SELECT p.currency FROM price_snapshots p WHERE p.appid=g.appid AND p.region='CN' ORDER BY p.fetched_at DESC LIMIT 1),
+          (SELECT p.discount_percent FROM price_snapshots p WHERE p.appid=g.appid AND p.region='CN' ORDER BY p.fetched_at DESC LIMIT 1),
+          (SELECT p.fetched_at FROM price_snapshots p WHERE p.appid=g.appid AND p.region='CN' ORDER BY p.fetched_at DESC LIMIT 1),
+          (SELECT r.review_score FROM review_snapshots r WHERE r.appid=g.appid ORDER BY r.fetched_at DESC LIMIT 1),
+          (SELECT r.total_reviews FROM review_snapshots r WHERE r.appid=g.appid ORDER BY r.fetched_at DESC LIMIT 1),
+          (SELECT r.fetched_at FROM review_snapshots r WHERE r.appid=g.appid ORDER BY r.fetched_at DESC LIMIT 1),
+          (SELECT h.amount_cny FROM historical_lows h WHERE h.appid=g.appid AND h.country='CN' LIMIT 1),
+          (SELECT h.fetched_at FROM historical_lows h WHERE h.appid=g.appid AND h.country='CN' LIMIT 1),
+          g.updated_at
+        FROM games g
+        """
+    )
+    conn.execute(
+        """
+        UPDATE niche_pool
+        SET cn_price = (SELECT s.cn_price FROM game_latest_state s WHERE s.appid = niche_pool.appid),
+            cn_price_final = (SELECT s.cn_price_final FROM game_latest_state s WHERE s.appid = niche_pool.appid),
+            cn_price_currency = (SELECT s.cn_price_currency FROM game_latest_state s WHERE s.appid = niche_pool.appid),
+            cn_discount_percent = COALESCE((SELECT s.cn_discount_percent FROM game_latest_state s WHERE s.appid = niche_pool.appid), 0)
+        WHERE EXISTS (
+            SELECT 1 FROM game_latest_state s
+            WHERE s.appid = niche_pool.appid
+              AND s.price_updated_at IS NOT NULL
+              AND s.price_updated_at >= niche_pool.fetched_at
+        )
+        """
+    )
+
+
+def _clear_legacy_seeded_defaults(conn):
+    """Untrack the discontinued first-run games exactly once."""
+    if get_crawl_state(conn, "default_apps_cleared_v1"):
+        return
+    placeholders = ",".join("?" for _ in _SEEDED_DEFAULT_APPIDS)
+    conn.execute(
+        f"UPDATE games SET tracked = 0, updated_at = ? WHERE appid IN ({placeholders})",
+        (now_iso(), *_SEEDED_DEFAULT_APPIDS),
+    )
+    set_crawl_state(conn, "default_apps_cleared_v1", now_iso())
+
+
+def _repair_placeholder_names(conn):
+    for appid, name, description in conn.execute(
+        "SELECT appid, name, short_description FROM games"
+    ).fetchall():
+        if not is_placeholder_name(name):
+            continue
+        inferred_name = infer_name_from_description(description)
+        if inferred_name:
+            conn.execute(
+                "UPDATE games SET name = ?, updated_at = ? WHERE appid = ?",
+                (inferred_name, now_iso(), appid),
+            )
+
+
+def _enqueue_due_niche_price_previews(conn):
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=config.PRICE_REFRESH_HOURS)
+    ).replace(microsecond=0).isoformat()
+    appids = [
+        int(row[0])
+        for row in conn.execute(
+            """
+            SELECT n.appid
+            FROM niche_pool n
+            LEFT JOIN game_latest_state s ON s.appid = n.appid
+            WHERE n.eligible = 1
+              AND (s.price_updated_at IS NULL OR s.price_updated_at < ?)
+            ORDER BY n.weighted_score DESC, n.total_reviews DESC
+            LIMIT 50
+            """,
+            (cutoff,),
+        ).fetchall()
+    ]
+    enqueue_crawl_tasks_in_conn(conn, appids, "preview", 60)
 
 
 def _lease_times(lease_seconds, moment=None):
@@ -898,11 +1021,10 @@ def fail_crawl_tasks(appids, task_type, error, retry_minutes=60, terminal=False)
 
 
 __all__ = [
-    "claim_crawl_tasks", "cleanup_old_records_once", "compact_player_snapshots_once",
-    "compact_price_snapshots_once", "complete_crawl_tasks", "connect",
+    "claim_crawl_tasks", "complete_crawl_tasks", "connect",
     "enqueue_crawl_task_once_in_conn", "enqueue_crawl_tasks",
     "enqueue_crawl_tasks_in_conn", "ensure_schema",
-    "fail_crawl_tasks", "get_crawl_state", "init_db",
+    "fail_crawl_tasks", "get_crawl_state", "init_db", "is_due",
     "acquire_process_lease", "get_process_lease", "release_process_lease",
     "release_process_lease_by_pid",
     "renew_process_lease",

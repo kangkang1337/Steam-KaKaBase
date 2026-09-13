@@ -1,5 +1,9 @@
 # Steam-KaKaBase
 
+## v0.6.3: Runtime boundary cleanup
+
+Completed the current runtime-module cleanup pass. Web services, the crawler scheduler, and the standalone crawler process no longer import `_runtime.py` directly; remaining legacy orchestration access is isolated behind one explicit compatibility boundary. Added a small no-network game-command module for track/untrack writes, while preserving the existing Web read-only cache rule, crawler-only external collection, task queue behavior, proxy fallback, rate limiting, and SQLite transaction semantics. Documentation now records the boundary and the path to physically retire it after a stable production crawler cycle.
+
 ## v0.6.2: Reliable account submissions
 
 Improved public account registration and login reliability. Gateway-generated HTML errors are now converted into clear, safe user-facing messages; `429` rate limits and temporary `5xx` service failures are handled explicitly instead of being misreported as an incorrect backend port. Account forms validate username and password lengths before submission, display structured API validation errors safely, and disable the confirmation button while a request is in flight to prevent accidental duplicate requests. Nginx allows a small normal setup burst while FastAPI retains its independent rolling per-IP authentication limit.
@@ -20,7 +24,7 @@ Fixed the administrator control panel so owner-only maintenance actions work wit
 
 一个面向本地运行的 Steam 数据面板，设计参考 SteamDB。用于查看游戏价格与本地历史快照、在线人数趋势、玩家评价、热门榜和每日小众宝藏推荐。
 
-当前版本：`v0.6.2`
+当前版本：`v0.6.3`
 
 > 项目支持本地运行和单机 VPS 自托管。生产部署使用 Nginx、HTTPS、UFW、systemd、受限写接口与异地 SQLite 备份；仍建议先在个人规模下运行并持续观察 Steam/ITAD 的限流情况。
 

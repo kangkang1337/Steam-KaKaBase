@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from backend import db, migrations
+from backend import db, game_queries, migrations
 
 
 def test_database_module_has_no_runtime_dependency_and_initializes_current_schema(tmp_path, monkeypatch):
@@ -35,6 +35,11 @@ def test_database_module_has_no_runtime_dependency_and_initializes_current_schem
         assert conn.execute(
             "SELECT current_players FROM game_latest_state WHERE appid=1"
         ).fetchone() == (42,)
+
+
+def test_game_query_module_has_no_runtime_dependency():
+    source = Path(game_queries.__file__).read_text(encoding="utf-8")
+    assert "_runtime" not in source
 
 
 def test_migrate_legacy_database_creates_backup_and_history(tmp_path):

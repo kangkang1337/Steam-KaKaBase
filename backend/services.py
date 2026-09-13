@@ -12,6 +12,14 @@ from pathlib import Path
 import urllib.parse
 
 from . import _runtime, config
+from .game_queries import (
+    clean_game,
+    ensure_game_from_catalog,
+    get_game_payload,
+    list_games as query_list_games,
+    list_hot_games as query_list_hot_games,
+    search_games,
+)
 from .db import (
     CURRENT_SCHEMA_VERSION,
     enqueue_crawl_task_once_in_conn,
@@ -40,13 +48,13 @@ _admin_control_lock = threading.Lock()
 
 
 def list_games():
-    return _runtime.list_games()
+    return query_list_games()
 
 
 def list_hot_games(limit):
     requested = min(max(1, int(limit)), _runtime.HOTLIST_TARGET)
     return {
-        "games": _runtime.list_hot_games(requested),
+        "games": query_list_hot_games(requested),
         "count": _runtime.count_hot_games(),
         "version": _runtime.hot_games_version(),
         "queued": False,
@@ -387,7 +395,7 @@ def _health_summary(status, counts, drill):
 def search(term, limit=12, offset=0):
     if not term:
         return {"items": [], "limit": limit, "offset": offset, "has_more": False}
-    items = _runtime.search_steam(term, limit=limit + 1, offset=offset)
+    items = search_games(term, limit=limit + 1, offset=offset)
     return {
         "items": items[:limit],
         "limit": limit,
@@ -397,7 +405,7 @@ def search(term, limit=12, offset=0):
 
 
 def get_game(appid, history_limit=500):
-    return _runtime.get_game_payload(int(appid), history_limit)
+    return get_game_payload(int(appid), history_limit)
 
 
 def _enqueue_game_refresh(appids, priority=100):
@@ -422,7 +430,7 @@ def untrack_game(appid):
 
 
 def list_user_favorites(user_id):
-    return [_runtime.clean_game(row, summary=True) for row in query_user_favorite_games(user_id)]
+    return [clean_game(row, summary=True) for row in query_user_favorite_games(user_id)]
 
 
 def add_user_favorite(user_id, appid, name=None, header_image=None):
@@ -459,7 +467,7 @@ def request_game_detail(appid):
     appid = int(appid)
     with transaction() as conn:
         game_exists = bool(conn.execute("SELECT 1 FROM games WHERE appid=?", (appid,)).fetchone())
-        if not game_exists and not _runtime.ensure_game_from_catalog(conn, appid):
+        if not game_exists and not ensure_game_from_catalog(conn, appid):
             return {"ok": False, "appid": appid, "queued": False, "reason": "not_found"}
         existing = bool(conn.execute(
             """

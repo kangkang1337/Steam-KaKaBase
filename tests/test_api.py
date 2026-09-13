@@ -268,8 +268,8 @@ def test_empty_search_never_calls_steam(api_client, monkeypatch):
 def test_search_endpoint_supports_pagination(api_client, monkeypatch):
     _, client = api_client
     monkeypatch.setattr(
-        services._runtime,
-        "search_steam",
+        services,
+        "search_games",
         lambda _term, limit, offset: [
             {"appid": offset + index, "name": f"Game {index}"}
             for index in range(limit)

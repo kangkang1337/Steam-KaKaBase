@@ -98,7 +98,9 @@ Steam 目录 `steam_catalog` 使用持久化游标按日推进，最终完成 Ap
 ```text
 backend/
 ├── config.py          环境变量、常量和路径
-├── logging_utils.py   日志与轮转入口
+├── utils.py           无副作用的时间、名称、重试与缓存清理工具
+├── pricing.py         金额换算与史低判断
+├── logging_utils.py   日志、URL 脱敏与日志文件轮转
 ├── db.py              SQLite 连接、迁移和任务状态
 ├── steam_client.py    Steam / ITAD 请求、代理、重试和冷却
 ├── catalog.py         Steam AppList 扫描、游标和增量 enrich
@@ -111,7 +113,7 @@ backend/
 └── _runtime.py        模块拆分期间的私有兼容实现
 ```
 
-Web 入口为 `python -m backend.main`，采集入口为 `python -m backend.crawler_main`。`python steamkb.py` 作为兼容 Web 入口保留。`start.ps1` 会启动并监控两个独立进程；业务配置统一由 `.env` 和 `backend/config.py` 解析。新增后端代码应优先通过公开模块调用，不应继续扩大 `_runtime.py`。
+Web 入口为 `python -m backend.main`，采集入口为 `python -m backend.crawler_main`。`python steamkb.py` 作为兼容 Web 入口保留。`start.ps1` 会启动并监控两个独立进程；业务配置统一由 `.env` 和 `backend/config.py` 解析。基础的时间、名称、价格和日志工具已从 `_runtime.py` 独立出来；新增后端代码应优先通过公开模块调用，不应继续扩大 `_runtime.py`。
 
 API 由 FastAPI 提供，并包含 `/health`、`/ready`；开发环境提供 `/docs`，生产环境会关闭 API 文档。所有 GET 页面和 API 都严格读取缓存，不会写数据库、投递任务、访问 Steam/ITAD 或下载 CDN 图片。受管理员令牌保护的 POST 只向 SQLite 投递任务，crawler 独立消费。SQLite 中的进程租约确保同一数据库同一时刻只有一个 crawler。
 

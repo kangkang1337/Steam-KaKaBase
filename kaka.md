@@ -24,7 +24,7 @@
 
 当前已知限制：
 
-- `config.py` 已独立解析环境变量；`db.py` 已拥有任务队列和主要只读查询；`catalog.py` 已拥有 AppList 扫描和 enrich；`steam_client.py` 已拥有 HTTP 与 Steam/ITAD 端点；`crawler.py` 已接管热门榜、玩家、商店预览和 ITAD 史低编排；首页推荐业务已迁入 `services.py`。`_runtime.py` 仍保留尚未迁移的写入逻辑和兼容入口。
+- `config.py` 已独立解析环境变量；`utils.py`、`pricing.py` 和 `logging_utils.py` 已拥有无副作用的时间、名称、价格、URL 脱敏、缓存清理及日志文件工具；`db.py` 已拥有任务队列和主要只读查询；`catalog.py` 已拥有 AppList 扫描和 enrich；`steam_client.py` 已拥有 HTTP 与 Steam/ITAD 端点；`crawler.py` 已接管热门榜、玩家、商店预览和 ITAD 史低编排；首页推荐业务已迁入 `services.py`。`_runtime.py` 仍保留尚未迁移的写入逻辑和兼容入口。
 - v0.5.0 已改为账号级同步收藏；未登录收藏保留在本机浏览器，不能跨设备同步。生产部署强制 HTTPS，账号 Cookie 使用 Secure；认证与收藏接口按 IP 限流，账号可自行删除并清除其同步数据。
 - v0.6.0 新增仅管理员可见的监控页：匿名访问聚合、服务资源、crawler、数据库、备份、恢复演练和脱敏日志集中展示。普通用户不能读取运行指标；只有服主能维护管理员名单，并可触发固定的本地/异地备份、隔离恢复演练和 Web/crawler 重启。健康摘要会提示 5xx、心跳、备份、演练和磁盘异常。
 - v0.6.1 修复服主控制组件在 systemd `NoNewPrivileges` 沙箱下无法调用 sudo 的问题，改为权限受限的本机 Unix Socket 控制代理；网页确认弹窗替代浏览器原生弹窗，手动本地备份会更新监控时间。

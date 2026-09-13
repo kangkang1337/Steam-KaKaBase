@@ -18,6 +18,33 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from . import config
+from .logging_utils import log_event, rotate_log_file_once, safe_log_url
+from .pricing import (
+    CNY_RATES,
+    amount_int_to_cny,
+    cached_historical_low_match as _cached_historical_low_match,
+    compare_historical_low as _compare_historical_low,
+    effective_historical_low,
+    price_row_cny,
+)
+from .utils import (
+    UNKNOWN_GAME_NAME,
+    age_minutes,
+    clean_hot_name,
+    clean_name,
+    cleanup_image_cache,
+    daily_refresh_key,
+    fallback_game_name,
+    infer_name_from_description,
+    is_obvious_non_game_name,
+    is_placeholder_name,
+    is_recent_release,
+    now_iso,
+    parse_iso,
+    parse_release_date,
+    release_recency_factor,
+    retry_delay,
+)
 
 
 ROOT = config.ROOT
@@ -111,7 +138,6 @@ DIRECT_FAILURE_COUNT = {service: 0 for service in EXTERNAL_SERVICES}
 REFRESH_LOCK = threading.Lock()
 HOT_REFRESH_LOCK = threading.Lock()
 STATUS_LOCK = threading.Lock()
-LOG_LOCK = threading.Lock()
 DETAIL_BACKFILL_LOCK = threading.Lock()
 DETAIL_BACKFILLING = set()
 PREVIEW_BACKFILL_LOCK = threading.Lock()
@@ -144,20 +170,6 @@ REFRESH_STATUS = {
     "historylow_running": False,
 }
 TRACKED_REGIONS = ["US", "CN", "JP", "HK", "TW", "KR", "GB", "DE", "FR", "BR", "RU", "TR", "AR"]
-CNY_RATES = {
-    "CNY": 1,
-    "USD": 7.2,
-    "EUR": 7.8,
-    "GBP": 9.1,
-    "JPY": 0.049,
-    "KRW": 0.0052,
-    "HKD": 0.92,
-    "TWD": 0.23,
-    "BRL": 1.35,
-    "RUB": 0.08,
-    "TRY": 0.17,
-    "ARS": 0.005,
-}
 SEEDED_DEFAULT_APPS = [
     {"appid": 730, "name": "Counter-Strike 2"},
     {"appid": 570, "name": "Dota 2"},
@@ -165,8 +177,6 @@ SEEDED_DEFAULT_APPS = [
     {"appid": 578080, "name": "PUBG: BATTLEGROUNDS"},
 ]
 DEFAULT_APPS = []
-UNKNOWN_GAME_NAME = "未命名游戏"
-PLACEHOLDER_NAME_RE = re.compile(r"^(?:Steam\s+)?App\s+\d+$", re.IGNORECASE)
 ALLOWED_IMAGE_HOSTS = {
     "shared.akamai.steamstatic.com",
     "shared.cloudflare.steamstatic.com",
@@ -190,70 +200,10 @@ def database_connection():
         conn.close()
 
 
-def now_iso():
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def log_event(message):
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    line = f"[{now_iso()}] {message}"
-    print(line)
-    try:
-        with LOG_LOCK:
-            with LOG_PATH.open("a", encoding="utf-8") as fp:
-                fp.write(line + "\n")
-    except OSError as exc:
-        print(f"[log] {exc}")
-
-
 def polite_store_delay():
     delay = random.uniform(STORE_REQUEST_DELAY_MIN_SECONDS, STORE_REQUEST_DELAY_MAX_SECONDS)
     if delay > 0:
         time.sleep(delay)
-
-
-def parse_iso(value):
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
-
-
-def age_minutes(value):
-    parsed = parse_iso(value)
-    if not parsed:
-        return None
-    return (datetime.now(timezone.utc) - parsed).total_seconds() / 60
-
-
-def daily_refresh_key(moment=None):
-    """Use 00:10 in the configured business time zone for daily homepage picks."""
-    current = moment or datetime.now(timezone.utc)
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=DAILY_REFRESH_TZINFO)
-    else:
-        current = current.astimezone(DAILY_REFRESH_TZINFO)
-    boundary = current.replace(hour=0, minute=10, second=0, microsecond=0)
-    if current < boundary:
-        current -= timedelta(days=1)
-    return current.strftime("%Y-%m-%d")
-
-
-def retry_delay(attempt):
-    return min(8, (0.8 * (2**attempt)) + random.uniform(0, 0.35))
-
-
-def safe_log_url(url):
-    """Keep diagnostics useful without writing API credentials to disk."""
-    parsed = urllib.parse.urlsplit(str(url))
-    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-    redacted = [
-        (key, "***" if key.lower() in {"key", "api_key", "apikey", "token", "access_token"} else value)
-        for key, value in pairs
-    ]
-    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urllib.parse.urlencode(redacted), ""))
 
 
 def external_service_for_url(url):
@@ -371,27 +321,9 @@ def record_proxy_fallback(success, error=None):
 
 
 def cleanup_image_cache_once():
-    if not IMAGE_CACHE_DIR.is_dir():
-        return
-    cutoff = time.time() - (IMAGE_CACHE_RETENTION_DAYS * 86400)
-    entries = []
-    for path in IMAGE_CACHE_DIR.iterdir():
-        if not path.is_file():
-            continue
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        if stat.st_atime < cutoff:
-            path.unlink(missing_ok=True)
-            continue
-        entries.append((stat.st_atime, stat.st_size, path))
-    total = sum(size for _, size, _ in entries)
-    for _, size, path in sorted(entries):
-        if total <= IMAGE_CACHE_MAX_BYTES:
-            break
-        path.unlink(missing_ok=True)
-        total -= size
+    return cleanup_image_cache(
+        IMAGE_CACHE_DIR, IMAGE_CACHE_RETENTION_DAYS, IMAGE_CACHE_MAX_BYTES
+    )
 
 
 class SteamRateLimited(Exception):
@@ -508,76 +440,6 @@ def steam_httpx_options():
 def proxy_httpx_options():
     proxy = STEAM_PROXY_URL if proxy_fallback_enabled() else None
     return {"proxy": proxy, "trust_env": False, "verify": STEAM_PROXY_VERIFY_TLS}
-
-
-def is_placeholder_name(value):
-    return not value or bool(PLACEHOLDER_NAME_RE.match(str(value).strip()))
-
-
-def clean_name(value):
-    return UNKNOWN_GAME_NAME if is_placeholder_name(value) else str(value).strip()
-
-
-def is_obvious_non_game_name(value):
-    """Hide obvious non-games while AppDetails classification is pending."""
-    text = str(value or "").strip().lower()
-    return bool(re.search(
-        r"(?:\bdemo\b|\bdlc\b|soundtrack|dedicated server|\bserver tool\b|"
-        r"sdk\b|editor\b|benchmark\b|artbook|wallpaper)",
-        text,
-    ))
-
-
-def infer_name_from_description(value):
-    if not value:
-        return None
-    match = re.search(r"《([^》]{2,80})》", str(value))
-    if match:
-        return match.group(1).strip()
-    return None
-
-
-def parse_release_date(value):
-    text = str(value or "").strip()
-    match = re.search(r"\b(19\d{2}|20\d{2})\b", text)
-    if not match:
-        return None
-    year, month, day = int(match.group(1)), 1, 1
-    month_match = re.search(r"\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)", text, re.IGNORECASE)
-    if month_match:
-        month = datetime.strptime(month_match.group(2)[:3].title(), "%b").month
-        day = int(month_match.group(1))
-    else:
-        chinese_match = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})?", text)
-        if chinese_match:
-            year = int(chinese_match.group(1))
-            month = int(chinese_match.group(2))
-            day = int(chinese_match.group(3) or 1)
-    try:
-        return datetime(year, month, day, tzinfo=timezone.utc)
-    except ValueError:
-        return None
-
-
-def is_recent_release(value, years=8):
-    released = parse_release_date(value)
-    if released is None:
-        return False
-    return released >= datetime.now(timezone.utc) - timedelta(days=365.25 * years)
-
-
-def release_recency_factor(value):
-    released = parse_release_date(value)
-    if released is None:
-        return 0.0
-    age_days = max(0.0, (datetime.now(timezone.utc) - released).total_seconds() / 86400)
-    if age_days <= 365.25 * 3:
-        return 1.0
-    if age_days <= 365.25 * 5:
-        return 0.95
-    if age_days <= 365.25 * 8:
-        return 0.85
-    return 0.0
 
 
 def init_db():
@@ -984,16 +846,6 @@ def preview_attempt_key(appid):
     return f"preview_attempt_{int(appid)}"
 
 
-def clean_hot_name(value):
-    text = str(value).strip() if value is not None else ""
-    return None if is_placeholder_name(text) or text == UNKNOWN_GAME_NAME else text
-
-
-def fallback_game_name(appid, name=None):
-    cleaned = clean_hot_name(name)
-    return cleaned or UNKNOWN_GAME_NAME
-
-
 def parse_hot_chart(payload):
     response = payload.get("response") if isinstance(payload, dict) else {}
     candidates = []
@@ -1317,41 +1169,15 @@ async def async_post_json(client, semaphore, url, params=None, json_body=None):
     return await implementation(client, semaphore, url, params, json_body)
 
 
-def amount_int_to_cny(amount_int, currency):
-    if amount_int is None:
-        return None
-    return (float(amount_int) / 100) * CNY_RATES.get(str(currency or "").upper(), 1)
-
-
-def price_row_cny(row):
-    item = dict(row)
-    region = item.get("region")
-    currency = item.get("currency") or ("CNY" if region == "CN" else "USD" if region in ("US", "ITAD-US") else "")
-    return amount_int_to_cny(item.get("final"), currency)
-
-
 def compare_historical_low(current_cny, low_cny):
-    if current_cny is None or low_cny is None:
-        return False
-    return abs(float(current_cny) - float(low_cny)) <= HISTORICAL_LOW_TOLERANCE_CNY
-
-
-def effective_historical_low(itad_low_cny, observed_low_cny):
-    """Choose the lowest cached value while preserving its provenance."""
-    candidates = []
-    if itad_low_cny is not None:
-        candidates.append((float(itad_low_cny), "itad"))
-    if observed_low_cny is not None:
-        candidates.append((float(observed_low_cny), "site_observed"))
-    return min(candidates, default=(None, None), key=lambda item: item[0])
+    return _compare_historical_low(current_cny, low_cny, HISTORICAL_LOW_TOLERANCE_CNY)
 
 
 def cached_historical_low_match(current_cny, low_cny, source, discount_percent=0, observed_count=0):
-    if not compare_historical_low(current_cny, low_cny):
-        return False
-    if source == "itad":
-        return True
-    return source == "site_observed" and int(observed_count or 0) >= 2 and int(discount_percent or 0) > 0
+    return _cached_historical_low_match(
+        current_cny, low_cny, source, discount_percent, observed_count,
+        tolerance_cny=HISTORICAL_LOW_TOLERANCE_CNY,
+    )
 
 
 def itad_headers():
@@ -2618,20 +2444,7 @@ def rotate_logs_once():
     with database_connection() as conn:
         if get_crawl_state(conn, "log_rotation_date") == today:
             return False
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with LOG_LOCK:
-        if LOG_PATH.exists() and LOG_PATH.stat().st_size > 0:
-            archive = LOG_PATH.with_name(f"{LOG_PATH.name}.{today}")
-            if archive.exists():
-                archive = LOG_PATH.with_name(f"{LOG_PATH.name}.{today}.{int(time.time())}")
-            LOG_PATH.replace(archive)
-        for archive in LOG_PATH.parent.glob(f"{LOG_PATH.name}.*"):
-            try:
-                age_days = (time.time() - archive.stat().st_mtime) / 86400
-                if age_days > LOG_RETENTION_DAYS:
-                    archive.unlink()
-            except OSError:
-                continue
+    rotate_log_file_once(today=today)
     with database_connection() as conn:
         set_crawl_state(conn, "log_rotation_date", today)
     return True

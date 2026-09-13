@@ -9,6 +9,8 @@ import urllib.parse
 import urllib.request
 
 from . import _runtime as runtime
+from .logging_utils import log_event, safe_log_url
+from .utils import retry_delay
 
 
 SteamRateLimited = runtime.SteamRateLimited
@@ -104,26 +106,26 @@ def request_json(url, timeout=None, headers=None, missing_statuses=None, max_ret
                 raise SteamRateLimited(f"{service} HTTP 429", service)
             if exc.code not in runtime.STEAM_RETRY_STATUSES or attempt >= retries:
                 runtime.log_event(
-                    f"steam request failed status={exc.code} url={runtime.safe_log_url(url)}"
+                    f"steam request failed status={exc.code} url={safe_log_url(url)}"
                 )
                 raise
             runtime.log_event(
                 f"steam request retry status={exc.code} attempt={attempt + 1} "
-                f"url={runtime.safe_log_url(url)}"
+                f"url={safe_log_url(url)}"
             )
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             last_exc = exc
             if attempt >= retries:
                 runtime.log_event(
-                    f"steam request failed url={runtime.safe_log_url(url)} "
+                    f"steam request failed url={safe_log_url(url)} "
                     f"error={type(exc).__name__}"
                 )
                 raise
             runtime.log_event(
                 f"steam request retry attempt={attempt + 1} "
-                f"url={runtime.safe_log_url(url)} error={type(exc).__name__}"
+                f"url={safe_log_url(url)} error={type(exc).__name__}"
             )
-        time.sleep(runtime.retry_delay(attempt))
+        time.sleep(retry_delay(attempt))
     raise last_exc
 
 
@@ -177,7 +179,7 @@ async def async_get_json(client, semaphore, url, params=None):
         for attempt in range(runtime.STEAM_MAX_RETRIES + 1):
             try:
                 runtime.check_service_cooldown(service)
-                response = await runtime.async_request_direct_then_proxy(
+                response = await async_request_direct_then_proxy(
                     client, "GET", url, params=params
                 )
                 response.raise_for_status()
@@ -195,14 +197,14 @@ async def async_get_json(client, semaphore, url, params=None):
                 if not retryable or attempt >= runtime.STEAM_MAX_RETRIES:
                     runtime.log_event(
                         f"http async request failed status={status_code} "
-                        f"url={runtime.safe_log_url(url)} error={type(exc).__name__}"
+                        f"url={safe_log_url(url)} error={type(exc).__name__}"
                     )
                     raise
                 runtime.log_event(
                     f"http async request retry status={status_code} attempt={attempt + 1} "
-                    f"url={runtime.safe_log_url(url)} error={type(exc).__name__}"
+                    f"url={safe_log_url(url)} error={type(exc).__name__}"
                 )
-                await asyncio.sleep(runtime.retry_delay(attempt))
+                await asyncio.sleep(retry_delay(attempt))
 
 
 async def async_post_json(client, semaphore, url, params=None, json_body=None):
@@ -213,7 +215,7 @@ async def async_post_json(client, semaphore, url, params=None, json_body=None):
         for attempt in range(runtime.STEAM_MAX_RETRIES + 1):
             try:
                 runtime.check_service_cooldown(service)
-                response = await runtime.async_request_direct_then_proxy(
+                response = await async_request_direct_then_proxy(
                     client, "POST", url, params=params, json_body=json_body
                 )
                 response.raise_for_status()
@@ -232,14 +234,14 @@ async def async_post_json(client, semaphore, url, params=None, json_body=None):
                 if not retryable or attempt >= runtime.STEAM_MAX_RETRIES:
                     runtime.log_event(
                         f"itad async post failed status={status_code} "
-                        f"url={runtime.safe_log_url(url)} error={type(exc).__name__}"
+                        f"url={safe_log_url(url)} error={type(exc).__name__}"
                     )
                     raise
                 runtime.log_event(
                     f"itad async post retry status={status_code} attempt={attempt + 1} "
-                    f"url={runtime.safe_log_url(url)} error={type(exc).__name__}"
+                    f"url={safe_log_url(url)} error={type(exc).__name__}"
                 )
-                await asyncio.sleep(runtime.retry_delay(attempt))
+                await asyncio.sleep(retry_delay(attempt))
         raise last_exc
 
 

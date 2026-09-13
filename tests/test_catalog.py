@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend import catalog
+
 
 def insert_catalog(runtime, rows):
     with sqlite3.connect(runtime.DB_PATH) as conn:
@@ -31,10 +33,10 @@ def test_catalog_scan_resumes_existing_prefix_and_marks_complete(isolated_runtim
             }
         }
 
-    monkeypatch.setattr(runtime, "fetch_store_catalog_page", fetch)
-    monkeypatch.setattr(runtime, "CATALOG_SCAN_BATCH_LIMIT", 500)
+    monkeypatch.setattr(catalog, "fetch_store_catalog_page", fetch)
+    monkeypatch.setattr(catalog.config, "CATALOG_SCAN_BATCH_LIMIT", 500)
 
-    assert runtime.sync_steam_catalog_once(force=True) is True
+    assert catalog.sync_steam_catalog_once(force=True) is True
     with sqlite3.connect(runtime.DB_PATH) as conn:
         assert conn.execute("SELECT COUNT(*) FROM steam_catalog").fetchone()[0] == 4
         assert runtime.get_crawl_state(conn, "steam_catalog_scan_cursor") == "40"
@@ -58,11 +60,11 @@ def test_catalog_scan_commits_page_and_cursor_before_later_failure(isolated_runt
             }
         raise runtime.ExternalDataUnavailable("offline")
 
-    monkeypatch.setattr(runtime, "fetch_store_catalog_page", fetch)
-    monkeypatch.setattr(runtime, "CATALOG_SCAN_BATCH_LIMIT", 1000)
+    monkeypatch.setattr(catalog, "fetch_store_catalog_page", fetch)
+    monkeypatch.setattr(catalog.config, "CATALOG_SCAN_BATCH_LIMIT", 1000)
 
     with pytest.raises(runtime.ExternalDataUnavailable):
-        runtime.sync_steam_catalog_once(force=True)
+        catalog.sync_steam_catalog_once(force=True)
     with sqlite3.connect(runtime.DB_PATH) as conn:
         assert conn.execute("SELECT name FROM steam_catalog WHERE appid=10").fetchone()[0] == "Ten"
         assert runtime.get_crawl_state(conn, "steam_catalog_scan_cursor") == "10"
@@ -81,8 +83,8 @@ def test_completed_catalog_starts_new_generation_on_rescan(isolated_runtime, mon
         calls.append(last_appid)
         return {"response": {"apps": [], "have_more_results": False}}
 
-    monkeypatch.setattr(runtime, "fetch_store_catalog_page", fetch)
-    assert runtime.sync_steam_catalog_once(force=True) is True
+    monkeypatch.setattr(catalog, "fetch_store_catalog_page", fetch)
+    assert catalog.sync_steam_catalog_once(force=True) is True
     with sqlite3.connect(runtime.DB_PATH) as conn:
         assert runtime.get_crawl_state(conn, "steam_catalog_scan_generation") == "3"
         assert runtime.get_crawl_state(conn, "steam_catalog_scan_cursor") == "0"
@@ -112,12 +114,12 @@ def test_catalog_enrich_classifies_and_excludes_non_games(isolated_runtime, monk
             ],
         ]
 
-    monkeypatch.setattr(runtime, "fetch_niche_candidates_async", fetch)
-    monkeypatch.setattr(runtime, "CATALOG_ENRICH_BATCH_LIMIT", 10)
-    monkeypatch.setattr(runtime, "CATALOG_ENRICH_DAILY_LIMIT", 10)
-    monkeypatch.setattr(runtime, "service_cooldown_remaining_seconds", lambda _service: 0)
+    monkeypatch.setattr(catalog, "fetch_niche_candidates_async", fetch)
+    monkeypatch.setattr(catalog.config, "CATALOG_ENRICH_BATCH_LIMIT", 10)
+    monkeypatch.setattr(catalog.config, "CATALOG_ENRICH_DAILY_LIMIT", 10)
+    monkeypatch.setattr(catalog, "service_cooldown_remaining_seconds", lambda _service: 0)
 
-    assert runtime.run_catalog_enrich_task() is True
+    assert catalog.run_catalog_enrich_task() is True
     with sqlite3.connect(runtime.DB_PATH) as conn:
         states = dict(conn.execute("SELECT appid, app_type FROM steam_catalog"))
         statuses = dict(conn.execute("SELECT appid, enrich_status FROM steam_catalog"))

@@ -5,7 +5,7 @@ import sqlite3
 import threading
 import time
 
-from . import config
+from . import catalog, config
 from . import _runtime as runtime
 from .migrations import create_database_backup
 
@@ -401,10 +401,10 @@ def refresh_hot_database_once(force_hotlist=False, quick=False):
             run_historylow_task()
             runtime.run_niche_pool_task()
             try:
-                runtime.sync_steam_catalog_once()
+                catalog.sync_steam_catalog_once()
             except Exception as exc:
                 runtime.log_event(f"steam catalog sync skipped: {exc}")
-            runtime.run_catalog_enrich_task()
+            catalog.run_catalog_enrich_task()
             from .services import refresh_daily_home_picks
 
             refresh_daily_home_picks()
@@ -490,10 +490,10 @@ cleanup_image_cache_once = runtime.cleanup_image_cache_once
 enqueue_hot_work = runtime.enqueue_hot_work
 maintain_storage_once = runtime.maintain_storage_once
 refresh_tracked_once = runtime.refresh_tracked_once
-run_catalog_enrich_task = runtime.run_catalog_enrich_task
+run_catalog_enrich_task = catalog.run_catalog_enrich_task
 run_niche_pool_task = runtime.run_niche_pool_task
 snapshot_daily_niche_recommendation = runtime.snapshot_daily_niche_recommendation
-sync_steam_catalog_once = runtime.sync_steam_catalog_once
+sync_steam_catalog_once = catalog.sync_steam_catalog_once
 
 
 __all__ = [name for name in globals() if not name.startswith("_")]

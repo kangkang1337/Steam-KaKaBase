@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from backend import db, game_queries, migrations
+from backend import catalog, db, game_queries, migrations
 
 
 def test_database_module_has_no_runtime_dependency_and_initializes_current_schema(tmp_path, monkeypatch):
@@ -39,6 +39,11 @@ def test_database_module_has_no_runtime_dependency_and_initializes_current_schem
 
 def test_game_query_module_has_no_runtime_dependency():
     source = Path(game_queries.__file__).read_text(encoding="utf-8")
+    assert "_runtime" not in source
+
+
+def test_catalog_module_has_no_runtime_dependency():
+    source = Path(catalog.__file__).read_text(encoding="utf-8")
     assert "_runtime" not in source
 
 

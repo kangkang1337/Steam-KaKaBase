@@ -1,6 +1,6 @@
 import asyncio
 
-from backend import crawler, steam_client
+from backend import crawler, crawler_data, steam_client
 
 
 def test_itad_lookup_orchestration_persists_resolved_ids(monkeypatch):
@@ -102,9 +102,9 @@ def test_metadata_completion_does_not_revive_finished_regional_prices(
         assert appids == [appid]
         return ([{"appid": appid}], [], [], runtime.now_iso())
 
-    monkeypatch.setattr(runtime, "get_hot_full_metadata_due_appids", lambda _limit: [appid])
+    monkeypatch.setattr(crawler_data, "get_hot_full_metadata_due_appids", lambda _limit: [appid])
     monkeypatch.setattr(runtime, "fetch_hot_metadata_async", fake_metadata)
-    monkeypatch.setattr(runtime, "upsert_hot_metadata_batch", lambda *_args: None)
+    monkeypatch.setattr(crawler_data, "upsert_hot_metadata_batch", lambda *_args: None)
 
     assert crawler.run_metadata_task() is True
     with runtime.database_connection() as conn:

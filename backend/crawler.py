@@ -5,7 +5,7 @@ import sqlite3
 import threading
 import time
 
-from . import catalog, config, storage_maintenance
+from . import catalog, config, crawler_data, storage_maintenance
 from . import _runtime as runtime
 from .migrations import create_database_backup
 
@@ -45,7 +45,7 @@ def run_hotlist_task(force=False):
         return False
     stamp = runtime.now_iso()
     for batch in runtime.chunks(rows[:runtime.HOTLIST_TARGET], runtime.HOTLIST_BATCH_SIZE):
-        runtime.upsert_hot_games_batch(batch, stamp)
+        crawler_data.upsert_hot_games_batch(batch, stamp)
     with runtime.database_connection() as conn:
         appids = [int(row["appid"]) for row in rows[:runtime.HOTLIST_TARGET]]
         if appids:
@@ -56,7 +56,7 @@ def run_hotlist_task(force=False):
         runtime.set_crawl_state(conn, "hotlist_at", stamp)
         generation = int(runtime.get_crawl_state(conn, "hotlist_generation") or 0) + 1
         runtime.set_crawl_state(conn, "hotlist_generation", str(generation))
-    runtime.enqueue_hot_work()
+    crawler_data.enqueue_hot_work(get_missing_historylow_appids)
     try:
         runtime.refresh_steam_app_names_once()
     except Exception as exc:
@@ -73,7 +73,7 @@ def run_hotlist_task(force=False):
 def run_players_task(force=False):
     if runtime.service_cooldown_remaining_seconds("steam_api"):
         return False
-    due_appids = runtime.get_hot_appids(runtime.HOTLIST_TARGET) if force else runtime.get_due_hot_player_appids()
+    due_appids = crawler_data.get_hot_appids(config.HOTLIST_TARGET) if force else crawler_data.get_due_hot_player_appids()
     runtime.enqueue_crawl_tasks(due_appids, "players", 20)
     appids = runtime.claim_crawl_tasks("players", runtime.HOTLIST_TARGET)
     if not appids:
@@ -148,33 +148,33 @@ def _run_appdetails_task(task_type, due_appids, limit, priority, persist, unavai
 
 def run_price_task():
     return _run_appdetails_task(
-        "price", runtime.get_hot_price_due_appids, runtime.HOT_PREVIEW_BATCH_LIMIT, 50,
-        runtime.upsert_hot_price_batch, "Steam AppDetails unavailable", "hot prices refreshed",
+        "price", crawler_data.get_hot_price_due_appids, config.HOT_PREVIEW_BATCH_LIMIT, 50,
+        crawler_data.upsert_hot_price_batch, "Steam AppDetails unavailable", "hot prices refreshed",
     )
 
 
 def run_preview_task():
     def persist(rows, stamp):
-        runtime.upsert_hot_price_batch(rows, stamp)
-        runtime.upsert_release_date_batch(rows, stamp)
+        crawler_data.upsert_hot_price_batch(rows, stamp)
+        crawler_data.upsert_release_date_batch(rows, stamp)
 
     return _run_appdetails_task(
-        "preview", runtime.get_hot_preview_due_appids, runtime.HOT_PREVIEW_BATCH_LIMIT, 50,
+        "preview", crawler_data.get_hot_preview_due_appids, config.HOT_PREVIEW_BATCH_LIMIT, 50,
         persist, "Steam AppDetails unavailable", "hot preview refreshed",
     )
 
 
 def run_static_task():
     return _run_appdetails_task(
-        "static", runtime.get_hot_static_due_appids, runtime.HOT_PREVIEW_BATCH_LIMIT, 50,
-        runtime.upsert_release_date_batch, "Steam AppDetails unavailable", "hot static fields refreshed",
+        "static", crawler_data.get_hot_static_due_appids, config.HOT_PREVIEW_BATCH_LIMIT, 50,
+        crawler_data.upsert_release_date_batch, "Steam AppDetails unavailable", "hot static fields refreshed",
     )
 
 
 def run_metadata_task():
     return _run_appdetails_task(
-        "metadata", runtime.get_hot_full_metadata_due_appids, runtime.HOT_METADATA_BATCH_LIMIT, 80,
-        runtime.upsert_hot_metadata_batch, "Steam AppDetails unavailable", "hot metadata refreshed",
+        "metadata", crawler_data.get_hot_full_metadata_due_appids, config.HOT_METADATA_BATCH_LIMIT, 80,
+        crawler_data.upsert_hot_metadata_batch, "Steam AppDetails unavailable", "hot metadata refreshed",
     )
 
 
@@ -212,14 +212,14 @@ def run_review_task():
     if runtime.service_cooldown_remaining_seconds("steam_store"):
         return False
     runtime.enqueue_crawl_tasks(
-        runtime.get_hot_review_due_appids(runtime.HOT_PREVIEW_BATCH_LIMIT), "reviews", 50
+        crawler_data.get_hot_review_due_appids(config.HOT_PREVIEW_BATCH_LIMIT), "reviews", 50
     )
     appids = runtime.claim_crawl_tasks("reviews", runtime.HOT_PREVIEW_BATCH_LIMIT)
     if not appids:
         return False
     try:
         rows, unavailable, retry, stamp = asyncio.run(runtime.fetch_hot_reviews_async(appids))
-        runtime.upsert_review_batch(rows, stamp)
+        crawler_data.upsert_review_batch(rows, stamp)
         runtime.complete_crawl_tasks([row["appid"] for row in rows], "reviews")
         runtime.mark_crawl_tasks_not_available(unavailable, "reviews", "Steam reviews unavailable")
         runtime.fail_crawl_tasks(retry, "reviews", "Steam review request failed")
@@ -487,7 +487,7 @@ def startup_prewarm_async():
 
 # Transitional exports that have not moved out of _runtime yet.
 cleanup_image_cache_once = runtime.cleanup_image_cache_once
-enqueue_hot_work = runtime.enqueue_hot_work
+enqueue_hot_work = crawler_data.enqueue_hot_work
 maintain_storage_once = storage_maintenance.maintain_storage_once
 refresh_tracked_once = runtime.refresh_tracked_once
 run_catalog_enrich_task = catalog.run_catalog_enrich_task

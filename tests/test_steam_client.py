@@ -139,11 +139,11 @@ def test_429_starts_global_cooldown_without_retry(monkeypatch, isolated_runtime)
 
 
 def test_direct_failure_uses_proxy_and_starts_direct_cooldown(monkeypatch, isolated_runtime):
-    monkeypatch.setattr(_runtime, "DIRECT_COOLDOWN_UNTIL", {service: 0 for service in _runtime.EXTERNAL_SERVICES})
-    monkeypatch.setattr(_runtime, "DIRECT_FAILURE_COUNT", {service: 0 for service in _runtime.EXTERNAL_SERVICES})
-    monkeypatch.setattr(_runtime, "proxy_fallback_enabled", lambda: True)
+    monkeypatch.setattr(steam_client, "DIRECT_COOLDOWN_UNTIL", {service: 0 for service in _runtime.EXTERNAL_SERVICES})
+    monkeypatch.setattr(steam_client, "DIRECT_FAILURE_COUNT", {service: 0 for service in _runtime.EXTERNAL_SERVICES})
+    monkeypatch.setattr(steam_client, "proxy_fallback_enabled", lambda: True)
     monkeypatch.setattr(
-        _runtime,
+        steam_client,
         "require_httpx",
         lambda: type("FakeHttpx", (), {"AsyncClient": FakeProxyClient}),
     )
@@ -155,8 +155,8 @@ def test_direct_failure_uses_proxy_and_starts_direct_cooldown(monkeypatch, isola
 
     assert response.json() == {"via": "proxy"}
     assert direct_client.calls == 1
-    assert _runtime.direct_cooldown_remaining_seconds("steam_api") > 0
-    assert _runtime.direct_cooldown_remaining_seconds("itad") == 0
+    assert steam_client.direct_cooldown_remaining_seconds("steam_api") > 0
+    assert steam_client.direct_cooldown_remaining_seconds("itad") == 0
 
     skipped_direct_client = FakeClient(FakeResponse(200, {"via": "direct"}))
     response = asyncio.run(
@@ -173,9 +173,9 @@ def test_itad_lookup_sends_api_key_as_query_parameter(monkeypatch, isolated_runt
         captured.append((url, params))
         return {"found": True, "game": {"id": "itad-10"}}
 
-    monkeypatch.setattr(_runtime, "ITAD_API_KEY", "secret-test-key")
+    monkeypatch.setattr(steam_client.config, "ITAD_API_KEY", "secret-test-key")
     monkeypatch.setattr(
-        _runtime,
+        steam_client,
         "require_httpx",
         lambda: type("FakeHttpx", (), {"AsyncClient": FakeAsyncClientContext}),
     )
@@ -196,10 +196,10 @@ def test_itad_auth_failure_starts_one_service_cooldown(monkeypatch, isolated_run
     async def forbidden(*_args, **_kwargs):
         raise FakeHttpError(403)
 
-    monkeypatch.setattr(_runtime, "ITAD_API_KEY", "rejected-key")
+    monkeypatch.setattr(steam_client.config, "ITAD_API_KEY", "rejected-key")
     monkeypatch.setitem(_runtime.SERVICE_COOLDOWN_UNTIL, "itad", 0)
     monkeypatch.setattr(
-        _runtime,
+        steam_client,
         "require_httpx",
         lambda: type("FakeHttpx", (), {"AsyncClient": FakeAsyncClientContext}),
     )

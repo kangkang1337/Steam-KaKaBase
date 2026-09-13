@@ -18,6 +18,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from . import config
+from . import steam_client
+from .external_errors import ExternalDataUnavailable, SteamRateLimited
 from .logging_utils import log_event, rotate_log_file_once, safe_log_url
 from .pricing import (
     CNY_RATES,
@@ -114,27 +116,16 @@ SEARCH_CACHE_TTL_SECONDS = config.SEARCH_CACHE_TTL_SECONDS
 SEARCH_CACHE_EMPTY_TTL_SECONDS = config.SEARCH_CACHE_EMPTY_TTL_SECONDS
 SEARCH_CACHE_MAX_ENTRIES = config.SEARCH_CACHE_MAX_ENTRIES
 APP_NAME_REFRESH_HOURS = config.APP_NAME_REFRESH_HOURS
-START_COOLDOWN_UNTIL = time.time() + config.START_COOLDOWN_SECONDS
-SERVICE_COOLDOWN_UNTIL = {
-    "steam_api": START_COOLDOWN_UNTIL,
-    "steam_store": START_COOLDOWN_UNTIL,
-    "itad": 0.0,
-    "image_cdn": 0.0,
-}
-SERVICE_COOLDOWN_LOCK = threading.Lock()
-SERVICE_RATE_LIMIT_STATUS = {
-    service: {"count": 0, "last_at": None} for service in EXTERNAL_SERVICES
-}
-PROXY_STATUS = {
-    "configured": bool(STEAM_PROXY_URL), "enabled": USE_PROXY, "reachable": None,
-    "tls_verify": STEAM_PROXY_VERIFY_TLS, "fallback_successes": 0, "fallback_failures": 0,
-    "message": "直连优先" if not USE_PROXY else "待检测",
-}
-PROXY_FALLBACK_LOCK = threading.Lock()
-PROXY_FALLBACK_LOGGED_AT = {}
-DIRECT_COOLDOWN_LOCK = threading.Lock()
-DIRECT_COOLDOWN_UNTIL = {service: 0.0 for service in EXTERNAL_SERVICES}
-DIRECT_FAILURE_COUNT = {service: 0 for service in EXTERNAL_SERVICES}
+START_COOLDOWN_UNTIL = steam_client.START_COOLDOWN_UNTIL
+SERVICE_COOLDOWN_UNTIL = steam_client.SERVICE_COOLDOWN_UNTIL
+SERVICE_COOLDOWN_LOCK = steam_client.SERVICE_COOLDOWN_LOCK
+SERVICE_RATE_LIMIT_STATUS = steam_client.SERVICE_RATE_LIMIT_STATUS
+PROXY_STATUS = steam_client.PROXY_STATUS
+PROXY_FALLBACK_LOCK = steam_client.PROXY_FALLBACK_LOCK
+PROXY_FALLBACK_LOGGED_AT = steam_client.PROXY_FALLBACK_LOGGED_AT
+DIRECT_COOLDOWN_LOCK = steam_client.DIRECT_COOLDOWN_LOCK
+DIRECT_COOLDOWN_UNTIL = steam_client.DIRECT_COOLDOWN_UNTIL
+DIRECT_FAILURE_COUNT = steam_client.DIRECT_FAILURE_COUNT
 REFRESH_LOCK = threading.Lock()
 HOT_REFRESH_LOCK = threading.Lock()
 STATUS_LOCK = threading.Lock()
@@ -207,117 +198,47 @@ def polite_store_delay():
 
 
 def external_service_for_url(url):
-    host = (urllib.parse.urlsplit(str(url)).hostname or "").lower()
-    if host == "api.isthereanydeal.com" or host.endswith(".isthereanydeal.com"):
-        return "itad"
-    if host == "store.steampowered.com":
-        return "steam_store"
-    if host in ALLOWED_IMAGE_HOSTS or host == "steamstatic.com" or host.endswith(".steamstatic.com"):
-        return "image_cdn"
-    return "steam_api"
+    return steam_client.external_service_for_url(url)
 
 
 def service_cooldown_remaining_seconds(service):
-    with SERVICE_COOLDOWN_LOCK:
-        return max(0, int(SERVICE_COOLDOWN_UNTIL.get(service, 0) - time.time()))
+    return steam_client.service_cooldown_remaining_seconds(service)
 
 
 def steam_cooldown_remaining_seconds():
-    return max(
-        service_cooldown_remaining_seconds("steam_api"),
-        service_cooldown_remaining_seconds("steam_store"),
-    )
+    return steam_client.steam_cooldown_remaining_seconds()
 
 
 def probe_proxy():
-    if not USE_PROXY:
-        PROXY_STATUS.update(message="直连优先，代理回退已关闭")
-        return
-    if not STEAM_PROXY_URL:
-        PROXY_STATUS.update(reachable=False, message="代理回退已启用，但未配置 STEAMKB_PROXY_URL")
-        return
-    parsed = urllib.parse.urlparse(STEAM_PROXY_URL)
-    host, port = parsed.hostname, parsed.port
-    if not host or not port:
-        PROXY_STATUS.update(reachable=False, message="代理地址格式无效")
-        log_event("proxy unavailable: invalid STEAMKB_PROXY_URL")
-        return
-    try:
-        with socket.create_connection((host, port), timeout=2):
-            pass
-        PROXY_STATUS.update(reachable=True, message="代理可连接")
-        log_event(f"proxy reachable: {host}:{port}")
-    except OSError as exc:
-        PROXY_STATUS.update(reachable=False, message=f"代理不可连接: {exc}")
-        log_event(f"proxy unavailable: {exc}; Steam requests will use direct connection")
+    return steam_client.probe_proxy()
 
 
 def proxy_fallback_enabled():
-    return USE_PROXY and PROXY_STATUS.get("reachable") is True
+    return steam_client.proxy_fallback_enabled()
 
 
 def direct_cooldown_remaining_seconds(service=None):
-    with DIRECT_COOLDOWN_LOCK:
-        if service:
-            return max(0, int(DIRECT_COOLDOWN_UNTIL.get(service, 0) - time.time()))
-        return max((max(0, int(value - time.time())) for value in DIRECT_COOLDOWN_UNTIL.values()), default=0)
+    return steam_client.direct_cooldown_remaining_seconds(service)
 
 
 def reserve_direct_attempt(service):
-    """Allow one half-open direct probe after a cooldown expires."""
-    if not proxy_fallback_enabled():
-        return True
-    now = time.time()
-    with DIRECT_COOLDOWN_LOCK:
-        if DIRECT_COOLDOWN_UNTIL.get(service, 0) > now:
-            return False
-        if DIRECT_FAILURE_COUNT.get(service, 0):
-            DIRECT_COOLDOWN_UNTIL[service] = now + min(60, max(10, int(STEAM_TIMEOUT_SECONDS) + 5))
-        return True
+    return steam_client.reserve_direct_attempt(service)
 
 
 def record_direct_success(service):
-    with DIRECT_COOLDOWN_LOCK:
-        DIRECT_COOLDOWN_UNTIL[service] = 0.0
-        DIRECT_FAILURE_COUNT[service] = 0
+    return steam_client.record_direct_success(service)
 
 
 def set_direct_cooldown(service, reason=None):
-    if not proxy_fallback_enabled():
-        return
-    now = time.time()
-    until = now + (DIRECT_COOLDOWN_MINUTES * 60)
-    with DIRECT_COOLDOWN_LOCK:
-        was_active = DIRECT_COOLDOWN_UNTIL.get(service, 0) > now
-        DIRECT_COOLDOWN_UNTIL[service] = max(DIRECT_COOLDOWN_UNTIL.get(service, 0), until)
-        DIRECT_FAILURE_COUNT[service] = DIRECT_FAILURE_COUNT.get(service, 0) + 1
-    if not was_active:
-        suffix = f" reason={reason}" if reason else ""
-        log_event(f"direct connection cooldown enabled service={service} for {DIRECT_COOLDOWN_MINUTES} minutes{suffix}")
+    return steam_client.set_direct_cooldown(service, reason)
 
 
 def log_proxy_fallback_once(url, reason):
-    """Avoid one identical fallback line per concurrent store request."""
-    parsed = urllib.parse.urlsplit(url)
-    path = re.sub(r"/appreviews/\d+(?:/|$)", "/appreviews/{appid}", parsed.path)
-    key = f"{parsed.scheme}://{parsed.netloc}{path}"
-    now = time.time()
-    with PROXY_FALLBACK_LOCK:
-        previous = PROXY_FALLBACK_LOGGED_AT.get(key, 0)
-        if now - previous < 300:
-            return
-        PROXY_FALLBACK_LOGGED_AT[key] = now
-    log_event(f"direct request failed; proxy fallback started url={key} reason={reason}")
+    return steam_client.log_proxy_fallback_once(url, reason)
 
 
 def record_proxy_fallback(success, error=None):
-    with PROXY_FALLBACK_LOCK:
-        key = "fallback_successes" if success else "fallback_failures"
-        PROXY_STATUS[key] = int(PROXY_STATUS.get(key) or 0) + 1
-        if success and str(PROXY_STATUS.get("message") or "").startswith("代理回退失败"):
-            PROXY_STATUS["message"] = "代理可连接，回退正常"
-        elif not success and error:
-            PROXY_STATUS["message"] = f"代理回退失败: {str(error)[:120]}"
+    return steam_client.record_proxy_fallback(success, error)
 
 
 def cleanup_image_cache_once():
@@ -326,46 +247,20 @@ def cleanup_image_cache_once():
     )
 
 
-class SteamRateLimited(Exception):
-    def __init__(self, message, service="steam_api"):
-        super().__init__(message)
-        self.service = service
-
-
 def set_service_cooldown(service, minutes=10):
-    now = time.time()
-    until = time.time() + (minutes * 60)
-    with SERVICE_COOLDOWN_LOCK:
-        previous = SERVICE_COOLDOWN_UNTIL.get(service, 0)
-        was_active = previous > now
-        SERVICE_COOLDOWN_UNTIL[service] = max(previous, until)
-        if not was_active:
-            metric = SERVICE_RATE_LIMIT_STATUS.setdefault(
-                service, {"count": 0, "last_at": None}
-            )
-            metric["count"] += 1
-            metric["last_at"] = now_iso()
-    if not was_active:
-        log_event(f"external service cooldown enabled service={service} for {minutes} minutes")
+    return steam_client.set_service_cooldown(service, minutes)
 
 
 def set_steam_cooldown(minutes=10, service="steam_api"):
-    set_service_cooldown(service, minutes)
+    return steam_client.set_steam_cooldown(minutes, service)
 
 
 def check_service_cooldown(service):
-    with SERVICE_COOLDOWN_LOCK:
-        remaining = SERVICE_COOLDOWN_UNTIL.get(service, 0) - time.time()
-    if remaining > 0:
-        raise SteamRateLimited(f"{service} rate limited, retry after {int(remaining)}s", service)
+    return steam_client.check_service_cooldown(service)
 
 
 def check_steam_cooldown(service="steam_api"):
-    check_service_cooldown(service)
-
-
-class ExternalDataUnavailable(Exception):
-    pass
+    return steam_client.check_steam_cooldown(service)
 
 
 def request_json(url, timeout=STEAM_TIMEOUT_SECONDS, headers=None, missing_statuses=None, max_retries=None, service=None):
@@ -374,72 +269,23 @@ def request_json(url, timeout=STEAM_TIMEOUT_SECONDS, headers=None, missing_statu
     return implementation(url, timeout, headers, missing_statuses, max_retries, service)
 
 
-class _NoImageRedirect(urllib.request.HTTPRedirectHandler):
-    """Keep an allowed CDN URL from becoming a request to an arbitrary host."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+_NoImageRedirect = steam_client._NoImageRedirect
 
 
 def cache_image(url):
-    service = "image_cdn"
-    check_service_cooldown(service)
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("http", "https") or parsed.hostname not in ALLOWED_IMAGE_HOSTS:
-        raise ValueError("unsupported image host")
-
-    suffix = Path(parsed.path).suffix.lower()
-    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
-        suffix = ".img"
-    filename = hashlib.sha256(url.encode("utf-8")).hexdigest() + suffix
-    IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = IMAGE_CACHE_DIR / filename
-    if cache_path.is_file() and cache_path.stat().st_size > 0:
-        return cache_path
-
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": STEAM_USER_AGENT,
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        },
-    )
-    try:
-        opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), _NoImageRedirect()
-        )
-        with opener.open(req, timeout=STEAM_TIMEOUT_SECONDS) as res:
-            content_type = res.headers.get_content_type()
-            if not content_type.startswith("image/"):
-                raise ValueError(f"unexpected content type: {content_type}")
-            body = res.read(IMAGE_CACHE_MAX_FILE_BYTES + 1)
-    except urllib.error.HTTPError as exc:
-        if exc.code == 429:
-            set_service_cooldown(service, 10)
-            raise SteamRateLimited("image_cdn HTTP 429", service) from exc
-        raise
-    if len(body) > IMAGE_CACHE_MAX_FILE_BYTES:
-        raise ValueError("image exceeds cache file limit")
-    cache_path.write_bytes(body)
-    return cache_path
+    return steam_client.cache_image(url)
 
 
 def require_httpx():
-    try:
-        import httpx
-    except ImportError as exc:
-        raise RuntimeError("缺少 httpx，请先运行：python -m pip install httpx") from exc
-    return httpx
+    return steam_client.require_httpx()
 
 
 def steam_httpx_options():
-    # Direct connection is always tried first; proxy is a failure fallback.
-    return {"proxy": None, "trust_env": False}
+    return steam_client.steam_httpx_options()
 
 
 def proxy_httpx_options():
-    proxy = STEAM_PROXY_URL if proxy_fallback_enabled() else None
-    return {"proxy": proxy, "trust_env": False, "verify": STEAM_PROXY_VERIFY_TLS}
+    return steam_client.proxy_httpx_options()
 
 
 def init_db():

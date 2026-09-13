@@ -17,6 +17,17 @@ def test_foundational_modules_do_not_depend_on_runtime():
         assert "_runtime" not in (backend_dir / module_name).read_text(encoding="utf-8")
 
 
+def test_transport_module_owns_shared_external_failures_without_runtime_import():
+    backend_dir = Path(__file__).resolve().parents[1] / "backend"
+    source = (backend_dir / "steam_client.py").read_text(encoding="utf-8")
+
+    assert "from . import _runtime" not in source
+    assert "runtime." not in source
+    from backend import steam_client
+    assert _runtime.SteamRateLimited is steam_client.SteamRateLimited
+    assert _runtime.ExternalDataUnavailable is steam_client.ExternalDataUnavailable
+
+
 def test_safe_log_url_redacts_all_supported_secret_parameter_names():
     value = utils.safe_log_url(
         "https://example.test/path?key=one&api_key=two&apikey=three&token=four&access_token=five&keep=ok"

@@ -11,7 +11,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 import urllib.parse
 
-from . import _runtime, config
+from . import config, runtime_compat as runtime
+from .game_commands import quick_track_game, untrack_game as command_untrack_game
+from .pricing import amount_int_to_cny, effective_historical_low
+from .steam_client import ALLOWED_IMAGE_HOSTS, cache_image
+from .utils import daily_refresh_key, fallback_game_name
+
+# Kept as a test/third-party extension alias during the compatibility window.
+# Application code below uses owned modules or ``runtime`` explicitly.
+_runtime = runtime
 from .game_queries import (
     clean_game,
     ensure_game_from_catalog,
@@ -23,6 +31,7 @@ from .game_queries import (
 from .db import (
     CURRENT_SCHEMA_VERSION,
     enqueue_crawl_task_once_in_conn,
+    get_crawl_state,
     get_schema_version,
     enqueue_crawl_tasks,
     query_daily_niche_snapshot,
@@ -45,6 +54,7 @@ _ADMIN_CONTROL_ACTIONS = {
     "restart_crawler": "重启 crawler",
 }
 _admin_control_lock = threading.Lock()
+_MEME_EXTENSIONS = {".gif", ".webp", ".png", ".apng", ".jpg", ".jpeg", ".jfif", ".avif", ".bmp"}
 
 
 def list_games():
@@ -52,33 +62,33 @@ def list_games():
 
 
 def list_hot_games(limit):
-    requested = min(max(1, int(limit)), _runtime.HOTLIST_TARGET)
+    requested = min(max(1, int(limit)), config.HOTLIST_TARGET)
     return {
         "games": query_list_hot_games(requested),
-        "count": _runtime.count_hot_games(),
-        "version": _runtime.hot_games_version(),
+        "count": runtime.count_hot_games(),
+        "version": runtime.hot_games_version(),
         "queued": False,
     }
 
 
 def hot_games_version():
-    return {"version": _runtime.hot_games_version()}
+    return {"version": runtime.hot_games_version()}
 
 
 def list_niche_pool():
-    games = _runtime.list_niche_pool_games(_runtime.NICHE_POOL_DISPLAY_LIMIT)
-    pool_count = _runtime.count_eligible_niche_pool()
+    games = runtime.list_niche_pool_games(config.NICHE_POOL_DISPLAY_LIMIT)
+    pool_count = runtime.count_eligible_niche_pool()
     return {
         "games": games,
         "count": len(games),
         "pool_count": pool_count,
-        "selection_mode": "all" if pool_count <= _runtime.NICHE_POOL_DISPLAY_LIMIT else "top_half_random",
+        "selection_mode": "all" if pool_count <= config.NICHE_POOL_DISPLAY_LIMIT else "top_half_random",
         "queued": False,
     }
 
 
 def get_home_picks():
-    refresh_key = _runtime.daily_refresh_key()
+    refresh_key = daily_refresh_key()
     historical_lows = list_popular_historical_low_games()
     lows_by_appid = {int(game["appid"]): game for game in historical_lows}
     snapshot = query_home_snapshot(refresh_key)
@@ -88,7 +98,7 @@ def get_home_picks():
         low_appid = snapshot["historical_low_appid"]
         historical_low = lows_by_appid.get(int(low_appid)) if low_appid else None
         meme_url = snapshot["meme_url"]
-    niche_row = query_daily_niche_snapshot(refresh_key, _runtime.NICHE_MAX_REVIEWS)
+    niche_row = query_daily_niche_snapshot(refresh_key, config.NICHE_MAX_REVIEWS)
     niche = clean_home_pick(niche_row) if niche_row else None
     memes = list_local_memes()
     return {
@@ -102,7 +112,7 @@ def get_home_picks():
 def refresh_daily_home_picks():
     """Create today's recommendation snapshots from the crawler process."""
     historical_lows = list_popular_historical_low_games()
-    _runtime.snapshot_daily_niche_recommendation()
+    runtime.snapshot_daily_niche_recommendation()
     memes = list_local_memes()
     return ensure_daily_home_snapshot(historical_lows, memes)
 
@@ -111,14 +121,14 @@ def clean_home_pick(row):
     if not row:
         return None
     item = dict(row)
-    current_cny = _runtime.amount_int_to_cny(
+    current_cny = amount_int_to_cny(
         item["cn_price_final"], item["cn_price_currency"] or "CNY"
     )
-    low_cny, low_source = _runtime.effective_historical_low(
+    low_cny, low_source = effective_historical_low(
         item.get("cn_itad_low_cny", item.get("cn_historical_low_cny")),
         item.get("cn_observed_low_cny"),
     )
-    is_low = _runtime.cached_historical_low_match(
+    is_low = runtime.cached_historical_low_match(
         current_cny,
         low_cny,
         low_source,
@@ -127,8 +137,8 @@ def clean_home_pick(row):
     )
     return {
         "appid": item["appid"],
-        "name": _runtime.fallback_game_name(item["appid"], item["name"]),
-        "name_zh": _runtime.fallback_game_name(item["appid"], item["name"]),
+        "name": fallback_game_name(item["appid"], item["name"]),
+        "name_zh": fallback_game_name(item["appid"], item["name"]),
         "name_en": item.get("name_en"),
         "header_image": item["header_image"],
         "current_players": item["current_players"] or 0,
@@ -152,7 +162,7 @@ def clean_home_pick(row):
 def list_popular_historical_low_games(limit=200):
     limit = min(max(1, int(limit)), 1000)
     rows = query_popular_historical_low_rows(
-        limit, _runtime.HOME_POPULAR_MIN_REVIEWS, _runtime.HOME_POPULAR_MIN_PLAYERS
+        limit, config.HOME_POPULAR_MIN_REVIEWS, config.HOME_POPULAR_MIN_PLAYERS
     )
     games = [clean_home_pick(row) for row in rows]
     return [game for game in games if game["cn_price_historical_low"]]
@@ -161,26 +171,26 @@ def list_popular_historical_low_games(limit=200):
 def daily_index(total, refresh_key=None):
     if total <= 0:
         return 0
-    key = refresh_key or _runtime.daily_refresh_key()
+    key = refresh_key or daily_refresh_key()
     return int(hashlib.sha256(key.encode("utf-8")).hexdigest()[:8], 16) % total
 
 
 def list_local_memes():
-    meme_dir = _runtime.ROOT / "assets" / "memes"
+    meme_dir = config.ROOT / "assets" / "memes"
     if not meme_dir.is_dir():
         return []
     files = sorted(
         path for path in meme_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in _runtime.MEME_EXTENSIONS
+        if path.is_file() and path.suffix.lower() in _MEME_EXTENSIONS
     )
     return [f"/assets/memes/{path.name}" for path in files]
 
 
 def ensure_daily_home_snapshot(historical_lows, memes):
-    refresh_key = _runtime.daily_refresh_key()
+    refresh_key = daily_refresh_key()
     lows_by_appid = {int(game["appid"]): game for game in historical_lows}
     recent_appids, current = read_home_snapshot_context(
-        refresh_key, _runtime.HOME_RECOMMENDATION_REPEAT_DAYS
+        refresh_key, config.HOME_RECOMMENDATION_REPEAT_DAYS
     )
     fresh_lows = [game for game in historical_lows if int(game["appid"]) not in recent_appids]
     preferred_low = (fresh_lows or [None])[0]
@@ -209,7 +219,7 @@ def ensure_daily_home_snapshot(historical_lows, memes):
 
 
 def get_status():
-    return _runtime.get_status()
+    return runtime.get_status()
 
 
 def _monitor_day():
@@ -245,10 +255,10 @@ def admin_monitoring():
             "player_snapshots": conn.execute("SELECT COUNT(*) FROM player_snapshots").fetchone()[0],
             "price_snapshots": conn.execute("SELECT COUNT(*) FROM price_snapshots").fetchone()[0],
             "review_snapshots": conn.execute("SELECT COUNT(*) FROM review_snapshots").fetchone()[0],
-            "local_backup_at": _runtime.get_crawl_state(conn, "daily_database_backup_at") or None,
-            "local_backup_path": _runtime.get_crawl_state(conn, "daily_database_backup_path") or None,
-            "offsite_backup_at": _runtime.get_crawl_state(conn, "offsite_database_backup_at") or None,
-            "offsite_backup_path": _runtime.get_crawl_state(conn, "offsite_database_backup_path") or None,
+            "local_backup_at": get_crawl_state(conn, "daily_database_backup_at") or None,
+            "local_backup_path": get_crawl_state(conn, "daily_database_backup_path") or None,
+            "offsite_backup_at": get_crawl_state(conn, "offsite_database_backup_at") or None,
+            "offsite_backup_path": get_crawl_state(conn, "offsite_database_backup_path") or None,
         }
     drill_path = config.DATA_DIR / "runtime" / "recovery_drill.json"
     try:
@@ -418,14 +428,14 @@ def _enqueue_game_refresh(appids, priority=100):
 
 def track_game(appid, name=None, header_image=None):
     appid = int(appid)
-    _runtime.quick_track_game(appid, name, header_image)
+    quick_track_game(appid, name, header_image)
     queued = _enqueue_game_refresh([appid])
     return {"ok": True, "appid": appid, "queued": bool(queued), "queued_tasks": queued}
 
 
 def untrack_game(appid):
     appid = int(appid)
-    _runtime.untrack_game(appid)
+    command_untrack_game(appid)
     return {"ok": True, "appid": appid, "tracked": False}
 
 
@@ -493,7 +503,7 @@ def request_game_detail(appid):
 
 
 def cache_remote_image(url):
-    return _runtime.cache_image(url)
+    return cache_image(url)
 
 
 def cached_remote_image(url):
@@ -517,7 +527,7 @@ def header_image_url(appid):
 
 def is_allowed_image_url(url):
     parsed = urllib.parse.urlparse(str(url or ""))
-    return parsed.scheme in {"http", "https"} and parsed.hostname in _runtime.ALLOWED_IMAGE_HOSTS
+    return parsed.scheme in {"http", "https"} and parsed.hostname in ALLOWED_IMAGE_HOSTS
 
 
 def readiness():

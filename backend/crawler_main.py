@@ -7,8 +7,7 @@ import socket
 import threading
 from uuid import uuid4
 
-from . import config, crawler
-from . import _runtime as runtime
+from . import config, crawler, runtime_compat as runtime
 from .db import (
     acquire_process_lease,
     get_process_lease,

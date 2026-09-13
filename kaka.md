@@ -24,7 +24,7 @@
 
 当前已知限制：
 
-- `config.py` 已独立解析环境变量；`utils.py`、`pricing.py` 和 `logging_utils.py` 已拥有无副作用的时间、名称、价格、URL 脱敏、缓存清理及日志文件工具；`steam_client.py` 已拥有 HTTP、代理回退、Steam/ITAD 服务冷却、图片下载安全校验与端点解析，且不再导入 `_runtime.py`；`db.py` 已拥有连接、事务、迁移初始化、schema 验证、任务队列和主要只读查询，也不再反向导入 `_runtime.py`；`game_queries.py` 已拥有游戏详情、热门榜、追踪列表、搜索索引、目录占位详情和 API 序列化；`catalog.py` 已拥有 AppList 扫描和 enrich；`crawler.py` 已接管热门榜、玩家、商店预览和 ITAD 史低编排；首页推荐业务已迁入 `services.py`。`_runtime.py` 仍保留尚未迁移的写入逻辑和兼容入口。
+- `config.py` 已独立解析环境变量；`utils.py`、`pricing.py` 和 `logging_utils.py` 已拥有无副作用的时间、名称、价格、URL 脱敏、缓存清理及日志文件工具；`steam_client.py` 已拥有 HTTP、代理回退、Steam/ITAD 服务冷却、图片下载安全校验与端点解析，且不再导入 `_runtime.py`；`db.py` 已拥有连接、事务、迁移初始化、schema 验证、任务队列和主要只读查询，也不再反向导入 `_runtime.py`；`game_queries.py` 已拥有游戏详情、热门榜、追踪列表、搜索索引、目录占位详情和 API 序列化；`catalog.py` 已拥有 AppList 扫描和 enrich；`crawler.py` 已接管热门榜、玩家、商店预览和 ITAD 史低编排；首页推荐业务已迁入 `services.py`；`game_commands.py` 拥有无网络副作用的追踪写命令。Web、crawler 与 crawler 进程的遗留调用均经过 `runtime_compat.py` 这一个兼容边界，不再直接导入 `_runtime.py`。
 - v0.5.0 已改为账号级同步收藏；未登录收藏保留在本机浏览器，不能跨设备同步。生产部署强制 HTTPS，账号 Cookie 使用 Secure；认证与收藏接口按 IP 限流，账号可自行删除并清除其同步数据。
 - v0.6.0 新增仅管理员可见的监控页：匿名访问聚合、服务资源、crawler、数据库、备份、恢复演练和脱敏日志集中展示。普通用户不能读取运行指标；只有服主能维护管理员名单，并可触发固定的本地/异地备份、隔离恢复演练和 Web/crawler 重启。健康摘要会提示 5xx、心跳、备份、演练和磁盘异常。
 - v0.6.1 修复服主控制组件在 systemd `NoNewPrivileges` 沙箱下无法调用 sudo 的问题，改为权限受限的本机 Unix Socket 控制代理；网页确认弹窗替代浏览器原生弹窗，手动本地备份会更新监控时间。
@@ -181,6 +181,6 @@
 1. 连续观察线上至少 7 天：记录 crawler 心跳、任务积压、Steam/ITAD 429、SQLite/WAL 大小、异地备份成功情况和 HTTPS 证书续期状态；再为异常阈值增加告警。这是当前最高优先级。
    - v10 已提供仅管理员可见的监控面板和服主专用的固定控制组件；后续可增加更细的任务状态与告警通知。
 2. 补记本次异地备份的远端文件名、上传时间与文件大小，和恢复结果一并留档。
-3. 继续迁移 `_runtime.py` 中剩余数据库写入、缓存清理和小众池刷新逻辑，减少兼容层成为后续维护瓶颈。
+3. 在线上完整 crawler 周期稳定后，将 `runtime_compat.py` 中仍被调用的编排、状态与小众池 API 逐项物理迁移，并最终删除 `_runtime.py`；兼容边界不得新增业务逻辑。
 4. 扩展 Playwright 的窄屏断点、长历史数据图表和账号删除流程；用真实手机和两种桌面浏览器验收。
 5. 账号只保持“同步收藏”的轻量定位。若要做邮箱找回、邮箱验证或第三方登录，先确定邮件服务、隐私文本、发信域名和运维成本；当前管理员交互式重置已足够。

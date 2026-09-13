@@ -5,8 +5,7 @@ import sqlite3
 import threading
 import time
 
-from . import catalog, config, crawler_data, crawler_fetch, storage_maintenance
-from . import _runtime as runtime
+from . import catalog, config, crawler_data, crawler_fetch, runtime_compat as runtime, storage_maintenance
 from .migrations import create_database_backup
 
 

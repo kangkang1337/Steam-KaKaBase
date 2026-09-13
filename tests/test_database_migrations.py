@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from backend import catalog, crawler_data, db, game_queries, migrations, storage_maintenance
+from backend import catalog, crawler_data, crawler_fetch, db, game_queries, migrations, storage_maintenance
 
 
 def test_database_module_has_no_runtime_dependency_and_initializes_current_schema(tmp_path, monkeypatch):
@@ -54,6 +54,11 @@ def test_storage_maintenance_module_has_no_runtime_dependency():
 
 def test_crawler_data_module_has_no_runtime_dependency():
     source = Path(crawler_data.__file__).read_text(encoding="utf-8")
+    assert "_runtime" not in source
+
+
+def test_crawler_fetch_module_has_no_runtime_dependency():
+    source = Path(crawler_fetch.__file__).read_text(encoding="utf-8")
     assert "_runtime" not in source
 
 

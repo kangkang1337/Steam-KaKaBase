@@ -69,6 +69,7 @@
 - `game_queries.py`：拥有只读游戏查询、搜索缓存与面向 API 的稳定序列化；不得发起外部请求或依赖 `_runtime.py`。
 - `storage_maintenance.py`：拥有日志轮转、价格/玩家快照压缩、旧任务清理和图片缓存清理；不得依赖 `_runtime.py`。
 - `crawler_data.py`：拥有热门榜、价格、评论和元数据的 SQLite 批量写入与到期任务选择；不得依赖 `_runtime.py`。
+- `crawler_fetch.py`：拥有 Steam 玩家、AppDetails 和评论的受限并发批量请求；必须复用 `steam_client.py` 的代理、重试与服务冷却。
 - `catalog.py`：拥有 AppList 游标扫描、增量 enrich、非游戏分类和小众池写入；不得反向依赖 `_runtime.py`。
 - `steam_client.py`：拥有 Steam、ITAD、图片请求与分服务冷却。
 - `crawler.py`：拥有任务认领、优先级、调度和失败恢复。

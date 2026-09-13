@@ -5,7 +5,7 @@ import sqlite3
 import threading
 import time
 
-from . import catalog, config, crawler_data, storage_maintenance
+from . import catalog, config, crawler_data, crawler_fetch, storage_maintenance
 from . import _runtime as runtime
 from .migrations import create_database_backup
 
@@ -79,7 +79,7 @@ def run_players_task(force=False):
     if not appids:
         return False
     try:
-        report = asyncio.run(runtime.fetch_players_for_appids_async(appids))
+        report = asyncio.run(crawler_fetch.fetch_players_for_appids_async(appids))
         successful = report["success_appids"]
         failed = [appid for appid in appids if appid not in set(successful)]
         runtime.complete_crawl_tasks(successful, "players")
@@ -111,7 +111,7 @@ def _run_appdetails_task(task_type, due_appids, limit, priority, persist, unavai
         return False
     try:
         rows, unavailable, retry, stamp = asyncio.run(
-            runtime.fetch_hot_metadata_async(appids, full=task_type == "metadata", include_reviews=False)
+            crawler_fetch.fetch_hot_metadata_async(appids, full=task_type == "metadata", include_reviews=False)
         )
         persist(rows, stamp)
         successful_appids = [row["appid"] for row in rows]
@@ -218,7 +218,7 @@ def run_review_task():
     if not appids:
         return False
     try:
-        rows, unavailable, retry, stamp = asyncio.run(runtime.fetch_hot_reviews_async(appids))
+        rows, unavailable, retry, stamp = asyncio.run(crawler_fetch.fetch_hot_reviews_async(appids))
         crawler_data.upsert_review_batch(rows, stamp)
         runtime.complete_crawl_tasks([row["appid"] for row in rows], "reviews")
         runtime.mark_crawl_tasks_not_available(unavailable, "reviews", "Steam reviews unavailable")

@@ -244,9 +244,9 @@ async def fetch_itad_game_ids_async(appids):
     try:
         found = await lookup_itad_game_ids(appids)
     except ItadLookupBatchError as exc:
-        runtime.save_itad_game_ids(exc.partial_results.items())
+        crawler_data.save_itad_game_ids(exc.partial_results.items(), runtime.now_iso())
         raise
-    runtime.save_itad_game_ids(found.items())
+    crawler_data.save_itad_game_ids(found.items(), runtime.now_iso())
     return found
 
 
@@ -276,7 +276,7 @@ async def fetch_itad_history_lows_async(appids, countries=("US", "CN")):
     from .steam_client import fetch_itad_history_low_rows
 
     rows = await fetch_itad_history_low_rows(gid_to_appid, countries, stamp)
-    runtime.upsert_historical_lows(rows)
+    crawler_data.upsert_historical_lows(rows)
     return stamp
 
 

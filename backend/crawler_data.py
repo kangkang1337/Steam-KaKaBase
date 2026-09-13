@@ -5,6 +5,31 @@ from .db import enqueue_crawl_tasks, get_crawl_state, is_due, transaction
 from .utils import UNKNOWN_GAME_NAME, clean_hot_name, fallback_game_name
 
 
+def save_itad_game_ids(rows, stamp):
+    rows = [(int(appid), game_id, stamp) for appid, game_id in rows if game_id]
+    if not rows:
+        return
+    with transaction() as conn:
+        conn.executemany(
+            "UPDATE games SET itad_game_id=?,updated_at=? WHERE appid=?",
+            [(game_id, updated_at, appid) for appid, game_id, updated_at in rows],
+        )
+
+
+def upsert_historical_lows(rows):
+    if not rows:
+        return
+    with transaction() as conn:
+        conn.executemany(
+            """INSERT INTO historical_lows(appid,itad_game_id,country,shop_id,shop_name,currency,amount,amount_int,amount_cny,regular_amount_int,cut,low_at,fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(appid,country) DO UPDATE SET
+            itad_game_id=excluded.itad_game_id,shop_id=excluded.shop_id,shop_name=excluded.shop_name,currency=excluded.currency,
+            amount=excluded.amount,amount_int=excluded.amount_int,amount_cny=excluded.amount_cny,regular_amount_int=excluded.regular_amount_int,
+            cut=excluded.cut,low_at=excluded.low_at,fetched_at=excluded.fetched_at""",
+            rows,
+        )
+
+
 def upsert_hot_games_batch(rows, stamp):
     if not rows:
         return

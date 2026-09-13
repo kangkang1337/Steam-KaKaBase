@@ -11,7 +11,7 @@ def test_itad_lookup_orchestration_persists_resolved_ids(monkeypatch):
         return {10: "itad-10", 20: "itad-20"}
 
     monkeypatch.setattr(steam_client, "lookup_itad_game_ids", fake_lookup)
-    monkeypatch.setattr(crawler.runtime, "save_itad_game_ids", lambda rows: saved.extend(rows))
+    monkeypatch.setattr(crawler_data, "save_itad_game_ids", lambda rows, _stamp: saved.extend(rows))
 
     result = asyncio.run(crawler.fetch_itad_game_ids_async([10, 20]))
 
@@ -35,7 +35,7 @@ def test_itad_history_orchestration_keeps_network_and_persistence_separate(
 
     monkeypatch.setattr(runtime, "ITAD_API_KEY", "configured")
     monkeypatch.setattr(steam_client, "fetch_itad_history_low_rows", fake_fetch)
-    monkeypatch.setattr(runtime, "upsert_historical_lows", lambda rows: captured.extend(rows))
+    monkeypatch.setattr(crawler_data, "upsert_historical_lows", lambda rows: captured.extend(rows))
 
     stamp = asyncio.run(crawler.fetch_itad_history_lows_async([appid], ("CN",)))
 

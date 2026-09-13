@@ -5,7 +5,7 @@ import sqlite3
 import threading
 import time
 
-from . import catalog, config
+from . import catalog, config, storage_maintenance
 from . import _runtime as runtime
 from .migrations import create_database_backup
 
@@ -408,8 +408,8 @@ def refresh_hot_database_once(force_hotlist=False, quick=False):
             from .services import refresh_daily_home_picks
 
             refresh_daily_home_picks()
-            runtime.compact_player_snapshots_once()
-            runtime.maintain_storage_once()
+            storage_maintenance.compact_player_snapshots_once()
+            storage_maintenance.maintain_storage_once()
     except Exception as exc:
         message = str(exc)
         errors.append(message)
@@ -488,7 +488,7 @@ def startup_prewarm_async():
 # Transitional exports that have not moved out of _runtime yet.
 cleanup_image_cache_once = runtime.cleanup_image_cache_once
 enqueue_hot_work = runtime.enqueue_hot_work
-maintain_storage_once = runtime.maintain_storage_once
+maintain_storage_once = storage_maintenance.maintain_storage_once
 refresh_tracked_once = runtime.refresh_tracked_once
 run_catalog_enrich_task = catalog.run_catalog_enrich_task
 run_niche_pool_task = runtime.run_niche_pool_task

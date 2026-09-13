@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from backend import storage_maintenance as storage
 
 FIXED_NOW = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
 TEST_TEMP = Path(__file__).parent / ".tmp"
@@ -125,7 +126,7 @@ def test_init_db_migrates_legacy_schema_idempotently(monkeypatch):
 def test_player_history_compaction_boundaries(isolated_runtime, monkeypatch, insert_game):
     runtime = isolated_runtime
     appid = insert_game(101, "Player History")
-    monkeypatch.setattr(runtime, "datetime", FrozenDateTime)
+    monkeypatch.setattr(storage, "datetime", FrozenDateTime)
     rows = [
         (appid, 1, stamp(days=1, hours=1)),
         (appid, 2, stamp(days=1, hours=2)),
@@ -141,8 +142,8 @@ def test_player_history_compaction_boundaries(isolated_runtime, monkeypatch, ins
             rows,
         )
 
-    assert runtime.compact_player_snapshots_once() is True
-    assert runtime.compact_player_snapshots_once() is False
+    assert storage.compact_player_snapshots_once() is True
+    assert storage.compact_player_snapshots_once() is False
     with sqlite3.connect(runtime.DB_PATH) as conn:
         kept = conn.execute(
             "SELECT player_count FROM player_snapshots WHERE appid = ? ORDER BY player_count",
@@ -155,7 +156,7 @@ def test_player_history_compaction_boundaries(isolated_runtime, monkeypatch, ins
 def test_price_history_compaction_preserves_series_boundaries(isolated_runtime, monkeypatch, insert_game):
     runtime = isolated_runtime
     appid = insert_game(102, "Price History")
-    monkeypatch.setattr(runtime, "datetime", FrozenDateTime)
+    monkeypatch.setattr(storage, "datetime", FrozenDateTime)
 
     def price(value, fetched_at, region="CN", source="steam"):
         return (appid, region, "CNY", value, value, 0, f"¥{value / 100:.2f}", source, fetched_at)
@@ -181,8 +182,8 @@ def test_price_history_compaction_preserves_series_boundaries(isolated_runtime, 
             rows,
         )
 
-    assert runtime.compact_price_snapshots_once() is True
-    assert runtime.compact_price_snapshots_once() is False
+    assert storage.compact_price_snapshots_once() is True
+    assert storage.compact_price_snapshots_once() is False
     with sqlite3.connect(runtime.DB_PATH) as conn:
         kept = conn.execute(
             "SELECT final, source FROM price_snapshots WHERE appid = ? ORDER BY final",
@@ -195,7 +196,7 @@ def test_price_history_compaction_preserves_series_boundaries(isolated_runtime, 
 def test_cleanup_removes_only_expired_terminal_records(isolated_runtime, monkeypatch, insert_game):
     runtime = isolated_runtime
     appid = insert_game(103, "Cleanup")
-    monkeypatch.setattr(runtime, "datetime", FrozenDateTime)
+    monkeypatch.setattr(storage, "datetime", FrozenDateTime)
     old_task = stamp(days=runtime.CRAWL_TASK_RETENTION_DAYS + 1)
     old_recommendation = (FIXED_NOW - timedelta(days=runtime.RECOMMENDATION_RETENTION_DAYS + 1)).strftime("%Y-%m-%d")
     recent_recommendation = FIXED_NOW.strftime("%Y-%m-%d")
@@ -225,8 +226,8 @@ def test_cleanup_removes_only_expired_terminal_records(isolated_runtime, monkeyp
             ],
         )
 
-    assert runtime.cleanup_old_records_once() is True
-    assert runtime.cleanup_old_records_once() is False
+    assert storage.cleanup_old_records_once() is True
+    assert storage.cleanup_old_records_once() is False
     with sqlite3.connect(runtime.DB_PATH) as conn:
         tasks = {row[0] for row in conn.execute("SELECT task_type FROM crawl_tasks")}
         recommendations = {

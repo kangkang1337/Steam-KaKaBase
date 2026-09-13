@@ -67,6 +67,7 @@
 - `config.py`：真正拥有环境变量解析和配置校验。
 - `db.py`：拥有连接、迁移初始化、schema 验证、查询仓储、事务和任务队列；不得反向依赖 `_runtime.py`。
 - `game_queries.py`：拥有只读游戏查询、搜索缓存与面向 API 的稳定序列化；不得发起外部请求或依赖 `_runtime.py`。
+- `storage_maintenance.py`：拥有日志轮转、价格/玩家快照压缩、旧任务清理和图片缓存清理；不得依赖 `_runtime.py`。
 - `catalog.py`：拥有 AppList 游标扫描、增量 enrich、非游戏分类和小众池写入；不得反向依赖 `_runtime.py`。
 - `steam_client.py`：拥有 Steam、ITAD、图片请求与分服务冷却。
 - `crawler.py`：拥有任务认领、优先级、调度和失败恢复。

@@ -104,6 +104,7 @@ backend/
 ├── external_errors.py 外部数据源的稳定异常类型
 ├── db.py              SQLite 连接、迁移初始化、只读查询和任务状态
 ├── game_queries.py    游戏详情、榜单、搜索与 API 序列化
+├── storage_maintenance.py 日志轮转、快照压缩和本地保留清理
 ├── steam_client.py    Steam / ITAD 请求、代理、重试和冷却
 ├── catalog.py         Steam AppList 扫描、富化、非游戏过滤和小众池写入
 ├── crawler.py         后台采集与任务编排入口

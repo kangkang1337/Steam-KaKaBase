@@ -4,6 +4,7 @@ import mimetypes
 import secrets
 import hashlib
 import hmac
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -219,8 +220,14 @@ def create_app():
     @application.post("/api/auth/login")
     def auth_login(body: LoginRequest, request: Request):
         enforce_ip_rate(request, "auth", limit=config.AUTH_RATE_LIMIT, window_seconds=config.AUTH_RATE_WINDOW_SECONDS)
-        try: token, csrf, user, expires = auth.login(body.username, body.password, body.remember)
-        except ValueError as exc: raise HTTPException(status_code=401, detail=str(exc)) from exc
+        started_at = time.monotonic()
+        try:
+            token, csrf, user, expires = auth.login(body.username, body.password, body.remember)
+        except ValueError as exc:
+            # Keep failed logins observable no sooner than the same short floor.
+            # This complements IP rate limiting and avoids leaking credential state.
+            time.sleep(max(0, config.AUTH_FAILURE_DELAY_SECONDS - (time.monotonic() - started_at)))
+            raise HTTPException(status_code=401, detail="用户名或密码错误") from exc
         response = JSONResponse({"ok": True, "user": {"username": user["username"], "is_admin": auth.is_admin(user), "is_owner": auth.is_owner(user)}, "csrf_token": csrf})
         response.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite="lax", secure=config.IS_PRODUCTION, max_age=int((expires - __import__('datetime').datetime.now(__import__('datetime').timezone.utc)).total_seconds()) if body.remember else None)
         return response

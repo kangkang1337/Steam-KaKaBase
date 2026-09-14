@@ -4,7 +4,7 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import config, services, migrations
+from backend import config, services, migrations, server
 from backend.server import create_app
 
 
@@ -76,6 +76,20 @@ def test_auth_rate_limit_is_enforced_by_ip(api_client, monkeypatch):
     assert first.status_code == 401
     assert second.status_code == 429
     assert int(second.headers["Retry-After"]) >= 1
+
+
+def test_failed_login_has_a_uniform_message_and_minimum_delay(api_client, monkeypatch):
+    _, client = api_client
+    pauses = []
+    monkeypatch.setattr(config, "AUTH_FAILURE_DELAY_SECONDS", 0.5)
+    monkeypatch.setattr(server.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(server.time, "sleep", pauses.append)
+
+    response = client.post("/api/auth/login", json={"username": "missing", "password": "password123"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "用户名或密码错误"
+    assert pauses == [0.5]
 
 
 def test_admin_password_reset_invalidates_existing_sessions(api_client):

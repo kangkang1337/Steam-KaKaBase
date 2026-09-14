@@ -36,13 +36,17 @@ def env_int(name, default, *, minimum=None, maximum=None):
     return value
 
 
-def env_float(name, default, *, minimum=None):
+def env_float(name, default, *, minimum=None, maximum=None):
     raw = os.getenv(name, str(default))
     try:
         value = float(raw)
     except ValueError as exc:
         raise ValueError(f"{name} must be a number, got {raw!r}") from exc
-    return max(minimum, value) if minimum is not None else value
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
 
 
 def env_bool(name, default=False, *, fallback=None):
@@ -165,6 +169,7 @@ COVERAGE_ACTIVITY_DAYS = env_int("STEAMKB_COVERAGE_ACTIVITY_DAYS", 14, minimum=1
 PLAYER_REQUEST_DELAY_SECONDS = env_float("STEAMKB_PLAYER_REQUEST_DELAY_SECONDS", 0.5, minimum=0)
 AUTH_RATE_LIMIT = env_int("STEAMKB_AUTH_RATE_LIMIT", 10, minimum=1, maximum=1000)
 AUTH_RATE_WINDOW_SECONDS = env_int("STEAMKB_AUTH_RATE_WINDOW_SECONDS", 300, minimum=1, maximum=3600)
+AUTH_FAILURE_DELAY_SECONDS = env_float("STEAMKB_AUTH_FAILURE_DELAY_SECONDS", 0.5, minimum=0.5, maximum=2)
 FAVORITES_RATE_LIMIT = env_int("STEAMKB_FAVORITES_RATE_LIMIT", 60, minimum=1, maximum=5000)
 FAVORITES_RATE_WINDOW_SECONDS = env_int("STEAMKB_FAVORITES_RATE_WINDOW_SECONDS", 60, minimum=1, maximum=3600)
 APP_NAME_REFRESH_HOURS = env_int("STEAMKB_APP_NAME_REFRESH_HOURS", 24, minimum=24)

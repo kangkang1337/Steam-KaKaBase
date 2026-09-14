@@ -939,6 +939,7 @@
     }
     .auth-dialog { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.6); }
     .auth-card { width: min(360px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: #111820; box-shadow: 0 16px 48px #000; }
+    .auth-error { margin: 0 0 10px; color: #ffc2bd; font-size: 14px; line-height: 1.45; }
     .auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #0b1116; }
     .auth-tabs button { border: 0; border-radius: 4px; color: var(--muted); background: transparent; }
     .auth-tabs button.active { color: #fff; background: #2a475e; }
@@ -1418,11 +1419,12 @@
   <div v-if="authOpen" class="auth-dialog" @click.self="authOpen = false">
     <form class="auth-card" @submit.prevent="submitAuth">
       <div class="auth-tabs" role="tablist" :aria-label="t('accountAccess')">
-        <button type="button" role="tab" :aria-selected="authMode === 'login'" :class="{active: authMode === 'login'}" @click="authMode = 'login'">{{ t('login') }}</button>
-        <button type="button" role="tab" :aria-selected="authMode === 'register'" :class="{active: authMode === 'register'}" @click="authMode = 'register'">{{ t('register') }}</button>
+        <button type="button" role="tab" :aria-selected="authMode === 'login'" :class="{active: authMode === 'login'}" @click="authMode = 'login'; authError = ''">{{ t('login') }}</button>
+        <button type="button" role="tab" :aria-selected="authMode === 'register'" :class="{active: authMode === 'register'}" @click="authMode = 'register'; authError = ''">{{ t('register') }}</button>
       </div>
-      <input v-model.trim="authUsername" autocomplete="username" :placeholder="t('username')" minlength="3" maxlength="40" required :disabled="authBusy">
-      <input v-model="authPassword" type="password" autocomplete="current-password" :placeholder="t('password')" minlength="8" maxlength="128" required :disabled="authBusy">
+      <p v-if="authError" class="auth-error" role="alert">{{ authError }}</p>
+      <input v-model.trim="authUsername" @input="authError = ''" autocomplete="username" :placeholder="t('username')" minlength="3" maxlength="40" required :disabled="authBusy">
+      <input v-model="authPassword" @input="authError = ''" type="password" autocomplete="current-password" :placeholder="t('password')" minlength="8" maxlength="128" required :disabled="authBusy">
       <label class="auth-remember"><input v-model="authRemember" type="checkbox" :disabled="authBusy"> <span>{{ t('rememberMe') }}</span></label>
       <p class="auth-note">{{ t('privacyNotice') }}</p>
       <div class="auth-actions"><button type="submit" :disabled="authBusy" :aria-busy="authBusy">{{ authBusy ? t('submitting') : t('confirm') }}</button></div>
@@ -1611,7 +1613,7 @@
           searching: false,
           busy: false,
           favoriteBusy: false,
-          account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true, authBusy: false, deleteAccountOpen: false, deleteAccountPassword: '',
+          account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true, authBusy: false, authError: '', deleteAccountOpen: false, deleteAccountPassword: '',
           monitoring: null, admins: [], adminUsername: '', resetUsername: '', resetPassword: '', resetBusy: false, controlBusy: null, controlConfirmAction: null,
           refreshing: false,
           wasRefreshing: false,
@@ -2630,7 +2632,7 @@
         controlLabel(action) { return this.t({local_backup:'localBackupAction',offsite_backup:'offsiteBackupAction',recovery_drill:'recoveryDrillAction',restart_web:'restartWebAction',restart_crawler:'restartCrawlerAction'}[action] || action); },
         confirmControl() { const action=this.controlConfirmAction; this.controlConfirmAction=null; if (action) this.runControl(action); },
         async runControl(action) { this.controlBusy=action; const controller=new AbortController(); const timeout=setTimeout(() => controller.abort(), 15000); try { const result=await this.api(`/api/admin/controls/${encodeURIComponent(action)}`, {method:'POST', signal:controller.signal}); this.message=result.message; setTimeout(() => this.loadMonitoring(), 1200); } catch (err) { this.message=err.message; } finally { clearTimeout(timeout); this.controlBusy=null; } },
-        async submitAuth() { if (this.authBusy) return; this.authBusy=true; try { const path = this.authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; await this.api(path, {method:'POST', body: JSON.stringify({username:this.authUsername,password:this.authPassword,remember:this.authRemember})}); if (this.authMode === 'register') { this.authMode='login'; this.message=this.t('registerSuccess'); return; } await this.restoreAuth(); this.authOpen=false; this.authPassword=''; } catch (err) { this.message=err.message; } finally { this.authBusy=false; } },
+        async submitAuth() { if (this.authBusy) return; this.authBusy=true; this.authError=''; try { const path = this.authMode === 'login' ? '/api/auth/login' : '/api/auth/register'; await this.api(path, {method:'POST', body: JSON.stringify({username:this.authUsername,password:this.authPassword,remember:this.authRemember})}); if (this.authMode === 'register') { this.authMode='login'; this.message=this.t('registerSuccess'); return; } await this.restoreAuth(); this.authOpen=false; this.authPassword=''; } catch (err) { this.authError=err.message || this.t('invalidServerResponse'); } finally { this.authBusy=false; } },
         async logout() { await this.api('/api/auth/logout', {method:'POST'}); this.account=null; this.csrfToken=''; await this.loadGames(); },
         async deleteAccount() { try { await this.api('/api/auth/delete-account', {method:'POST', body:JSON.stringify({password:this.deleteAccountPassword})}); this.account=null; this.csrfToken=''; this.deleteAccountPassword=''; this.deleteAccountOpen=false; await this.loadGames(); this.message=this.t('deleteAccount') + '。'; } catch (err) { this.message=err.message; } },
         playerSnapshotPoints() {

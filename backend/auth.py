@@ -7,6 +7,7 @@ from .db import now_iso, transaction
 from . import config
 
 SESSION_COOKIE = "steamkb_session"
+_DUMMY_PASSWORD_SALT = "00000000000000000000000000000000"
 
 def _hash(value): return hashlib.sha256(value.encode("utf-8")).hexdigest()
 def _password(password, salt): return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 210_000).hex()
@@ -27,7 +28,10 @@ def register(username, password):
 def login(username, password, remember):
     with transaction(rows=True) as conn:
         user = conn.execute("SELECT * FROM users WHERE username=?", (username.strip(),)).fetchone()
-        if not user or not secrets.compare_digest(user["password_hash"], _password(password, user["password_salt"])):
+        # Always perform PBKDF2, including for a missing account, so an attacker
+        # cannot use response timing to distinguish usernames.
+        submitted_hash = _password(password, user["password_salt"] if user else _DUMMY_PASSWORD_SALT)
+        if not user or not secrets.compare_digest(user["password_hash"], submitted_hash):
             raise ValueError("用户名或密码错误")
         token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
         expires = datetime.now(timezone.utc) + timedelta(days=30 if remember else 1)

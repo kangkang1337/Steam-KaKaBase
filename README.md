@@ -228,6 +228,7 @@ Copy-Item .env.example .env
 | `STEAMKB_PUBLIC_DETAIL_QUEUE_LIMIT` | `60` | 公开详情补全队列的全站 App 上限 |
 | `STEAMKB_AUTH_RATE_LIMIT` | `10` | 每个 IP 在认证窗口内可进行的注册、登录、删号请求数 |
 | `STEAMKB_AUTH_RATE_WINDOW_SECONDS` | `300` | 认证接口 IP 限流窗口（秒） |
+| `STEAMKB_AUTH_FAILURE_DELAY_SECONDS` | `0.5` | 登录失败的最短响应时间（秒）；统一失败提示并降低暴力猜测与用户名枚举的价值 |
 | `STEAMKB_FAVORITES_RATE_LIMIT` | `60` | 每个 IP 在收藏接口窗口内可进行的请求数 |
 | `STEAMKB_FAVORITES_RATE_WINDOW_SECONDS` | `60` | 收藏接口 IP 限流窗口（秒） |
 | `STEAMKB_PORT` | `8765` | 本地 HTTP 端口 |

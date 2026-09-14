@@ -99,3 +99,6 @@ def test_auth_form_validates_input_and_prevents_duplicate_submissions():
     assert "finally { this.authBusy=false; }" in source
     assert "apiErrorMessage(data)" in source
     assert "Array.isArray(detail)" in source
+    assert "authError: ''" in source
+    assert 'class="auth-error" role="alert"' in source
+    assert "this.authError=err.message" in source

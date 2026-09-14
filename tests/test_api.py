@@ -118,6 +118,32 @@ def test_auth_rate_limit_is_enforced_by_ip(api_client, monkeypatch):
     assert int(second.headers["Retry-After"]) >= 1
 
 
+def test_favoriting_preserves_completed_crawler_work(api_client):
+    runtime, client = api_client
+    appid = 4260
+    runtime.quick_track_game(appid, "Completed Game", None)
+    task_types = ("players", "preview", "reviews", "metadata", "regional_prices", "historylow")
+    for task_type in task_types:
+        runtime.enqueue_crawl_tasks([appid], task_type, 50)
+        assert runtime.claim_crawl_tasks(task_type, 1) == [appid]
+        runtime.complete_crawl_tasks([appid], task_type)
+
+    credentials = {"username": "favorite_queue_user", "password": "password123", "remember": False}
+    assert client.post("/api/auth/register", json=credentials).status_code == 200
+    csrf = client.post("/api/auth/login", json=credentials).json()["csrf_token"]
+    response = client.post(
+        "/api/favorites", json={"appid": appid, "name": "Completed Game"},
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    assert response.status_code == 200
+    with runtime.database_connection() as conn:
+        rows = conn.execute(
+            "SELECT task_type, status FROM crawl_tasks WHERE appid=? ORDER BY task_type", (appid,)
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [(task_type, "done") for task_type in sorted(task_types)]
+
+
 def test_failed_login_has_a_uniform_message_and_minimum_delay(api_client, monkeypatch):
     _, client = api_client
     pauses = []

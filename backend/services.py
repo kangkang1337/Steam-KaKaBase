@@ -444,10 +444,16 @@ def list_user_favorites(user_id):
 
 
 def add_user_favorite(user_id, appid, name=None, header_image=None):
-    track_game(appid, name, header_image)
+    # Adding a wishlist entry used to reuse the administrator's explicit
+    # refresh path. That revived already completed tasks and could fetch the
+    # same game again immediately after its detail page had just filled in.
+    # A favorite still earns full coverage, but only missing work is created.
+    quick_track_game(appid, name, header_image)
     with transaction() as conn:
         conn.execute("INSERT OR IGNORE INTO user_favorites(user_id,appid,created_at) VALUES(?,?,?)", (int(user_id), int(appid), datetime.now(timezone.utc).replace(microsecond=0).isoformat()))
         crawler_data.record_game_interest(conn, appid, favorite=True)
+        for task_type in ("players", "preview", "reviews", "metadata", "regional_prices", "historylow"):
+            enqueue_crawl_task_once_in_conn(conn, appid, task_type, 100)
     return {"ok": True, "appid": int(appid), "tracked": True}
 
 

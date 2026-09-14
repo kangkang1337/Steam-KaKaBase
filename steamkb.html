@@ -1733,7 +1733,10 @@
           detailPollAttempts: 0,
           detailLastPollAt: 0,
           detailPollTimer: null,
+          detailRefreshInFlight: false,
+          detailRefreshTimer: null,
           detailRequestAttempted: false,
+          favoritesLoadSeq: 0,
           selectedDetailSignature: '',
           searchFocused: false,
           searchTimer: null,
@@ -2005,6 +2008,7 @@
         clearInterval(this.statusTimer);
         clearInterval(this.clockTimer);
         clearTimeout(this.detailPollTimer);
+        clearTimeout(this.detailRefreshTimer);
         window.removeEventListener('resize', this.resizeCharts);
         window.removeEventListener('scroll', this.onWindowScroll);
         window.removeEventListener('popstate', this.restoreRouteFromUrl);
@@ -2097,6 +2101,8 @@
           this.detailSeq++;
           clearTimeout(this.detailPollTimer);
           this.detailPollTimer = null;
+          clearTimeout(this.detailRefreshTimer);
+          this.detailRefreshTimer = null;
           this.selectedDetailIncomplete = false;
         },
         switchPage(page, options = {}) {
@@ -2224,18 +2230,32 @@
           return detail ? this.t('invalidInput') : '';
         },
         async loadGames() {
+          const loadSeq = ++this.favoritesLoadSeq;
+          const accountKey = this.account?.username || null;
           this.busy = true;
           try {
+            let games;
             if (this.account) {
-              const data = await this.api('/api/favorites'); this.games = data.games;
+              const data = await this.api('/api/favorites'); games = data.games;
             } else {
-              this.games = this.localFavorites();
+              games = this.localFavorites();
             }
+            // Authentication is restored asynchronously on page load. Do not
+            // let an older guest-list response overwrite the signed-in list.
+            if (loadSeq !== this.favoritesLoadSeq || accountKey !== (this.account?.username || null)) return;
+            this.games = games;
+            this.syncSelectedFavorite();
           } catch (err) {
-            this.message = err.message;
+            if (loadSeq === this.favoritesLoadSeq) this.message = err.message;
           } finally {
-            this.busy = false;
+            if (loadSeq === this.favoritesLoadSeq) this.busy = false;
           }
+        },
+        syncSelectedFavorite() {
+          if (!this.selected?.appid) return;
+          const favorite = this.games.find(game => Number(game.appid) === Number(this.selected.appid));
+          this.selected.tracked = Boolean(favorite);
+          this.selected.favorite_status = favorite?.favorite_status || 'wish';
         },
         async loadHomePicks() {
           try {
@@ -2369,6 +2389,37 @@
             this.scheduleSelectedDetailPoll();
           }
         },
+        scheduleSelectedDetailRefresh(delay = 60000) {
+          clearTimeout(this.detailRefreshTimer);
+          this.detailRefreshTimer = null;
+          if (this.selectedDetailIncomplete || !this.selected?.appid || this.activePage !== 'tracker') return;
+          this.detailRefreshTimer = window.setTimeout(() => {
+            this.detailRefreshTimer = null;
+            this.refreshSelectedDetail();
+          }, delay);
+        },
+        async refreshSelectedDetail() {
+          if (this.detailRefreshInFlight || this.selectedDetailIncomplete ||
+              !this.selected?.appid || this.activePage !== 'tracker' ||
+              document.visibilityState !== 'visible') {
+            this.scheduleSelectedDetailRefresh();
+            return;
+          }
+          this.detailRefreshInFlight = true;
+          try {
+            // This is deliberately a cache-only GET: it reflects crawler
+            // writes without creating additional Steam or ITAD work.
+            await this.selectGame(this.selected.appid, {
+              silent: true,
+              updateUrl: false,
+              requestWork: false,
+              navigate: false
+            });
+          } finally {
+            this.detailRefreshInFlight = false;
+            this.scheduleSelectedDetailRefresh();
+          }
+        },
         async selectGame(appid, options = {}) {
           const seq = ++this.detailSeq;
           const silent = Boolean(options.silent);
@@ -2385,9 +2436,7 @@
             const chartsChanged = detailSignature !== this.selectedDetailSignature;
             const changedGame = this.selected?.appid !== data.game?.appid;
             this.selected = data.game;
-            const favorite = this.games.find(game => Number(game.appid) === Number(data.game?.appid));
-            this.selected.tracked = Boolean(favorite);
-            this.selected.favorite_status = favorite?.favorite_status || 'wish';
+            this.syncSelectedFavorite();
             if (navigate) {
               this.activePage = 'tracker';
               this.navOpen = false;
@@ -2438,6 +2487,7 @@
               this.resizeCharts();
             }
             this.scheduleSelectedDetailPoll();
+            this.scheduleSelectedDetailRefresh();
           } catch (err) {
             if (seq === this.detailSeq) this.message = err.message;
           } finally {

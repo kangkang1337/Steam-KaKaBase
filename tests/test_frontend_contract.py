@@ -81,6 +81,19 @@ def test_navigation_uses_history_and_cancels_stale_detail_updates():
     assert "navigate: false" in source
 
 
+def test_detail_page_syncs_favorites_and_refreshes_only_the_local_cache():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert "syncSelectedFavorite()" in source
+    assert "favoritesLoadSeq: 0" in source
+    assert "scheduleSelectedDetailRefresh(delay = 60000)" in source
+    assert "async refreshSelectedDetail()" in source
+    refresh_source = source[source.index("async refreshSelectedDetail()"):source.index("async selectGame(")]
+    assert "requestWork: false" in refresh_source
+    assert "navigate: false" in refresh_source
+    assert "clearTimeout(this.detailRefreshTimer)" in source
+
+
 def test_api_errors_are_status_aware_and_never_show_proxy_html():
     source = FRONTEND.read_text(encoding="utf-8")
 

@@ -386,6 +386,9 @@ def test_detail_interest_materializes_catalog_game_and_queues_once(api_client):
     assert second.json()["queued"] is False
     with runtime.database_connection() as conn:
         assert conn.execute("SELECT name FROM games WHERE appid=?", (appid,)).fetchone()[0] == "Interest Queue"
+        assert conn.execute(
+            "SELECT last_interested_at FROM game_activity WHERE appid=?", (appid,)
+        ).fetchone()[0]
         task_types = {
             row[0] for row in conn.execute(
                 "SELECT task_type FROM crawl_tasks WHERE appid=?", (appid,)

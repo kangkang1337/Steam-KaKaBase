@@ -1,5 +1,9 @@
 # Steam-KaKaBase
 
+## v0.6.4: Staggered historical coverage
+
+Added SQLite-backed game-coverage tiers to steadily build player and China-region price history before a game is opened. The crawler prioritizes popular games, account favorites, recent detail interest, and then a bounded rotating background cohort. Player sampling is staggered with one external request at a time; daily player and price attempt budgets protect Steam from runaway catalog growth. Detail interest remains the highest-priority queue signal, while normal GET pages stay cache-only. Schema v11 stores only per-game recency timestamps, never visitor identity, and the owner monitoring page shows each daily collection budget.
+
 ## v0.6.3: Runtime boundary cleanup
 
 Completed the current runtime-module cleanup pass. Web services, the crawler scheduler, and the standalone crawler process no longer import `_runtime.py` directly; remaining legacy orchestration access is isolated behind one explicit compatibility boundary. Added a small no-network game-command module for track/untrack writes, while preserving the existing Web read-only cache rule, crawler-only external collection, task queue behavior, proxy fallback, rate limiting, and SQLite transaction semantics. Documentation now records the boundary and the path to physically retire it after a stable production crawler cycle.
@@ -24,7 +28,7 @@ Fixed the administrator control panel so owner-only maintenance actions work wit
 
 一个面向本地运行的 Steam 数据面板，设计参考 SteamDB。用于查看游戏价格与本地历史快照、在线人数趋势、玩家评价、热门榜和每日小众宝藏推荐。
 
-当前版本：`v0.6.3`
+当前版本：`v0.6.4`
 
 > 项目支持本地运行和单机 VPS 自托管。生产部署使用 Nginx、HTTPS、UFW、systemd、受限写接口与异地 SQLite 备份；仍建议先在个人规模下运行并持续观察 Steam/ITAD 的限流情况。
 
@@ -40,7 +44,7 @@ Fixed the administrator control panel so owner-only maintenance actions work wit
 - 独立维护小众游戏池，并从候选池较强的前 50% 随机抽取最多 20 款展示。
 - 首页展示今日史低、每日小众宝藏游戏和今日表情包，统一在本地时间每天 00:10 更新。
 - Vue 3 + ECharts 前端，价格折线图和在线人数快照柱形图支持悬停查看数据；玩家图以等宽快照柱显示，并固定展示最多 7 个横轴时间点。
-- 仅管理员可查看的运行监控页；仅服主可触发固定的备份、恢复演练和服务重启动作，健康摘要、日志和基础设施数据不会暴露给普通用户。
+- 仅管理员可查看的运行监控页；仅服主可触发固定的备份、恢复演练和服务重启动作，健康摘要、日志、采集预算和基础设施数据不会暴露给普通用户。
 
 详情页只加载游戏头图，不再批量下载 Steam 截图或徽章。
 
@@ -242,8 +246,14 @@ Copy-Item .env.example .env
 | `STEAMKB_ADMIN_OWNER_USERNAME` | 空 | 服主账号名；该账号可查看监控、管理管理员并执行固定运维动作 |
 | `STEAMKB_ADMIN_CONTROLS_ENABLED` | `false` | 是否启用服主专用的备份、演练和服务重启控制组件；Ubuntu 安装脚本会启用 |
 | `STEAMKB_VISITOR_METRICS_SECRET` | 回退到管理员令牌 | 用于匿名访客 Cookie 的 HMAC；不保存 IP |
-| `STEAMKB_PLAYER_REFRESH_MINUTES` | `30` | 在线人数刷新间隔，最小 30 分钟 |
-| `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 价格刷新间隔，最小 24 小时 |
+| `STEAMKB_PLAYER_REFRESH_MINUTES` | `30` | 兼容旧配置；分层调度中热门游戏为 30 分钟，收藏为 1 小时 |
+| `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 兼容旧配置；分层调度中热门和收藏为 24 小时 |
+| `STEAMKB_PLAYER_DAILY_REQUEST_BUDGET` | `5000` | 每日玩家采集尝试上限；达到后等待次日，防止目录增长放大请求 |
+| `STEAMKB_PRICE_DAILY_REQUEST_BUDGET` | `600` | 每日后台中国区价格采集尝试上限 |
+| `STEAMKB_COVERAGE_PLAYER_BATCH_LIMIT` | `25` | 每轮额外覆盖候选数；热门榜仍优先完整轮转 |
+| `STEAMKB_COVERAGE_PRICE_BATCH_LIMIT` | `20` | 每轮额外价格覆盖候选数 |
+| `STEAMKB_COVERAGE_ACTIVITY_DAYS` | `14` | 最近打开详情游戏保持较高覆盖频率的天数 |
+| `STEAMKB_PLAYER_REQUEST_DELAY_SECONDS` | `0.5` | 单路玩家请求之间的错峰间隔；设为 `0` 仅在确认额度充足时使用 |
 | `STEAMKB_HOTLIST_TARGET` | `100` | 本地热门榜目标数量 |
 | `STEAMKB_CATALOG_LIMIT` | `0` | 兼容旧配置；非零时仅作为旧版扫描批量回退值，不再限制目录总量 |
 | `STEAMKB_CATALOG_SCAN_BATCH_LIMIT` | `10000` | 每天推进的轻量 AppList 条目上限 |
@@ -275,7 +285,7 @@ STEAMKB_PROXY_URL=http://127.0.0.1:7890
 
 ## 数据库迁移与备份
 
-SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v10：v9 新增管理员权限与匿名访问聚合表，v10 增加每日 5xx 聚合计数以生成健康摘要。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
+SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v11：v9 新增管理员权限与匿名访问聚合表，v10 增加每日 5xx 聚合计数以生成健康摘要，v11 增加不含用户身份的游戏兴趣/收藏时间信号，用于分层历史覆盖。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
 
 迁移中任意一步失败时，事务会整体回滚，服务停止启动，并在错误中给出升级前备份路径。crawler 还会使用 SQLite Backup API 每 24 小时在线创建一次 `daily` 备份，默认保留 14 份；每日备份、手动备份和迁移备份分别轮转，不会互相删除。数据库和备份文件均被 Git 忽略。
 

@@ -1,6 +1,48 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 from backend import crawler, crawler_data, crawler_fetch, steam_client
+
+
+def test_coverage_tiers_prioritize_hot_favorites_and_recent_interest(
+    isolated_runtime, insert_game
+):
+    runtime = isolated_runtime
+    hot, favorite, recent, cold = (
+        insert_game(5101, "Hot"), insert_game(5102, "Favorite"),
+        insert_game(5103, "Recent"), insert_game(5104, "Cold"),
+    )
+    old = (datetime.now(timezone.utc) - timedelta(days=8)).replace(microsecond=0).isoformat()
+    with runtime.database_connection() as conn:
+        conn.execute(
+            "INSERT INTO hot_games(appid,rank,name,source,fetched_at) VALUES (?,1,'Hot','test',?)",
+            (hot, old),
+        )
+        conn.execute(
+            "INSERT INTO users(username,password_hash,password_salt,created_at) VALUES ('coverage-user','h','s',?)",
+            (old,),
+        )
+        user_id = conn.execute("SELECT id FROM users WHERE username='coverage-user'").fetchone()[0]
+        conn.execute(
+            "INSERT INTO user_favorites(user_id,appid,created_at) VALUES (?,?,?)",
+            (user_id, favorite, old),
+        )
+        crawler_data.record_game_interest(conn, recent)
+
+    rows = crawler_data.get_due_coverage_appids("players", 100)
+    priorities = {appid: priority for appid, priority, _stamp in rows}
+    assert priorities[hot] == 40
+    assert priorities[favorite] == 30
+    assert priorities[recent] == 20
+    assert priorities[cold] == 10
+
+
+def test_coverage_budget_is_daily_and_bounded(isolated_runtime):
+    assert crawler_data.remaining_coverage_budget("players", 3) == 3
+    assert crawler_data.reserve_coverage_budget("players", 2, 3) == 2
+    assert crawler_data.remaining_coverage_budget("players", 3) == 1
+    assert crawler_data.reserve_coverage_budget("players", 2, 3) == 1
+    assert crawler_data.remaining_coverage_budget("players", 3) == 0
 
 
 def test_itad_lookup_orchestration_persists_resolved_ids(monkeypatch):

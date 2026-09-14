@@ -1,7 +1,9 @@
 """SQLite reads and writes used by crawler task orchestration."""
 
+from datetime import datetime, timedelta, timezone
+
 from . import config
-from .db import enqueue_crawl_tasks, get_crawl_state, is_due, transaction
+from .db import enqueue_crawl_tasks, get_crawl_state, is_due, set_crawl_state, transaction
 from .utils import UNKNOWN_GAME_NAME, clean_hot_name, fallback_game_name
 
 
@@ -162,3 +164,166 @@ def enqueue_hot_work(missing_historylow_appids):
     enqueue_crawl_tasks(get_hot_review_due_appids(config.HOT_PREVIEW_TOP_LIMIT), "reviews", 50, generation=generation)
     enqueue_crawl_tasks(get_hot_full_metadata_due_appids(), "metadata", 80, generation=generation)
     enqueue_crawl_tasks(missing_historylow_appids(config.ITAD_HISTORYLOW_BATCH_LIMIT), "historylow", 10, generation=generation)
+
+
+def record_game_interest(conn, appid, *, favorite=False):
+    """Store only a per-game recency signal, never a visitor identity."""
+    column = "last_favorited_at" if favorite else "last_interested_at"
+    conn.execute(
+        f"""INSERT INTO game_activity(appid, {column}) VALUES (?, ?)
+        ON CONFLICT(appid) DO UPDATE SET {column}=excluded.{column}""",
+        (int(appid), datetime.now(timezone.utc).replace(microsecond=0).isoformat()),
+    )
+
+
+def _latest_player_rows(conn, appids):
+    if not appids:
+        return {}
+    placeholders = ",".join("?" for _ in appids)
+    rows = conn.execute(
+        f"""SELECT p.appid,p.player_count,p.fetched_at FROM player_snapshots p
+        JOIN (SELECT appid,MAX(fetched_at) AS fetched_at FROM player_snapshots
+              WHERE appid IN ({placeholders}) GROUP BY appid) latest
+          ON latest.appid=p.appid AND latest.fetched_at=p.fetched_at""",
+        [int(appid) for appid in appids],
+    ).fetchall()
+    return {int(appid): (int(players or 0), fetched_at) for appid, players, fetched_at in rows}
+
+
+def _latest_price_rows(conn, appids):
+    if not appids:
+        return {}
+    placeholders = ",".join("?" for _ in appids)
+    rows = conn.execute(
+        f"""SELECT appid,MAX(fetched_at) FROM price_snapshots
+        WHERE region='CN' AND source='steam' AND appid IN ({placeholders}) GROUP BY appid""",
+        [int(appid) for appid in appids],
+    ).fetchall()
+    return {int(appid): fetched_at for appid, fetched_at in rows}
+
+
+def _coverage_candidates(conn):
+    """Return candidate appids with priority sources before due-time filtering."""
+    active_since = (
+        datetime.now(timezone.utc) - timedelta(days=config.COVERAGE_ACTIVITY_DAYS)
+    ).replace(microsecond=0).isoformat()
+    result = {}
+
+    def add(appids, priority, source):
+        for appid in appids:
+            appid = int(appid)
+            previous = result.get(appid)
+            if previous is None or priority > previous[0]:
+                result[appid] = (priority, source)
+
+    add(
+        [row[0] for row in conn.execute(
+            "SELECT appid FROM hot_games ORDER BY COALESCE(rank,999999) LIMIT ?",
+            (config.HOTLIST_TARGET,),
+        )],
+        40, "hot",
+    )
+    add(
+        [row[0] for row in conn.execute(
+            "SELECT DISTINCT appid FROM user_favorites ORDER BY appid"
+        )],
+        30, "favorite",
+    )
+    add(
+        [row[0] for row in conn.execute(
+            "SELECT appid FROM game_activity WHERE last_interested_at >= ? ORDER BY last_interested_at DESC LIMIT 500",
+            (active_since,),
+        )],
+        20, "recent",
+    )
+    # A rotating bounded cold cohort gives already-known games their first
+    # sample without turning the entire catalog into an immediate backlog.
+    add(
+        [row[0] for row in conn.execute(
+            """SELECT g.appid FROM games g
+            LEFT JOIN game_latest_state s ON s.appid=g.appid
+            WHERE g.name IS NOT NULL
+            ORDER BY COALESCE(s.players_updated_at, ''), g.appid LIMIT 250"""
+        )],
+        10, "background",
+    )
+    return result
+
+
+def get_due_coverage_appids(kind, limit):
+    """Choose staggered player or CN-price work from deterministic tiers."""
+    if kind not in {"players", "price"}:
+        raise ValueError("unsupported coverage kind")
+    with transaction() as conn:
+        candidates = _coverage_candidates(conn)
+        appids = list(candidates)
+        latest = _latest_player_rows(conn, appids) if kind == "players" else _latest_price_rows(conn, appids)
+        latest_players = _latest_player_rows(conn, appids) if kind == "price" else None
+    selected = []
+    for appid, (priority, source) in candidates.items():
+        if kind == "players":
+            players, fetched_at = latest.get(appid, (0, None))
+            interval = (
+                30 if source == "hot" else 60 if source == "favorite" else
+                240 if source == "recent" else 120 if players > 10 else
+                360 if players > 0 else 1440
+            )
+        else:
+            fetched_at = latest.get(appid)
+            players = (latest_players or {}).get(appid, (0, None))[0]
+            interval = (
+                24 * 60 if source in {"hot", "favorite"} else
+                48 * 60 if source == "recent" or players > 0 else
+                72 * 60
+            )
+        if is_due(fetched_at, interval):
+            selected.append((appid, priority, fetched_at or ""))
+    selected.sort(key=lambda row: (-row[1], row[2], row[0]))
+    return selected[:max(1, int(limit))]
+
+
+def enqueue_due_coverage_tasks(kind, limit):
+    rows = get_due_coverage_appids(kind, limit)
+    for priority in sorted({priority for _appid, priority, _stamp in rows}, reverse=True):
+        enqueue_crawl_tasks(
+            [appid for appid, row_priority, _stamp in rows if row_priority == priority],
+            kind,
+            priority,
+        )
+    return len(rows)
+
+
+def _coverage_budget_key(kind):
+    day = datetime.now(config.DAILY_REFRESH_TZINFO).date().isoformat()
+    return f"coverage_budget:{kind}:{day}"
+
+
+def remaining_coverage_budget(kind, daily_limit):
+    with transaction() as conn:
+        used = int(get_crawl_state(conn, _coverage_budget_key(kind)) or 0)
+    return max(0, int(daily_limit) - used)
+
+
+def reserve_coverage_budget(kind, count, daily_limit):
+    """Reserve attempts before external I/O so failures cannot evade the cap."""
+    count = max(0, int(count))
+    with transaction() as conn:
+        key = _coverage_budget_key(kind)
+        used = int(get_crawl_state(conn, key) or 0)
+        granted = min(count, max(0, int(daily_limit) - used))
+        if granted:
+            set_crawl_state(conn, key, str(used + granted))
+    return granted
+
+
+def coverage_status():
+    return {
+        "players": {
+            "used": config.PLAYER_DAILY_REQUEST_BUDGET - remaining_coverage_budget("players", config.PLAYER_DAILY_REQUEST_BUDGET),
+            "limit": config.PLAYER_DAILY_REQUEST_BUDGET,
+        },
+        "price": {
+            "used": config.PRICE_DAILY_REQUEST_BUDGET - remaining_coverage_budget("price", config.PRICE_DAILY_REQUEST_BUDGET),
+            "limit": config.PRICE_DAILY_REQUEST_BUDGET,
+        },
+    }

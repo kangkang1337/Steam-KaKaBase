@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 
 
 class DatabaseMigrationError(RuntimeError):
@@ -431,6 +431,27 @@ def _migration_10_monitor_errors(conn):
     _add_column(conn, "daily_request_metrics", "server_error_count", "INTEGER NOT NULL DEFAULT 0")
 
 
+def _migration_11_game_coverage_activity(conn):
+    """Keep bounded, non-identifying signals for crawler coverage tiers."""
+    _execute_sql(conn, """
+    CREATE TABLE IF NOT EXISTS game_activity (
+        appid INTEGER PRIMARY KEY,
+        last_interested_at TEXT,
+        last_favorited_at TEXT,
+        FOREIGN KEY(appid) REFERENCES games(appid) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_game_activity_interest
+        ON game_activity(last_interested_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_game_activity_favorite
+        ON game_activity(last_favorited_at DESC);
+
+    INSERT INTO game_activity(appid, last_favorited_at)
+    SELECT appid, MAX(created_at) FROM user_favorites GROUP BY appid
+    ON CONFLICT(appid) DO UPDATE SET
+        last_favorited_at=MAX(game_activity.last_favorited_at, excluded.last_favorited_at);
+    """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_1_initial_schema),
     Migration(2, "legacy_columns", _migration_2_legacy_columns),
@@ -442,6 +463,7 @@ MIGRATIONS = (
     Migration(8, "user_favorites", _migration_8_user_favorites),
     Migration(9, "admin_monitoring", _migration_9_admin_monitoring),
     Migration(10, "monitor_error_counts", _migration_10_monitor_errors),
+    Migration(11, "game_coverage_activity", _migration_11_game_coverage_activity),
 )
 
 

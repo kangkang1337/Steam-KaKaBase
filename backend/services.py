@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import urllib.parse
 
-from . import config, runtime_compat as runtime
+from . import config, crawler_data, runtime_compat as runtime
 from .game_commands import quick_track_game, untrack_game as command_untrack_game
 from .pricing import amount_int_to_cny, effective_historical_low
 from .steam_client import ALLOWED_IMAGE_HOSTS, cache_image
@@ -269,7 +269,7 @@ def admin_monitoring():
     return {
         "today": {"day": day, "requests": int(metric["request_count"]) if metric else 0, "visitors": unique_today, "new_visitors": int(metric["new_visitor_count"]) if metric else 0, "server_errors": int(metric["server_error_count"]) if metric else 0, **{key: counts[key] for key in ("new_users_today", "users_total", "favorites_total")}},
         "server": {"web": "ok", "crawler": status.get("crawler", {}), "database": "ok" if status.get("database_schema_version") else "unavailable", "backup": "configured" if config.DB_DAILY_BACKUP_ENABLED else "disabled", "resources": _system_resources(), "controls": {"enabled": config.ADMIN_CONTROLS_ENABLED, "actions": list(_ADMIN_CONTROL_ACTIONS), "recent": _recent_admin_controls()}},
-        "crawler": {"queue": status.get("task_monitor", {}), "rate_limits": status.get("rate_limits", {}), "heartbeat": status.get("crawler", {}).get("heartbeat_at"), "heartbeat_age_seconds": status.get("crawler", {}).get("heartbeat_age_seconds"), "last_success_at": status.get("crawler", {}).get("last_cycle_at"), "state": status.get("crawler", {}).get("state")},
+        "crawler": {"queue": status.get("task_monitor", {}), "rate_limits": status.get("rate_limits", {}), "heartbeat": status.get("crawler", {}).get("heartbeat_at"), "heartbeat_age_seconds": status.get("crawler", {}).get("heartbeat_age_seconds"), "last_success_at": status.get("crawler", {}).get("last_cycle_at"), "state": status.get("crawler", {}).get("state"), "coverage_budget": crawler_data.coverage_status()},
         "database": {"schema": status.get("database_schema_version"), "storage": status.get("storage", {}), **{key: counts[key] for key in ("games_total", "player_snapshots", "price_snapshots", "review_snapshots")}},
         "backups": {"local": {"at": counts["local_backup_at"], "path": counts["local_backup_path"]}, "offsite": {"at": counts["offsite_backup_at"], "path": counts["offsite_backup_path"]}, "drill": drill},
         "recent_logs": _recent_log_lines(),
@@ -447,6 +447,7 @@ def add_user_favorite(user_id, appid, name=None, header_image=None):
     track_game(appid, name, header_image)
     with transaction() as conn:
         conn.execute("INSERT OR IGNORE INTO user_favorites(user_id,appid,created_at) VALUES(?,?,?)", (int(user_id), int(appid), datetime.now(timezone.utc).replace(microsecond=0).isoformat()))
+        crawler_data.record_game_interest(conn, appid, favorite=True)
     return {"ok": True, "appid": int(appid), "tracked": True}
 
 
@@ -479,6 +480,7 @@ def request_game_detail(appid):
         game_exists = bool(conn.execute("SELECT 1 FROM games WHERE appid=?", (appid,)).fetchone())
         if not game_exists and not ensure_game_from_catalog(conn, appid):
             return {"ok": False, "appid": appid, "queued": False, "reason": "not_found"}
+        crawler_data.record_game_interest(conn, appid)
         existing = bool(conn.execute(
             """
             SELECT 1 FROM crawl_tasks

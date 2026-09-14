@@ -12,32 +12,31 @@ from .utils import now_iso
 
 
 async def fetch_players_for_appids_async(appids):
+    """Fetch one player endpoint at a time to keep collection staggered."""
     httpx = require_httpx()
-    semaphore = asyncio.Semaphore(config.HOTLIST_CONCURRENCY)
     stamp = now_iso()
     rows, successful, failed = [], [], 0
     async with httpx.AsyncClient(timeout=config.STEAM_TIMEOUT_SECONDS, headers={"User-Agent": config.STEAM_USER_AGENT}, follow_redirects=True, **steam_httpx_options()) as client:
-        async def fetch_one(appid):
+        for index, appid in enumerate(appids):
             try:
-                payload = await async_get_json(client, semaphore, "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/", {"appid": appid})
-                return int(appid), int((payload.get("response") or {}).get("player_count") or 0), stamp
-            except Exception as exc:
-                return exc
-
-        results = await asyncio.gather(*(fetch_one(appid) for appid in appids), return_exceptions=True)
-        limited = any(isinstance(result, SteamRateLimited) for result in results)
-        for result in results:
-            if isinstance(result, tuple):
-                rows.append(result)
-                successful.append(result[0])
+                if index:
+                    await asyncio.sleep(config.PLAYER_REQUEST_DELAY_SECONDS)
+                payload = await async_get_json(
+                    client, asyncio.Semaphore(1),
+                    "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/",
+                    {"appid": appid},
+                )
+                rows.append((int(appid), int((payload.get("response") or {}).get("player_count") or 0), stamp))
+                successful.append(int(appid))
                 if len(rows) >= config.HOTLIST_BATCH_SIZE:
                     insert_player_batch(rows)
                     rows = []
-            else:
+            except SteamRateLimited:
+                insert_player_batch(rows)
+                raise
+            except Exception:
                 failed += 1
     insert_player_batch(rows)
-    if limited:
-        raise SteamRateLimited("Steam player requests paused by global cooldown")
     return {"stamp": stamp, "success": len(successful), "success_appids": successful, "failed": failed, "skipped": 0}
 
 

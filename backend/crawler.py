@@ -72,10 +72,21 @@ def run_hotlist_task(force=False):
 def run_players_task(force=False):
     if runtime.service_cooldown_remaining_seconds("steam_api"):
         return False
-    due_appids = crawler_data.get_hot_appids(config.HOTLIST_TARGET) if force else crawler_data.get_due_hot_player_appids()
-    runtime.enqueue_crawl_tasks(due_appids, "players", 20)
-    appids = runtime.claim_crawl_tasks("players", runtime.HOTLIST_TARGET)
+    coverage_limit = max(config.HOTLIST_TARGET, config.COVERAGE_PLAYER_BATCH_LIMIT)
+    if force:
+        runtime.enqueue_crawl_tasks(crawler_data.get_hot_appids(config.HOTLIST_TARGET), "players", 40)
+    else:
+        crawler_data.enqueue_due_coverage_tasks("players", coverage_limit)
+    remaining = crawler_data.remaining_coverage_budget(
+        "players", config.PLAYER_DAILY_REQUEST_BUDGET
+    )
+    appids = runtime.claim_crawl_tasks("players", min(config.HOTLIST_TARGET, remaining))
     if not appids:
+        return False
+    if crawler_data.reserve_coverage_budget(
+        "players", len(appids), config.PLAYER_DAILY_REQUEST_BUDGET
+    ) != len(appids):
+        runtime.fail_crawl_tasks(appids, "players", "daily player collection budget exhausted", retry_minutes=60)
         return False
     try:
         report = asyncio.run(crawler_fetch.fetch_players_for_appids_async(appids))
@@ -104,9 +115,23 @@ def run_players_task(force=False):
 def _run_appdetails_task(task_type, due_appids, limit, priority, persist, unavailable_message, success_message):
     if runtime.service_cooldown_remaining_seconds("steam_store"):
         return False
-    runtime.enqueue_crawl_tasks(due_appids(limit), task_type, priority)
-    appids = runtime.claim_crawl_tasks(task_type, limit)
+    if task_type == "price":
+        crawler_data.enqueue_due_coverage_tasks(
+            "price", max(limit, config.COVERAGE_PRICE_BATCH_LIMIT)
+        )
+        remaining = crawler_data.remaining_coverage_budget(
+            "price", config.PRICE_DAILY_REQUEST_BUDGET
+        )
+        appids = runtime.claim_crawl_tasks(task_type, min(limit, remaining))
+    else:
+        runtime.enqueue_crawl_tasks(due_appids(limit), task_type, priority)
+        appids = runtime.claim_crawl_tasks(task_type, limit)
     if not appids:
+        return False
+    if task_type == "price" and crawler_data.reserve_coverage_budget(
+        "price", len(appids), config.PRICE_DAILY_REQUEST_BUDGET
+    ) != len(appids):
+        runtime.fail_crawl_tasks(appids, task_type, "daily price collection budget exhausted", retry_minutes=60)
         return False
     try:
         rows, unavailable, retry, stamp = asyncio.run(
@@ -391,6 +416,7 @@ def refresh_hot_database_once(force_hotlist=False, quick=False):
         run_hotlist_task(force=force_hotlist)
         if not quick:
             run_players_task()
+            run_price_task()
             # Detail requests are explicitly user-prioritized. Run their
             # region expansion before low-priority hot-list enrichment.
             run_regional_prices_task()

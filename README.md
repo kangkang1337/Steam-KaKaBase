@@ -1,34 +1,8 @@
 # Steam-KaKaBase
 
-## v0.6.4: Staggered historical coverage
+一个可自托管的 Steam 数据面板，设计参考 SteamDB。用于查看游戏价格与本地历史快照、在线人数趋势、玩家评价、热门榜和每日小众宝藏推荐。
 
-Added SQLite-backed game-coverage tiers to steadily build player and China-region price history before a game is opened. The crawler prioritizes popular games, account favorites, recent detail interest, and then a bounded rotating background cohort. Player sampling is staggered with one external request at a time; daily player and price attempt budgets protect Steam from runaway catalog growth. Detail interest remains the highest-priority queue signal, while normal GET pages stay cache-only. Schema v11 stores only per-game recency timestamps, never visitor identity, and the owner monitoring page shows each daily collection budget. The owner can also reset an account password from the protected monitoring page; the reset invalidates all existing sessions and does not require email or phone data.
-
-## v0.6.3: Runtime boundary cleanup
-
-Completed the current runtime-module cleanup pass. Web services, the crawler scheduler, and the standalone crawler process no longer import `_runtime.py` directly; remaining legacy orchestration access is isolated behind one explicit compatibility boundary. Added a small no-network game-command module for track/untrack writes, while preserving the existing Web read-only cache rule, crawler-only external collection, task queue behavior, proxy fallback, rate limiting, and SQLite transaction semantics. Documentation now records the boundary and the path to physically retire it after a stable production crawler cycle.
-
-## v0.6.2: Reliable account submissions
-
-Improved public account registration and login reliability. Gateway-generated HTML errors are now converted into clear, safe user-facing messages; `429` rate limits and temporary `5xx` service failures are handled explicitly instead of being misreported as an incorrect backend port. Account forms validate username and password lengths before submission, display structured API validation errors safely, and disable the confirmation button while a request is in flight to prevent accidental duplicate requests. Nginx allows a small normal setup burst while FastAPI retains its independent rolling per-IP authentication limit.
-
-## v0.6.1: Secure monitoring controls
-
-Fixed the administrator control panel so owner-only maintenance actions work with the production systemd sandbox. The panel now uses a restricted local Unix Socket broker instead of sudo, retains `NoNewPrivileges=true` for the Web service, uses an in-page confirmation dialog, and correctly records manual local backup completion in monitoring.
-
-## v0.6.0：受保护的管理员监控
-
-管理员可从“更多”进入监控页，查看当日访问聚合、账号与收藏总量、Web/crawler/数据库/备份状态、CPU/内存/磁盘、crawler 最近成功周期、备份与恢复演练，以及脱敏后的最近日志。仅服主可调整管理员名单或执行固定的运维动作：本地/异地备份、隔离恢复演练、重启 Web 与 crawler。普通用户无法读取运行数据，普通管理员也不能调整权限或执行操作。健康摘要会将 5xx、crawler 心跳、备份、恢复演练和磁盘空间的异常以红色提示。
-
-## v0.5.0：账号同步收藏
-
-未登录时，收藏仅保存在当前浏览器的 `localStorage`；登录后，收藏会按账号写入 SQLite，可在不同设备同步查看。账号使用用户名与密码注册，勾选“记住我”会保存最长 30 天的 `Secure`、HttpOnly 会话 Cookie（生产环境）。密码仅保存 PBKDF2-SHA256 派生值和随机盐，不保存明文。登录、注册、删号与收藏写操作受 Nginx 和应用内双层 IP 限流保护。
-
-公网部署务必使用 HTTPS，并备份 SQLite；账号、会话和收藏在数据库迁移 v8 中创建，管理员监控与权限名单在 v9 中创建。
-
-一个面向本地运行的 Steam 数据面板，设计参考 SteamDB。用于查看游戏价格与本地历史快照、在线人数趋势、玩家评价、热门榜和每日小众宝藏推荐。
-
-当前版本：`v0.6.4`
+版本记录、已知限制与后续计划见 [ROADMAP.md](ROADMAP.md)。
 
 > 项目支持本地运行和单机 VPS 自托管。生产部署使用 Nginx、HTTPS、UFW、systemd、受限写接口与异地 SQLite 备份；仍建议先在个人规模下运行并持续观察 Steam/ITAD 的限流情况。
 
@@ -404,11 +378,14 @@ GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
 
 ## 数据保留
 
-- 日志保留 30 天并按周期轮转。
-- 价格历史最多保留 2 年，较旧数据按时间粒度压缩。
+- crawler 每天自动轮转日志并删除超过 30 天的日志归档。
+- 图片缓存最长保留 30 天、总量最多 512 MB；每次维护都会按过期和容量清理。
+- 价格历史最多保留 2 年，较旧数据按日、月粒度压缩。
 - 在线人数保留 7 天原始快照，之后按天压缩；1 年前按月压缩，2 年前删除。
-- 每日推荐快照保留 2 年。
-- 已完成或失败的 `crawl_tasks` 默认保留 60 天。
+- 已完成、失败或不可用的 crawler 任务默认保留 60 天；每日推荐快照保留 2 年。
+- crawler 会在正常运行中每天执行一次以上维护，不依赖人工发现磁盘将满后再处理。
+
+备份不是增量合并：本地每日一致性 SQLite 备份默认保留 14 份，部署前/迁移前/手动备份各自轮转；异地备份由 systemd timer 每天上传一次，默认保留 30 天。当前策略优先保证每份备份可独立恢复；数据库增长到数 GB 后，再按实际磁盘曲线评估日/周/月分层保留。
 
 历史图接口默认返回最新 500 条记录，再按时间升序交给前端；`history_limit` 最大可设置为 2,000。
 
@@ -491,6 +468,6 @@ python -m pytest --cov=backend --cov-report=term-missing
 - `requirements.txt`：运行依赖。
 - `requirements-dev.txt`：测试依赖。
 - `.env.example`：不含密钥的环境变量示例。
-- `kaka.md`：后续开发路线。
+- [ROADMAP.md](ROADMAP.md)：版本记录、已知限制与后续开发路线。
 
 运行时数据库、日志和图片缓存位于 `data/`，不应提交到 Git。

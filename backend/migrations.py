@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 
 
 class DatabaseMigrationError(RuntimeError):
@@ -452,6 +452,20 @@ def _migration_11_game_coverage_activity(conn):
     """)
 
 
+def _migration_12_wishlist_status(conn):
+    """Add a small, syncable state to each account's saved game."""
+    _add_column(conn, "user_favorites", "status", "TEXT NOT NULL DEFAULT 'wish'")
+    conn.execute("""
+        UPDATE user_favorites
+        SET status = 'wish'
+        WHERE status IS NULL OR status NOT IN ('wish', 'watching', 'owned')
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_favorites_status
+        ON user_favorites(user_id, status, created_at DESC)
+    """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_1_initial_schema),
     Migration(2, "legacy_columns", _migration_2_legacy_columns),
@@ -464,6 +478,7 @@ MIGRATIONS = (
     Migration(9, "admin_monitoring", _migration_9_admin_monitoring),
     Migration(10, "monitor_error_counts", _migration_10_monitor_errors),
     Migration(11, "game_coverage_activity", _migration_11_game_coverage_activity),
+    Migration(12, "wishlist_status", _migration_12_wishlist_status),
 )
 
 

@@ -448,7 +448,8 @@ def query_user_favorite_games(user_id):
     with transaction(rows=True) as conn:
         return conn.execute(
             """
-            SELECT g.*, c.name AS name_en,
+            SELECT g.*, c.name AS name_en, f.status AS favorite_status,
+                   f.created_at AS favorite_created_at,
                    (SELECT player_count FROM player_snapshots WHERE appid = g.appid ORDER BY fetched_at DESC LIMIT 1) AS player_count,
                    (SELECT review_score FROM review_snapshots WHERE appid = g.appid ORDER BY fetched_at DESC LIMIT 1) AS review_score,
                    (SELECT final_formatted FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price,
@@ -458,6 +459,16 @@ def query_user_favorite_games(user_id):
                    (SELECT amount_cny FROM historical_lows WHERE appid = g.appid AND country = 'CN' LIMIT 1) AS cn_itad_low_cny,
                    (SELECT MIN(final) / 100.0 FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam' AND final IS NOT NULL) AS cn_observed_low_cny,
                    (SELECT MIN(fetched_at) FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam') AS cn_observed_low_since,
+                   (SELECT MAX(observed.fetched_at)
+                    FROM price_snapshots observed
+                    WHERE observed.appid = g.appid AND observed.region = 'CN'
+                      AND observed.source = 'steam' AND observed.final IS NOT NULL
+                      AND observed.final = (
+                          SELECT MIN(lowest.final)
+                          FROM price_snapshots lowest
+                          WHERE lowest.appid = g.appid AND lowest.region = 'CN'
+                            AND lowest.source = 'steam' AND lowest.final IS NOT NULL
+                      )) AS cn_observed_low_last_at,
                    (SELECT COUNT(*) FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam' AND final IS NOT NULL) AS cn_observed_snapshot_count
             FROM user_favorites f
             JOIN games g ON g.appid = f.appid

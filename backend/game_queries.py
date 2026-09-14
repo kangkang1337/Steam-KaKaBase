@@ -77,7 +77,10 @@ def clean_game(row, summary=False):
             "cn_discount_percent": item.get("cn_discount_percent") or 0,
             "cn_historical_low_cny": low_cny, "cn_historical_low_source": low_source,
             "cn_observed_low_since": item.get("cn_observed_low_since"),
+            "cn_observed_low_last_at": item.get("cn_observed_low_last_at"),
             "cn_observed_snapshot_count": item.get("cn_observed_snapshot_count") or 0,
+            "favorite_status": item.get("favorite_status") or "wish",
+            "favorite_created_at": item.get("favorite_created_at"),
             "updated_at": item.get("updated_at"), "tracked": bool(item.get("tracked")),
         }
     return {

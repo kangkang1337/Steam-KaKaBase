@@ -25,7 +25,7 @@ def test_health_and_readiness(api_client):
 def test_account_session_and_favorite_isolation(api_client):
     runtime, client = api_client
     runtime.quick_track_game(4242, "Test Quest", None)
-    stamp = runtime.now_iso()
+    stamp = "2026-09-10T00:00:00+00:00"
     with runtime.database_connection() as conn:
         conn.execute(
             "INSERT INTO player_snapshots(appid, player_count, fetched_at) VALUES (?, ?, ?)",
@@ -44,6 +44,24 @@ def test_account_session_and_favorite_isolation(api_client):
             """,
             (4242, stamp),
         )
+        conn.execute(
+            """
+            INSERT INTO price_snapshots(
+                appid, region, currency, initial, final, discount_percent,
+                final_formatted, source, fetched_at
+            ) VALUES (?, 'CN', 'CNY', 10000, 3000, 70, '\u00a5 30.00', 'steam', ?)
+            """,
+            (4242, "2026-09-11T00:00:00+00:00"),
+        )
+        conn.execute(
+            """
+            INSERT INTO price_snapshots(
+                appid, region, currency, initial, final, discount_percent,
+                final_formatted, source, fetched_at
+            ) VALUES (?, 'CN', 'CNY', 10000, 3000, 70, '\u00a5 30.00', 'steam', ?)
+            """,
+            (4242, "2026-09-12T00:00:00+00:00"),
+        )
     credentials = {"username": "tester_01", "password": "password123", "remember": True}
     assert client.post("/api/auth/register", json=credentials).status_code == 200
     login = client.post("/api/auth/login", json=credentials)
@@ -53,7 +71,28 @@ def test_account_session_and_favorite_isolation(api_client):
     assert [game["appid"] for game in favorites] == [4242]
     assert favorites[0]["player_count"] == 1234
     assert favorites[0]["review_score"] == 95
-    assert favorites[0]["cn_price"] == "\u00a5 50.00"
+    assert favorites[0]["cn_price"] == "\u00a5 30.00"
+    assert favorites[0]["cn_price_historical_low"] is True
+    assert favorites[0]["cn_observed_low_last_at"] == "2026-09-12T00:00:00+00:00"
+    assert favorites[0]["favorite_status"] == "wish"
+    updated = client.patch(
+        "/api/favorites/4242",
+        json={"status": "watching"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["favorite_status"] == "watching"
+    assert client.get("/api/favorites").json()["games"][0]["favorite_status"] == "watching"
+    assert client.patch(
+        "/api/favorites/4242",
+        json={"status": "not-a-status"},
+        headers={"X-CSRF-Token": csrf},
+    ).status_code == 422
+    assert client.patch(
+        "/api/favorites/9999",
+        json={"status": "owned"},
+        headers={"X-CSRF-Token": csrf},
+    ).status_code == 404
     deleted = client.post(
         "/api/auth/delete-account",
         json={"password": credentials["password"]},

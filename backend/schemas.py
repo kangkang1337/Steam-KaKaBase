@@ -1,6 +1,6 @@
 """Validated request payloads for the public HTTP API."""
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,10 @@ class TrackRequest(BaseModel):
 
 class UntrackRequest(BaseModel):
     appid: int = Field(gt=0)
+
+
+class FavoriteStatusRequest(BaseModel):
+    status: Literal["wish", "watching", "owned"]
 
 class LoginRequest(BaseModel):
     username: str = Field(min_length=3, max_length=40)

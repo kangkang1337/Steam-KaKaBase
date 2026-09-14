@@ -457,6 +457,21 @@ def remove_user_favorite(user_id, appid):
     return {"ok": True, "appid": int(appid), "tracked": False}
 
 
+def update_user_favorite_status(user_id, appid, status):
+    """Update only the caller's syncable wishlist state."""
+    allowed = {"wish", "watching", "owned"}
+    if status not in allowed:
+        raise ValueError("invalid favorite status")
+    with transaction() as conn:
+        cursor = conn.execute(
+            "UPDATE user_favorites SET status=? WHERE user_id=? AND appid=?",
+            (status, int(user_id), int(appid)),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("favorite not found")
+    return {"ok": True, "appid": int(appid), "favorite_status": status}
+
+
 def refresh_all():
     appids = query_tracked_appids()
     queued = _enqueue_game_refresh(appids) if appids else 0

@@ -228,3 +228,22 @@ def test_daily_backup_retention_does_not_remove_manual_backup(tmp_path):
         )
     assert len(list(backup_dir.glob("*-daily-*.sqlite3"))) == 2
     assert len(list(backup_dir.glob("*-manual-*.sqlite3"))) == 1
+
+
+def test_wishlist_status_migration_preserves_existing_favorites(tmp_path):
+    database = tmp_path / "wishlist-v11.sqlite3"
+    migrations.migrate_database(database, migrations=migrations.MIGRATIONS[:11])
+    with sqlite3.connect(database) as conn:
+        conn.execute("INSERT INTO games(appid, name, updated_at) VALUES (99, 'Saved game', 'now')")
+        conn.execute(
+            "INSERT INTO users(username, password_hash, password_salt, created_at) VALUES ('saved_user', 'hash', 'salt', 'now')"
+        )
+        conn.execute("INSERT INTO user_favorites(user_id, appid, created_at) VALUES (1, 99, 'now')")
+
+    result = migrations.migrate_database(database)
+
+    assert result["from_version"] == 11
+    assert result["applied"] == [12]
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT status FROM user_favorites WHERE user_id=1 AND appid=99").fetchone() == ("wish",)
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_user_favorites_status'").fetchone()

@@ -102,3 +102,27 @@ def test_auth_form_validates_input_and_prevents_duplicate_submissions():
     assert "authError: ''" in source
     assert 'class="auth-error" role="alert"' in source
     assert "this.authError=err.message" in source
+
+
+def test_wishlist_filters_and_recent_site_low_are_local_cache_only():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert "favoriteFilterDiscount: false" in source
+    assert "favoriteFilterLow: false" in source
+    assert "filteredFavoriteGames()" in source
+    assert "game.cn_price_discounted === true" in source
+    assert "game.cn_price_historical_low === true" in source
+    assert "game.cn_observed_low_last_at" in source
+    assert "recentSiteLow" in source
+
+
+def test_wishlist_statuses_and_sorting_stay_scoped_to_the_current_account():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert "favoriteStatusFilter: 'all'" in source
+    assert "favoriteSort: 'added'" in source
+    assert "favoriteStatusLabel(status)" in source
+    assert "async updateFavoriteStatus()" in source
+    assert "method:'PATCH'" in source
+    assert "favorite_status:'wish'" in source
+    assert "favoriteStatusFilter !== 'all'" in source

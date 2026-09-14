@@ -340,6 +340,13 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
         expect(favorite).to_have_text("已收藏")
         assert state["track_calls"] == 0
 
+        status_select = page.locator(".favorite-status-editor select")
+        status_select.select_option("watching")
+        expect(page.locator(".game-row")).to_contain_text("观望")
+        page.locator(".favorite-controls select").first.select_option("watching")
+        expect(page.locator(".game-row")).to_have_count(1)
+        page.locator(".favorite-controls select").first.select_option("all")
+
         favorite.click()
         expect(favorite).to_have_text("收藏")
         expect(page.locator(".status")).to_contain_text("已取消收藏：Test Quest")

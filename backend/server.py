@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from . import config, services
 from .db import init_db
 from .logging_utils import log_event
-from .schemas import AdminUserRequest, DeleteAccountRequest, LoginRequest, PasswordResetRequest, TrackRequest, UntrackRequest
+from .schemas import AdminUserRequest, DeleteAccountRequest, FavoriteStatusRequest, LoginRequest, PasswordResetRequest, TrackRequest, UntrackRequest
 from . import auth
 from .rate_limit import IpRateLimiter
 
@@ -105,7 +105,7 @@ def create_app():
         application.add_middleware(
             CORSMiddleware,
             allow_origins=list(config.CORS_ALLOWED_ORIGINS),
-            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
             allow_headers=["Content-Type", "Authorization", "X-Admin-Token"],
             allow_credentials=False,
         )
@@ -265,6 +265,15 @@ def create_app():
         enforce_ip_rate(request, "favorites", limit=config.FAVORITES_RATE_LIMIT, window_seconds=config.FAVORITES_RATE_WINDOW_SECONDS)
         user = current_user(request, csrf=True)
         return services.remove_user_favorite(user["id"], appid)
+
+    @application.patch("/api/favorites/{appid}")
+    def update_favorite_status(appid: int, body: FavoriteStatusRequest, request: Request):
+        enforce_ip_rate(request, "favorites", limit=config.FAVORITES_RATE_LIMIT, window_seconds=config.FAVORITES_RATE_WINDOW_SECONDS)
+        user = current_user(request, csrf=True)
+        try:
+            return services.update_user_favorite_status(user["id"], appid, body.status)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @application.get("/api/games/{appid}")
     def game(appid: int, history_limit: int = Query(default=500, ge=1, le=5000)):

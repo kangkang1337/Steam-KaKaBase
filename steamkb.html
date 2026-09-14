@@ -2700,7 +2700,9 @@
                 return `${time}<br>${item.marker} ${item.seriesName}: ${price}`;
               }
             },
-            grid: { left: 58, right: 18, top: 24, bottom: 58 },
+            // Price labels include a currency suffix, so reserve the same
+            // safe Y-axis margin used by the player chart.
+            grid: { left: 72, right: 18, top: 24, bottom: 58 },
             xAxis: {
               type: 'time',
               splitNumber: 4,
@@ -2757,7 +2759,9 @@
               subtextStyle: { color: '#5f6e7b', fontSize: 12 }
             },
             tooltip: { show: false, triggerOn: 'none' },
-            grid: { left: 56, right: 18, top: 24, bottom: 58 },
+            // Player counts can reach seven digits. Reserve enough room for
+            // locale-formatted Y-axis labels instead of clipping the first digit.
+            grid: { left: 72, right: 18, top: 24, bottom: 58 },
             xAxis: {
               // These are snapshots, not continuous samples.  A category axis
               // keeps every collected value equally visible when the crawler
@@ -2833,8 +2837,10 @@
           const localY = event.offsetY;
           const points = this.playerSnapshotPoints().map(([time, count]) => ({ time, count }));
           if (!points.length) return this.hidePlayerTooltip();
-          const plotWidth = Math.max(1, element.clientWidth - 56 - 18);
-          const ratio = Math.max(0, Math.min(1, (localX - 56) / plotWidth));
+          const playerGridLeft = 72;
+          const playerGridRight = 18;
+          const plotWidth = Math.max(1, element.clientWidth - playerGridLeft - playerGridRight);
+          const ratio = Math.max(0, Math.min(1, (localX - playerGridLeft) / plotWidth));
           const index = Math.round(ratio * (points.length - 1));
           const nearest = points[index];
           this.playerTooltip = {

@@ -46,6 +46,8 @@ def test_charts_use_deduplicated_axes_with_overlap_protection():
     assert "new Map()).values()].sort" in source
     assert "chartAxisTime(value, span = 0)" in source
     assert "typeof value === 'string' && /^\\d+$/.test(value)" in source
+    assert "grid: { left: 72, right: 18, top: 24, bottom: 58 }" in source
+    assert "const playerGridLeft = 72;" in source
 
 
 def test_language_switch_is_persistent_and_independent_from_price_region():

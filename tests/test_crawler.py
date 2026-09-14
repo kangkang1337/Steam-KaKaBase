@@ -133,6 +133,26 @@ def test_scheduler_does_not_add_a_full_extra_wait_after_a_slow_cycle(monkeypatch
     assert waits == [5.0]
 
 
+def test_deadlock_uses_official_hotlist_players_and_a_free_price_override(isolated_runtime):
+    runtime = isolated_runtime
+    stamp = runtime.now_iso()
+
+    recorded = crawler_data.apply_special_free_app_overrides(
+        [{"appid": 1422450, "current_players": 123456}], stamp
+    )
+
+    assert recorded == 1
+    with runtime.database_connection() as conn:
+        game = conn.execute("SELECT name,is_free FROM games WHERE appid=1422450").fetchone()
+        player = conn.execute("SELECT player_count FROM player_snapshots WHERE appid=1422450").fetchone()
+        price = conn.execute(
+            "SELECT currency,initial,final,final_formatted FROM price_snapshots WHERE appid=1422450"
+        ).fetchone()
+    assert tuple(game) == ("Deadlock", 1)
+    assert tuple(player) == (123456,)
+    assert tuple(price) == ("CNY", 0, 0, "Free")
+
+
 def test_itad_lookup_orchestration_persists_resolved_ids(monkeypatch):
     saved = []
 

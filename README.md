@@ -254,6 +254,7 @@ Copy-Item .env.example .env
 | `STEAMKB_COVERAGE_PLAYER_BATCH_LIMIT` | `25` | 每轮额外覆盖候选数；热门榜仍优先完整轮转 |
 | `STEAMKB_COVERAGE_PRICE_BATCH_LIMIT` | `20` | 每轮额外价格覆盖候选数 |
 | `STEAMKB_COVERAGE_BACKGROUND_COHORT_LIMIT` | `8000` | 每轮背景覆盖候选池大小；配合每日 7,500 预算，目标约一周为 5 万主要游戏补齐或轮转主要样本 |
+| `STEAMKB_SPECIAL_APP_REFRESH_MINUTES` | `15` | 受限免费 App（当前为 Deadlock）从 Steam 官方热门榜记录在线人数的间隔 |
 | `STEAMKB_COVERAGE_ACTIVITY_DAYS` | `14` | 最近打开详情游戏保持较高覆盖频率的天数 |
 | `STEAMKB_PLAYER_REQUEST_DELAY_SECONDS` | `0.5` | 单路玩家请求之间的错峰间隔；设为 `0` 仅在确认额度充足时使用 |
 | `STEAMKB_HOTLIST_TARGET` | `100` | 本地热门榜目标数量 |

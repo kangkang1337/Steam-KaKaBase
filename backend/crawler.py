@@ -69,6 +69,23 @@ def run_hotlist_task(force=False):
     return True
 
 
+def run_special_free_apps_task(force=False):
+    """Use the official popular-games feed for explicitly curated restricted apps."""
+    if runtime.service_cooldown_remaining_seconds("steam_api"):
+        return False
+    with runtime.database_connection() as conn:
+        last_refresh = runtime.get_crawl_state(conn, "special_free_apps_at")
+    if not (force or runtime.is_due(last_refresh, config.SPECIAL_APP_REFRESH_MINUTES)):
+        return False
+    rows = asyncio.run(runtime.fetch_official_hotlist_async())
+    stamp = runtime.now_iso()
+    recorded = crawler_data.apply_special_free_app_overrides(rows, stamp)
+    with runtime.database_connection() as conn:
+        runtime.set_crawl_state(conn, "special_free_apps_at", stamp)
+    runtime.log_event(f"special free apps refreshed players={recorded}")
+    return True
+
+
 def _run_player_tasks(task_type, appids, limit, *, budgeted=False):
     if runtime.service_cooldown_remaining_seconds("steam_api"):
         return False
@@ -494,6 +511,10 @@ def run_scheduler_cycle():
         runtime.refresh_tracked_once()
     except Exception as exc:
         runtime.log_event(f"scheduler tracked refresh failed: {exc}")
+    try:
+        run_special_free_apps_task()
+    except Exception as exc:
+        runtime.log_event(f"scheduler special free apps refresh failed: {exc}")
     try:
         refresh_hot_database_once()
     except Exception as exc:

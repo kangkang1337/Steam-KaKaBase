@@ -61,6 +61,61 @@ def insert_player_batch(rows):
         conn.executemany("UPDATE hot_games SET current_players=?,fetched_at=? WHERE appid=?", [(players, stamp, appid) for appid, players, stamp in rows])
 
 
+def apply_special_free_app_overrides(hot_rows, stamp):
+    """Persist known free AppIDs whose normal Store/player endpoints are restricted.
+
+    Player rows are accepted only when Steam's official popular-games response
+    includes a count.  Prices are a local fact for these explicitly curated
+    free titles and are refreshed at most once per day.
+    """
+    player_counts = {
+        int(row["appid"]): int(row["current_players"])
+        for row in hot_rows
+        if int(row.get("appid") or 0) in config.SPECIAL_FREE_APPIDS
+        and row.get("current_players") is not None
+    }
+    with transaction() as conn:
+        for appid in config.SPECIAL_FREE_APPIDS:
+            conn.execute(
+                """INSERT INTO games(appid,name,tracked,is_free,updated_at) VALUES (?, ?, 0, 1, ?)
+                ON CONFLICT(appid) DO UPDATE SET is_free=1,updated_at=excluded.updated_at""",
+                (appid, "Deadlock" if appid == 1422450 else f"Steam App {appid}", stamp),
+            )
+            last_price = conn.execute(
+                "SELECT MAX(fetched_at) FROM price_snapshots WHERE appid=? AND region='CN' AND source='steam'",
+                (appid,),
+            ).fetchone()[0]
+            if is_due(last_price, 24 * 60):
+                conn.execute(
+                    """INSERT INTO price_snapshots(appid,region,currency,initial,final,discount_percent,final_formatted,source,fetched_at)
+                    VALUES (?, 'CN', 'CNY', 0, 0, 0, 'Free', 'steam', ?)""",
+                    (appid, stamp),
+                )
+                conn.execute(
+                    """INSERT INTO game_latest_state(appid,cn_price,cn_price_final,cn_price_currency,cn_discount_percent,price_updated_at,updated_at)
+                    VALUES (?, 'Free', 0, 'CNY', 0, ?, ?) ON CONFLICT(appid) DO UPDATE SET
+                    cn_price=excluded.cn_price,cn_price_final=excluded.cn_price_final,cn_price_currency=excluded.cn_price_currency,
+                    cn_discount_percent=excluded.cn_discount_percent,price_updated_at=excluded.price_updated_at,updated_at=excluded.updated_at""",
+                    (appid, stamp, stamp),
+                )
+        for appid, players in player_counts.items():
+            conn.execute(
+                "INSERT INTO player_snapshots(appid,player_count,fetched_at) VALUES (?, ?, ?)",
+                (appid, players, stamp),
+            )
+            conn.execute(
+                """INSERT INTO game_latest_state(appid,current_players,players_updated_at,updated_at)
+                VALUES (?, ?, ?, ?) ON CONFLICT(appid) DO UPDATE SET current_players=excluded.current_players,
+                players_updated_at=excluded.players_updated_at,updated_at=excluded.updated_at""",
+                (appid, players, stamp, stamp),
+            )
+            conn.execute(
+                "UPDATE hot_games SET current_players=?,fetched_at=? WHERE appid=?",
+                (players, stamp, appid),
+            )
+    return len(player_counts)
+
+
 def upsert_hot_price_batch(rows, stamp):
     if not rows:
         return

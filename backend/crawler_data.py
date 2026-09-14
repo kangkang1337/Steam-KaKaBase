@@ -1,6 +1,7 @@
 """SQLite reads and writes used by crawler task orchestration."""
 
 from datetime import datetime, timedelta, timezone
+import math
 
 from . import config
 from .db import enqueue_crawl_tasks, get_crawl_state, is_due, set_crawl_state, transaction
@@ -202,7 +203,7 @@ def _latest_price_rows(conn, appids):
     return {int(appid): fetched_at for appid, fetched_at in rows}
 
 
-def _coverage_candidates(conn):
+def _coverage_candidates(conn, *, include_hot=True):
     """Return candidate appids with priority sources before due-time filtering."""
     active_since = (
         datetime.now(timezone.utc) - timedelta(days=config.COVERAGE_ACTIVITY_DAYS)
@@ -216,13 +217,14 @@ def _coverage_candidates(conn):
             if previous is None or priority > previous[0]:
                 result[appid] = (priority, source)
 
-    add(
-        [row[0] for row in conn.execute(
-            "SELECT appid FROM hot_games ORDER BY COALESCE(rank,999999) LIMIT ?",
-            (config.HOTLIST_TARGET,),
-        )],
-        40, "hot",
-    )
+    if include_hot:
+        add(
+            [row[0] for row in conn.execute(
+                "SELECT appid FROM hot_games ORDER BY COALESCE(rank,999999) LIMIT ?",
+                (config.HOTLIST_TARGET,),
+            )],
+            40, "hot",
+        )
     add(
         [row[0] for row in conn.execute(
             "SELECT DISTINCT appid FROM user_favorites ORDER BY appid"
@@ -243,19 +245,20 @@ def _coverage_candidates(conn):
             """SELECT g.appid FROM games g
             LEFT JOIN game_latest_state s ON s.appid=g.appid
             WHERE g.name IS NOT NULL
-            ORDER BY COALESCE(s.players_updated_at, ''), g.appid LIMIT 250"""
+            ORDER BY COALESCE(s.players_updated_at, ''), g.appid LIMIT ?""",
+            (config.COVERAGE_BACKGROUND_COHORT_LIMIT,),
         )],
         10, "background",
     )
     return result
 
 
-def get_due_coverage_appids(kind, limit):
+def get_due_coverage_appids(kind, limit, *, include_hot=True):
     """Choose staggered player or CN-price work from deterministic tiers."""
     if kind not in {"players", "price"}:
         raise ValueError("unsupported coverage kind")
     with transaction() as conn:
-        candidates = _coverage_candidates(conn)
+        candidates = _coverage_candidates(conn, include_hot=include_hot)
         appids = list(candidates)
         latest = _latest_player_rows(conn, appids) if kind == "players" else _latest_price_rows(conn, appids)
         latest_players = _latest_player_rows(conn, appids) if kind == "price" else None
@@ -282,8 +285,8 @@ def get_due_coverage_appids(kind, limit):
     return selected[:max(1, int(limit))]
 
 
-def enqueue_due_coverage_tasks(kind, limit):
-    rows = get_due_coverage_appids(kind, limit)
+def enqueue_due_coverage_tasks(kind, limit, *, include_hot=True):
+    rows = get_due_coverage_appids(kind, limit, include_hot=include_hot)
     for priority in sorted({priority for _appid, priority, _stamp in rows}, reverse=True):
         enqueue_crawl_tasks(
             [appid for appid, row_priority, _stamp in rows if row_priority == priority],
@@ -293,37 +296,61 @@ def enqueue_due_coverage_tasks(kind, limit):
     return len(rows)
 
 
-def _coverage_budget_key(kind):
-    day = datetime.now(config.DAILY_REFRESH_TZINFO).date().isoformat()
-    return f"coverage_budget:{kind}:{day}"
+def _coverage_budget_now(now=None):
+    if now is None:
+        return datetime.now(config.DAILY_REFRESH_TZINFO)
+    if now.tzinfo is None:
+        return now.replace(tzinfo=config.DAILY_REFRESH_TZINFO)
+    return now.astimezone(config.DAILY_REFRESH_TZINFO)
 
 
-def remaining_coverage_budget(kind, daily_limit):
+def _coverage_budget_key(kind, *, now=None):
+    day = _coverage_budget_now(now).date().isoformat()
+    # v2 starts after popular work moved out of this background-only budget.
+    return f"coverage_budget:v2:{kind}:{day}"
+
+
+def released_coverage_budget(daily_limit, *, now=None):
+    """Return the portion of today's quota that may be used by this moment."""
+    local_now = _coverage_budget_now(now)
+    day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elapsed = max(0.0, (local_now - day_start).total_seconds())
+    # A tiny initial grant lets a fresh day make progress; thereafter the cap
+    # rises continuously, preventing a crawler restart from draining the day.
+    return min(int(daily_limit), max(1, math.ceil(int(daily_limit) * elapsed / 86400)))
+
+
+def remaining_coverage_budget(kind, daily_limit, *, now=None):
     with transaction() as conn:
-        used = int(get_crawl_state(conn, _coverage_budget_key(kind)) or 0)
-    return max(0, int(daily_limit) - used)
+        used = int(get_crawl_state(conn, _coverage_budget_key(kind, now=now)) or 0)
+    return max(0, released_coverage_budget(daily_limit, now=now) - used)
 
 
-def reserve_coverage_budget(kind, count, daily_limit):
+def reserve_coverage_budget(kind, count, daily_limit, *, now=None):
     """Reserve attempts before external I/O so failures cannot evade the cap."""
     count = max(0, int(count))
     with transaction() as conn:
-        key = _coverage_budget_key(kind)
+        key = _coverage_budget_key(kind, now=now)
         used = int(get_crawl_state(conn, key) or 0)
-        granted = min(count, max(0, int(daily_limit) - used))
+        granted = min(count, max(0, released_coverage_budget(daily_limit, now=now) - used))
         if granted:
             set_crawl_state(conn, key, str(used + granted))
     return granted
 
 
 def coverage_status():
+    def usage(kind, limit):
+        with transaction() as conn:
+            used = int(get_crawl_state(conn, _coverage_budget_key(kind)) or 0)
+        released = released_coverage_budget(limit)
+        return {
+            "used": used,
+            "released": released,
+            "available": max(0, released - used),
+            "limit": limit,
+        }
+
     return {
-        "players": {
-            "used": config.PLAYER_DAILY_REQUEST_BUDGET - remaining_coverage_budget("players", config.PLAYER_DAILY_REQUEST_BUDGET),
-            "limit": config.PLAYER_DAILY_REQUEST_BUDGET,
-        },
-        "price": {
-            "used": config.PRICE_DAILY_REQUEST_BUDGET - remaining_coverage_budget("price", config.PRICE_DAILY_REQUEST_BUDGET),
-            "limit": config.PRICE_DAILY_REQUEST_BUDGET,
-        },
+        "players": usage("players", config.PLAYER_DAILY_REQUEST_BUDGET),
+        "price": usage("price", config.PRICE_DAILY_REQUEST_BUDGET),
     }

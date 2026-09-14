@@ -11,6 +11,19 @@ from .steam_client import async_get_json, require_httpx, steam_httpx_options
 from .utils import now_iso
 
 
+async def _stagger_store_requests(appids, fetch_one):
+    """Run Store work serially and space every request, not just the batch."""
+    results = []
+    for index, appid in enumerate(appids):
+        if index:
+            await asyncio.sleep(random.uniform(
+                config.STORE_REQUEST_DELAY_MIN_SECONDS,
+                config.STORE_REQUEST_DELAY_MAX_SECONDS,
+            ))
+        results.append(await fetch_one(appid))
+    return results
+
+
 async def fetch_players_for_appids_async(appids):
     """Fetch one player endpoint at a time to keep collection staggered."""
     httpx = require_httpx()
@@ -58,7 +71,6 @@ async def fetch_hot_metadata_async(appids, full=True, include_reviews=False):
     stamp, rows, unavailable, retry = now_iso(), [], [], []
     async with httpx.AsyncClient(timeout=config.STEAM_TIMEOUT_SECONDS, headers={"User-Agent": config.STEAM_USER_AGENT}, follow_redirects=True, **steam_httpx_options()) as client:
         async def fetch_one(appid):
-            await asyncio.sleep(random.uniform(config.STORE_REQUEST_DELAY_MIN_SECONDS, config.STORE_REQUEST_DELAY_MAX_SECONDS))
             try:
                 payload = await async_get_json(client, semaphore, "https://store.steampowered.com/api/appdetails", {"appids": appid, "cc": "CN", "l": "schinese"})
                 data = (payload.get(str(appid)) or {}).get("data") or {}
@@ -79,6 +91,10 @@ async def fetch_hot_metadata_async(appids, full=True, include_reviews=False):
                 }
                 if include_reviews:
                     try:
+                        await asyncio.sleep(random.uniform(
+                            config.STORE_REQUEST_DELAY_MIN_SECONDS,
+                            config.STORE_REQUEST_DELAY_MAX_SECONDS,
+                        ))
                         review = await async_get_json(client, semaphore, f"https://store.steampowered.com/appreviews/{appid}", {"json": 1, "language": "all", "purchase_type": "all", "num_per_page": 0, "filter": "summary"})
                         row.update(_review_summary(review.get("query_summary") or {}))
                     except Exception as exc:
@@ -92,7 +108,7 @@ async def fetch_hot_metadata_async(appids, full=True, include_reviews=False):
                 log_event(f"hot metadata skipped appid={appid}: {exc}")
                 return "retry", int(appid), str(exc)
 
-        results = await asyncio.gather(*(fetch_one(appid) for appid in appids), return_exceptions=True)
+        results = await _stagger_store_requests(appids, fetch_one)
     if any(isinstance(result, SteamRateLimited) for result in results):
         raise SteamRateLimited("Steam metadata requests paused by global cooldown")
     for result in results:
@@ -111,7 +127,6 @@ async def fetch_hot_reviews_async(appids):
     stamp, rows, unavailable, retry = now_iso(), [], [], []
     async with httpx.AsyncClient(timeout=config.STEAM_TIMEOUT_SECONDS, headers={"User-Agent": config.STEAM_USER_AGENT}, follow_redirects=True, **steam_httpx_options()) as client:
         async def fetch_one(appid):
-            await asyncio.sleep(random.uniform(config.STORE_REQUEST_DELAY_MIN_SECONDS, config.STORE_REQUEST_DELAY_MAX_SECONDS))
             try:
                 payload = await async_get_json(client, semaphore, f"https://store.steampowered.com/appreviews/{appid}", {"json": 1, "language": "all", "purchase_type": "all", "num_per_page": 0, "filter": "summary"})
                 return {"appid": int(appid), **_review_summary(payload.get("query_summary") or {})}
@@ -123,7 +138,7 @@ async def fetch_hot_reviews_async(appids):
                 log_event(f"hot review skipped appid={appid}: {exc}")
                 return "retry", int(appid), str(exc)
 
-        results = await asyncio.gather(*(fetch_one(appid) for appid in appids), return_exceptions=True)
+        results = await _stagger_store_requests(appids, fetch_one)
     if any(isinstance(result, SteamRateLimited) for result in results):
         raise SteamRateLimited("Steam review requests paused by global cooldown")
     for result in results:

@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from backend import crawler, crawler_data, crawler_fetch, steam_client
+from backend import config, crawler, crawler_data, crawler_fetch, steam_client
 
 
 def test_coverage_tiers_prioritize_hot_favorites_and_recent_interest(
@@ -38,11 +38,99 @@ def test_coverage_tiers_prioritize_hot_favorites_and_recent_interest(
 
 
 def test_coverage_budget_is_daily_and_bounded(isolated_runtime):
-    assert crawler_data.remaining_coverage_budget("players", 3) == 3
-    assert crawler_data.reserve_coverage_budget("players", 2, 3) == 2
-    assert crawler_data.remaining_coverage_budget("players", 3) == 1
-    assert crawler_data.reserve_coverage_budget("players", 2, 3) == 1
-    assert crawler_data.remaining_coverage_budget("players", 3) == 0
+    end_of_day = datetime(2030, 1, 1, 23, 59, tzinfo=config.DAILY_REFRESH_TZINFO)
+    assert crawler_data.remaining_coverage_budget("players", 3, now=end_of_day) == 3
+    assert crawler_data.reserve_coverage_budget("players", 2, 3, now=end_of_day) == 2
+    assert crawler_data.remaining_coverage_budget("players", 3, now=end_of_day) == 1
+    assert crawler_data.reserve_coverage_budget("players", 2, 3, now=end_of_day) == 1
+    assert crawler_data.remaining_coverage_budget("players", 3, now=end_of_day) == 0
+
+
+def test_coverage_budget_is_released_gradually_through_the_day(isolated_runtime):
+    noon = datetime(2030, 1, 2, 12, 0, tzinfo=config.DAILY_REFRESH_TZINFO)
+    assert crawler_data.released_coverage_budget(1300, now=noon) == 650
+    assert crawler_data.reserve_coverage_budget("price", 1300, 1300, now=noon) == 650
+    assert crawler_data.remaining_coverage_budget("price", 1300, now=noon) == 0
+
+
+def test_hot_players_use_a_separate_task_from_budgeted_history_coverage(monkeypatch):
+    calls = []
+    monkeypatch.setattr(crawler_data, "get_due_hot_player_appids", lambda: [11])
+    monkeypatch.setattr(crawler_data, "enqueue_due_coverage_tasks", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(
+        crawler,
+        "_run_player_tasks",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or True,
+    )
+
+    assert crawler.run_players_task() is True
+    assert calls[0][0][:2] == ("hot_players", [11])
+    assert calls[0][1]["budgeted"] is False
+    assert calls[1][0][0] == "players"
+    assert calls[1][1]["budgeted"] is True
+
+
+def test_hot_prices_do_not_use_the_history_coverage_budget(monkeypatch):
+    calls = []
+    monkeypatch.setattr(crawler_data, "enqueue_due_coverage_tasks", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(
+        crawler,
+        "_run_appdetails_task",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or True,
+    )
+
+    assert crawler.run_price_task() is True
+    assert calls[0][0][0] == "hot_price"
+    assert calls[0][1]["coverage_budget"] is False
+    assert crawler.run_coverage_price_task() is True
+    assert calls[1][0][0] == "price"
+    assert calls[1][1]["coverage_budget"] is True
+
+
+def test_store_requests_are_spaced_between_each_serial_request(monkeypatch):
+    delays, seen = [], []
+
+    async def fake_sleep(delay):
+        delays.append(delay)
+
+    async def fetch_one(appid):
+        seen.append(appid)
+        return appid * 10
+
+    monkeypatch.setattr(crawler_fetch.config, "STORE_REQUEST_DELAY_MIN_SECONDS", 2.0)
+    monkeypatch.setattr(crawler_fetch.config, "STORE_REQUEST_DELAY_MAX_SECONDS", 2.0)
+    monkeypatch.setattr(crawler_fetch.asyncio, "sleep", fake_sleep)
+
+    assert asyncio.run(crawler_fetch._stagger_store_requests([1, 2, 3], fetch_one)) == [10, 20, 30]
+    assert seen == [1, 2, 3]
+    assert delays == [2.0, 2.0]
+
+
+def test_scheduler_does_not_add_a_full_extra_wait_after_a_slow_cycle(monkeypatch):
+    waits = []
+
+    class StopAfterOneCycle:
+        def __init__(self):
+            self.checked = False
+
+        def is_set(self):
+            if not self.checked:
+                self.checked = True
+                return False
+            return True
+
+        def wait(self, seconds):
+            waits.append(seconds)
+            return True
+
+    ticks = iter([100.0, 155.0])
+    monkeypatch.setattr(crawler.runtime, "SCHEDULER_CHECK_SECONDS", 60)
+    monkeypatch.setattr(crawler.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(crawler, "run_scheduler_cycle", lambda: None)
+
+    crawler.scheduler_loop(StopAfterOneCycle())
+
+    assert waits == [5.0]
 
 
 def test_itad_lookup_orchestration_persists_resolved_ids(monkeypatch):

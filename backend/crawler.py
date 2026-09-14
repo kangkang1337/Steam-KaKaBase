@@ -69,31 +69,28 @@ def run_hotlist_task(force=False):
     return True
 
 
-def run_players_task(force=False):
+def _run_player_tasks(task_type, appids, limit, *, budgeted=False):
     if runtime.service_cooldown_remaining_seconds("steam_api"):
         return False
-    coverage_limit = max(config.HOTLIST_TARGET, config.COVERAGE_PLAYER_BATCH_LIMIT)
-    if force:
-        runtime.enqueue_crawl_tasks(crawler_data.get_hot_appids(config.HOTLIST_TARGET), "players", 40)
-    else:
-        crawler_data.enqueue_due_coverage_tasks("players", coverage_limit)
-    remaining = crawler_data.remaining_coverage_budget(
-        "players", config.PLAYER_DAILY_REQUEST_BUDGET
+    runtime.enqueue_crawl_tasks(appids, task_type, 40 if task_type == "hot_players" else 30)
+    remaining = (
+        crawler_data.remaining_coverage_budget("players", config.PLAYER_DAILY_REQUEST_BUDGET)
+        if budgeted else limit
     )
-    appids = runtime.claim_crawl_tasks("players", min(config.HOTLIST_TARGET, remaining))
-    if not appids:
+    claimed = runtime.claim_crawl_tasks(task_type, min(limit, remaining))
+    if not claimed:
         return False
-    if crawler_data.reserve_coverage_budget(
-        "players", len(appids), config.PLAYER_DAILY_REQUEST_BUDGET
-    ) != len(appids):
-        runtime.fail_crawl_tasks(appids, "players", "daily player collection budget exhausted", retry_minutes=60)
+    if budgeted and crawler_data.reserve_coverage_budget(
+        "players", len(claimed), config.PLAYER_DAILY_REQUEST_BUDGET
+    ) != len(claimed):
+        runtime.fail_crawl_tasks(claimed, task_type, "daily player collection budget exhausted", retry_minutes=60)
         return False
     try:
-        report = asyncio.run(crawler_fetch.fetch_players_for_appids_async(appids))
+        report = asyncio.run(crawler_fetch.fetch_players_for_appids_async(claimed))
         successful = report["success_appids"]
-        failed = [appid for appid in appids if appid not in set(successful)]
-        runtime.complete_crawl_tasks(successful, "players")
-        runtime.fail_crawl_tasks(failed, "players", "Steam player request failed", retry_minutes=30)
+        failed = [appid for appid in claimed if appid not in set(successful)]
+        runtime.complete_crawl_tasks(successful, task_type)
+        runtime.fail_crawl_tasks(failed, task_type, "Steam player request failed", retry_minutes=30)
         with runtime.database_connection() as conn:
             runtime.set_crawl_state(conn, "hot_players_at", report["stamp"])
         runtime.log_event(
@@ -102,20 +99,32 @@ def run_players_task(force=False):
         )
         return True
     except sqlite3.Error as exc:
-        runtime.fail_crawl_tasks(appids, "players", exc, terminal=True)
+        runtime.fail_crawl_tasks(claimed, task_type, exc, terminal=True)
         raise
     except runtime.SteamRateLimited as exc:
-        runtime.fail_crawl_tasks(appids, "players", exc, retry_minutes=10)
+        runtime.fail_crawl_tasks(claimed, task_type, exc, retry_minutes=10)
         raise
     except Exception as exc:
-        runtime.fail_crawl_tasks(appids, "players", exc, retry_minutes=30)
+        runtime.fail_crawl_tasks(claimed, task_type, exc, retry_minutes=30)
         raise
 
 
-def _run_appdetails_task(task_type, due_appids, limit, priority, persist, unavailable_message, success_message):
+def run_players_task(force=False):
+    """Refresh popular games separately; only background coverage spends its quota."""
+    hot_appids = crawler_data.get_hot_appids(config.HOTLIST_TARGET) if force else crawler_data.get_due_hot_player_appids()
+    hot_refreshed = _run_player_tasks(
+        "hot_players", hot_appids, config.HOTLIST_TARGET, budgeted=False
+    )
+    coverage_limit = max(config.COVERAGE_PLAYER_BATCH_LIMIT, 1)
+    crawler_data.enqueue_due_coverage_tasks("players", coverage_limit, include_hot=False)
+    coverage_refreshed = _run_player_tasks("players", [], coverage_limit, budgeted=True)
+    return hot_refreshed or coverage_refreshed
+
+
+def _run_appdetails_task(task_type, due_appids, limit, priority, persist, unavailable_message, success_message, *, coverage_budget=False):
     if runtime.service_cooldown_remaining_seconds("steam_store"):
         return False
-    if task_type == "price":
+    if coverage_budget:
         crawler_data.enqueue_due_coverage_tasks(
             "price", max(limit, config.COVERAGE_PRICE_BATCH_LIMIT)
         )
@@ -128,7 +137,7 @@ def _run_appdetails_task(task_type, due_appids, limit, priority, persist, unavai
         appids = runtime.claim_crawl_tasks(task_type, limit)
     if not appids:
         return False
-    if task_type == "price" and crawler_data.reserve_coverage_budget(
+    if coverage_budget and crawler_data.reserve_coverage_budget(
         "price", len(appids), config.PRICE_DAILY_REQUEST_BUDGET
     ) != len(appids):
         runtime.fail_crawl_tasks(appids, task_type, "daily price collection budget exhausted", retry_minutes=60)
@@ -172,8 +181,18 @@ def _run_appdetails_task(task_type, due_appids, limit, priority, persist, unavai
 
 def run_price_task():
     return _run_appdetails_task(
-        "price", crawler_data.get_hot_price_due_appids, config.HOT_PREVIEW_BATCH_LIMIT, 50,
+        "hot_price", crawler_data.get_hot_price_due_appids, config.HOT_PREVIEW_BATCH_LIMIT, 50,
         crawler_data.upsert_hot_price_batch, "Steam AppDetails unavailable", "hot prices refreshed",
+        coverage_budget=False,
+    )
+
+
+def run_coverage_price_task():
+    crawler_data.enqueue_due_coverage_tasks("price", config.COVERAGE_PRICE_BATCH_LIMIT, include_hot=False)
+    return _run_appdetails_task(
+        "price", lambda _limit: [], config.COVERAGE_PRICE_BATCH_LIMIT, 30,
+        crawler_data.upsert_hot_price_batch, "Steam AppDetails unavailable", "coverage prices refreshed",
+        coverage_budget=True,
     )
 
 
@@ -417,6 +436,7 @@ def refresh_hot_database_once(force_hotlist=False, quick=False):
         if not quick:
             run_players_task()
             run_price_task()
+            run_coverage_price_task()
             # Detail requests are explicitly user-prioritized. Run their
             # region expansion before low-priority hot-list enrichment.
             run_regional_prices_task()
@@ -496,8 +516,14 @@ def run_startup_prewarm():
 
 def scheduler_loop(stop_event=None):
     stop_event = stop_event or threading.Event()
-    while not stop_event.wait(runtime.SCHEDULER_CHECK_SECONDS):
+    while not stop_event.is_set():
+        started_at = time.monotonic()
         run_scheduler_cycle()
+        # The interval is measured from the start of the previous cycle.  A
+        # slow serial Store batch therefore never overlaps with a new cycle,
+        # while a short batch does not lose another full minute of capacity.
+        remaining = max(0, runtime.SCHEDULER_CHECK_SECONDS - (time.monotonic() - started_at))
+        stop_event.wait(remaining)
 
 
 def startup_prewarm_async():

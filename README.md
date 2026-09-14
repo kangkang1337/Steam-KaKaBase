@@ -234,7 +234,7 @@ Copy-Item .env.example .env
 | `STEAMKB_PORT` | `8765` | 本地 HTTP 端口 |
 | `STEAMKB_CRAWLER_LEASE_SECONDS` | `120` | crawler 单实例租约有效期 |
 | `STEAMKB_CRAWLER_HEARTBEAT_SECONDS` | `20` | crawler 续租和状态心跳间隔 |
-| `STEAMKB_SCHEDULER_CHECK_SECONDS` | `60` | crawler 调度循环检查间隔 |
+| `STEAMKB_SCHEDULER_CHECK_SECONDS` | `60` | crawler 调度周期（从上一轮开始计时；串行外部请求较慢时不会额外再等待完整周期） |
 | `STEAMKB_DAILY_REFRESH_TIMEZONE` | `Asia/Shanghai` | 每日主页推荐、今日史低与表情包的日切时区；默认北京时间，边界为 `00:10` |
 | `STEAMKB_DB` | `data/steamkb.sqlite3` | SQLite 文件路径 |
 | `STEAMKB_LOG` | `data/steamkb.log` | 日志路径 |
@@ -249,10 +249,11 @@ Copy-Item .env.example .env
 | `STEAMKB_VISITOR_METRICS_SECRET` | 回退到管理员令牌 | 用于匿名访客 Cookie 的 HMAC；不保存 IP |
 | `STEAMKB_PLAYER_REFRESH_MINUTES` | `30` | 兼容旧配置；分层调度中热门游戏为 30 分钟，收藏为 1 小时 |
 | `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 兼容旧配置；分层调度中热门和收藏为 24 小时 |
-| `STEAMKB_PLAYER_DAILY_REQUEST_BUDGET` | `5000` | 每日玩家采集尝试上限；达到后等待次日，防止目录增长放大请求 |
-| `STEAMKB_PRICE_DAILY_REQUEST_BUDGET` | `600` | 每日后台中国区价格采集尝试上限 |
+| `STEAMKB_PLAYER_DAILY_REQUEST_BUDGET` | `7500` | 每日非热门玩家历史覆盖尝试上限；热门榜刷新独立计算，不挤占此额度。约可支持 5 万主要游戏在一周内轮转一次，额度随上海当天时间逐步放行 |
+| `STEAMKB_PRICE_DAILY_REQUEST_BUDGET` | `7500` | 每日非热门后台中国区价格覆盖尝试上限；热门榜价格独立计算，约可支持 5 万主要游戏一周轮转，并随当天时间逐步放行 |
 | `STEAMKB_COVERAGE_PLAYER_BATCH_LIMIT` | `25` | 每轮额外覆盖候选数；热门榜仍优先完整轮转 |
 | `STEAMKB_COVERAGE_PRICE_BATCH_LIMIT` | `20` | 每轮额外价格覆盖候选数 |
+| `STEAMKB_COVERAGE_BACKGROUND_COHORT_LIMIT` | `8000` | 每轮背景覆盖候选池大小；配合每日 7,500 预算，目标约一周为 5 万主要游戏补齐或轮转主要样本 |
 | `STEAMKB_COVERAGE_ACTIVITY_DAYS` | `14` | 最近打开详情游戏保持较高覆盖频率的天数 |
 | `STEAMKB_PLAYER_REQUEST_DELAY_SECONDS` | `0.5` | 单路玩家请求之间的错峰间隔；设为 `0` 仅在确认额度充足时使用 |
 | `STEAMKB_HOTLIST_TARGET` | `100` | 本地热门榜目标数量 |
@@ -270,8 +271,8 @@ Copy-Item .env.example .env
 | `STEAMKB_SEARCH_EMPTY_CACHE_TTL_SECONDS` | `30` | 空搜索结果的短缓存时间 |
 | `STEAMKB_SEARCH_CACHE_MAX_ENTRIES` | `512` | 搜索 LRU 缓存的最大查询数量 |
 | `STEAMKB_DIRECT_COOLDOWN_MINUTES` | `5` | 直连失败后的独立冷却时间 |
-| `STEAMKB_STORE_DELAY_MIN_SECONDS` | `1.5` | 商店请求随机延迟下限 |
-| `STEAMKB_STORE_DELAY_MAX_SECONDS` | `4.0` | 商店请求随机延迟上限 |
+| `STEAMKB_STORE_DELAY_MIN_SECONDS` | `1.5` | 每两条 Steam Store 请求之间的随机延迟下限 |
+| `STEAMKB_STORE_DELAY_MAX_SECONDS` | `4.0` | 每两条 Steam Store 请求之间的随机延迟上限 |
 | `STEAMKB_HISTORICAL_LOW_TOLERANCE_CNY` | `0.5` | 当前价判定史低时允许的人民币误差 |
 | `STEAMKB_ITAD_HISTORYLOW_REFRESH_DAYS` | `30` | 已缓存 ITAD 史低的详情刷新间隔；失败时保留旧缓存 |
 

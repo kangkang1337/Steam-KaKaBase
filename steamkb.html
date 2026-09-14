@@ -2759,9 +2759,9 @@
               subtextStyle: { color: '#5f6e7b', fontSize: 12 }
             },
             tooltip: { show: false, triggerOn: 'none' },
-            // Player counts can reach seven digits. Reserve enough room for
-            // locale-formatted Y-axis labels instead of clipping the first digit.
-            grid: { left: 72, right: 18, top: 24, bottom: 58 },
+            // Compact Y labels leave room for the final two-line time label.
+            // Keeping the two sides close also centers the actual plot area.
+            grid: { left: 58, right: 42, top: 24, bottom: 58 },
             xAxis: {
               // These are snapshots, not continuous samples.  A category axis
               // keeps every collected value equally visible when the crawler
@@ -2786,7 +2786,7 @@
             yAxis: {
               type: 'value',
               splitLine: { lineStyle: { color: '#24303a' } },
-              axisLabel: { color: '#8d9ba8' }
+              axisLabel: { color: '#8d9ba8', formatter: value => this.playerAxisLabel(value) }
             },
             series: [{
               name: 'Players',
@@ -2837,8 +2837,8 @@
           const localY = event.offsetY;
           const points = this.playerSnapshotPoints().map(([time, count]) => ({ time, count }));
           if (!points.length) return this.hidePlayerTooltip();
-          const playerGridLeft = 72;
-          const playerGridRight = 18;
+          const playerGridLeft = 58;
+          const playerGridRight = 42;
           const plotWidth = Math.max(1, element.clientWidth - playerGridLeft - playerGridRight);
           const ratio = Math.max(0, Math.min(1, (localX - playerGridLeft) / plotWidth));
           const index = Math.round(ratio * (points.length - 1));
@@ -2853,6 +2853,14 @@
         },
         hidePlayerTooltip() {
           if (this.playerTooltip.visible) this.playerTooltip.visible = false;
+        },
+        playerAxisLabel(value) {
+          const count = Number(value);
+          if (!Number.isFinite(count)) return '';
+          if (Math.abs(count) < 10000) return String(Math.round(count));
+          const thousands = count / 1000;
+          const digits = Math.abs(thousands) >= 100 ? 0 : 1;
+          return `${thousands.toFixed(digits).replace(/\.0$/, '')}k`;
         },
         resizeCharts() {
           for (const chart of [this.priceChart, this.playerChart]) {

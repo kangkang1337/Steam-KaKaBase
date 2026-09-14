@@ -126,3 +126,12 @@ def test_wishlist_statuses_and_sorting_stay_scoped_to_the_current_account():
     assert "method:'PATCH'" in source
     assert "favorite_status:'wish'" in source
     assert "favoriteStatusFilter !== 'all'" in source
+
+
+def test_wishlist_rows_keep_price_context_on_a_dedicated_line():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert 'class="game-copy"' in source
+    assert 'class="row-context"' in source
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in source
+    assert "text-overflow: ellipsis" in source

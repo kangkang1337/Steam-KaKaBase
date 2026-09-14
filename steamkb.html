@@ -288,14 +288,14 @@
 
     .game-list {
       display: grid;
-      max-height: calc(100vh - 154px);
+      max-height: calc(100vh - 190px);
       overflow-y: auto;
       overflow-x: hidden;
     }
 
     .favorite-controls {
-      display: flex;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 6px;
       padding: 8px 10px;
       background: #121920;
@@ -306,11 +306,13 @@
       min-height: 30px;
       padding: 0 8px;
       font-size: 12px;
+      justify-content: flex-start;
     }
 
     .favorite-select {
       display: inline-flex;
       align-items: center;
+      min-width: 0;
       gap: 5px;
       color: var(--muted);
       font-size: 12px;
@@ -324,6 +326,11 @@
       background: #0d141b;
       color: var(--text);
       font: inherit;
+    }
+
+    .favorite-select select {
+      min-width: 0;
+      flex: 1;
     }
 
     .favorite-status {
@@ -342,8 +349,8 @@
       display: grid;
       grid-template-columns: minmax(0, 1fr) 64px;
       gap: 8px;
-      padding: 11px 12px;
-      min-height: 62px;
+      padding: 10px 12px;
+      min-height: 78px;
       width: 100%;
       background: transparent;
       border: 0;
@@ -651,15 +658,35 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      margin-bottom: 7px;
+      margin-bottom: 5px;
+    }
+
+    .game-copy {
+      min-width: 0;
     }
 
     .row-meta {
       display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
+      gap: 6px;
       color: var(--muted);
       font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    .row-context {
+      display: block;
+      margin-top: 4px;
+      color: var(--faint);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row-context span + span::before {
+      content: ' · ';
+      color: var(--faint);
     }
 
     .pill {
@@ -1380,12 +1407,14 @@
         </div>
         <div v-if="filteredFavoriteGames.length" class="game-list">
           <button v-for="game in filteredFavoriteGames" :key="game.appid" class="game-row" :class="{active: selected && selected.appid === game.appid}" @click="selectGame(game.appid)">
-            <span>
+            <span class="game-copy">
               <span class="game-name">{{ displayGameName(game) }}</span>
               <span class="row-meta">
                 <span>{{ formatPlayers(game.player_count) }} {{ t('online') }}</span>
                 <span>{{ game.review_score ?? '-' }}% {{ t('positive') }}</span>
                 <span class="favorite-status" :class="game.favorite_status">{{ favoriteStatusLabel(game.favorite_status) }}</span>
+              </span>
+              <span class="row-context" v-if="game.cn_price_discounted || game.cn_price_historical_low || game.cn_observed_low_last_at">
                 <span v-if="game.cn_price_discounted">-{{ game.cn_discount_percent }}%</span>
                 <span v-if="game.cn_price_historical_low">{{ t('siteLow') }}</span>
                 <span v-if="game.cn_observed_low_last_at">{{ t('recentSiteLow') }} {{ localTime(game.cn_observed_low_last_at, true) }}</span>

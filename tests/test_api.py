@@ -72,6 +72,7 @@ def test_account_session_and_favorite_isolation(api_client):
     assert favorites[0]["player_count"] == 1234
     assert favorites[0]["review_score"] == 95
     assert favorites[0]["cn_price"] == "\u00a5 30.00"
+    assert favorites[0]["cn_price_final"] == 3000
     assert favorites[0]["cn_price_historical_low"] is True
     assert favorites[0]["cn_observed_low_last_at"] == "2026-09-12T00:00:00+00:00"
     assert favorites[0]["favorite_status"] == "wish"

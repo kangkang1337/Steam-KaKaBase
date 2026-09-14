@@ -112,6 +112,7 @@ def test_wishlist_filters_and_recent_site_low_are_local_cache_only():
     assert "filteredFavoriteGames()" in source
     assert "game.cn_price_discounted === true" in source
     assert "game.cn_price_historical_low === true" in source
+    assert "game.cn_price_final" in source
     assert "game.cn_observed_low_last_at" in source
     assert "recentSiteLow" in source
 
@@ -135,3 +136,11 @@ def test_wishlist_rows_keep_price_context_on_a_dedicated_line():
     assert 'class="row-context"' in source
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in source
     assert "text-overflow: ellipsis" in source
+
+
+def test_wishlist_price_sort_puts_free_and_known_prices_before_missing_prices():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert "if (game.is_free) return 0;" in source
+    assert "Number.POSITIVE_INFINITY" in source
+    assert "const priceValue = game =>" in source

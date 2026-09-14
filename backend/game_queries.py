@@ -72,6 +72,7 @@ def clean_game(row, summary=False):
             "player_count": item.get("player_count"), "review_score": item.get("review_score"),
             "cn_price": item.get("cn_price"),
             "cn_price_display": item.get("cn_price") or ("免费" if item.get("is_free") else "国区暂无售价"),
+            "cn_price_final": item.get("cn_price_final"),
             "is_free": bool(item.get("is_free")), "cn_price_historical_low": is_low,
             "cn_price_discounted": bool((item.get("cn_discount_percent") or 0) > 0 and not is_low),
             "cn_discount_percent": item.get("cn_discount_percent") or 0,

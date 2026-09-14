@@ -1852,10 +1852,14 @@
             rows.sort((left, right) => Number(right.cn_discount_percent || 0) - Number(left.cn_discount_percent || 0));
           } else if (this.favoriteSort === 'price') {
             rows.sort((left, right) => {
-              const leftPrice = Number(left.cn_price_final);
-              const rightPrice = Number(right.cn_price_final);
-              if (!Number.isFinite(leftPrice)) return 1;
-              if (!Number.isFinite(rightPrice)) return -1;
+              const priceValue = game => {
+                if (game.is_free) return 0;
+                const value = Number(game.cn_price_final);
+                return Number.isFinite(value) && value >= 0 ? value : Number.POSITIVE_INFINITY;
+              };
+              const leftPrice = priceValue(left);
+              const rightPrice = priceValue(right);
+              if (leftPrice === rightPrice) return 0;
               return leftPrice - rightPrice;
             });
           } else if (this.favoriteSort === 'players') {

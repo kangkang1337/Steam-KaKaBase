@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from . import config, services
 from .db import init_db
 from .logging_utils import log_event
-from .schemas import AdminUserRequest, DeleteAccountRequest, LoginRequest, TrackRequest, UntrackRequest
+from .schemas import AdminUserRequest, DeleteAccountRequest, LoginRequest, PasswordResetRequest, TrackRequest, UntrackRequest
 from . import auth
 from .rate_limit import IpRateLimiter
 
@@ -341,6 +341,17 @@ def create_app():
             raise HTTPException(status_code=400, detail="服主账号由服务器环境变量保护，不能在页面移除")
         auth.revoke_admin(username)
         return {"ok": True}
+
+    @application.post("/api/admin/users/{username}/reset-password")
+    def reset_user_password(username: str, body: PasswordResetRequest, request: Request):
+        """Owner-only recovery path for the deliberately email-free accounts."""
+        dashboard_admin(request, csrf=True, owner=True)
+        enforce_ip_rate(request, "owner-password-reset", limit=5, window_seconds=300)
+        try:
+            auth.reset_password(username, body.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "username": username, "message": "密码已重置，旧登录会话已全部注销"}
 
     @application.post("/api/games/{appid}/interest")
     def request_game_detail(appid: int):

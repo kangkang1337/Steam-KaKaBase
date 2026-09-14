@@ -2,7 +2,7 @@
 
 ## v0.6.4: Staggered historical coverage
 
-Added SQLite-backed game-coverage tiers to steadily build player and China-region price history before a game is opened. The crawler prioritizes popular games, account favorites, recent detail interest, and then a bounded rotating background cohort. Player sampling is staggered with one external request at a time; daily player and price attempt budgets protect Steam from runaway catalog growth. Detail interest remains the highest-priority queue signal, while normal GET pages stay cache-only. Schema v11 stores only per-game recency timestamps, never visitor identity, and the owner monitoring page shows each daily collection budget.
+Added SQLite-backed game-coverage tiers to steadily build player and China-region price history before a game is opened. The crawler prioritizes popular games, account favorites, recent detail interest, and then a bounded rotating background cohort. Player sampling is staggered with one external request at a time; daily player and price attempt budgets protect Steam from runaway catalog growth. Detail interest remains the highest-priority queue signal, while normal GET pages stay cache-only. Schema v11 stores only per-game recency timestamps, never visitor identity, and the owner monitoring page shows each daily collection budget. The owner can also reset an account password from the protected monitoring page; the reset invalidates all existing sessions and does not require email or phone data.
 
 ## v0.6.3: Runtime boundary cleanup
 

@@ -155,6 +155,22 @@ def test_owner_can_read_monitoring_and_manage_admins(api_client, monkeypatch):
     assert member_login.json()["user"]["is_admin"] is True
     assert client.get("/api/admin/monitoring").status_code == 200
     assert client.post("/api/admin/users", json={"username": "owner"}, headers={"X-CSRF-Token": member_login.json()["csrf_token"]}).status_code == 403
+    assert client.post(
+        "/api/admin/users/owner/reset-password",
+        json={"password": "newpassword123"},
+        headers={"X-CSRF-Token": member_login.json()["csrf_token"]},
+    ).status_code == 403
+    client.post("/api/auth/logout")
+    owner_csrf = client.post("/api/auth/login", json=owner).json()["csrf_token"]
+    reset = client.post(
+        "/api/admin/users/member/reset-password",
+        json={"password": "newpassword123"},
+        headers={"X-CSRF-Token": owner_csrf},
+    )
+    assert reset.status_code == 200
+    client.post("/api/auth/logout")
+    assert client.post("/api/auth/login", json=member).status_code == 401
+    assert client.post("/api/auth/login", json={**member, "password": "newpassword123"}).status_code == 200
 
 
 def test_only_owner_can_start_fixed_admin_controls(api_client, monkeypatch):

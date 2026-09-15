@@ -230,6 +230,40 @@ def test_daily_historical_low_does_not_repeat_when_all_candidates_are_recent(iso
     assert selected_low is None
 
 
+def test_daily_meme_avoids_previous_two_weeks_when_alternatives_exist(isolated_runtime):
+    refresh_key = isolated_runtime.daily_refresh_key()
+    recent_memes = []
+    with isolated_runtime.database_connection() as conn:
+        for days_ago in range(1, 15):
+            previous_key = (datetime.strptime(refresh_key, "%Y-%m-%d") - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+            meme = f"/assets/memes/{days_ago}.png"
+            recent_memes.append(meme)
+            conn.execute(
+                "INSERT INTO daily_home_snapshots(recommendation_date, historical_low_appid, meme_url, created_at) VALUES (?, NULL, ?, ?)",
+                (previous_key, meme, isolated_runtime.now_iso()),
+            )
+
+    _, _, selected_meme = isolated_runtime.ensure_daily_home_snapshot(
+        [], recent_memes + ["/assets/memes/fresh.png"],
+    )
+
+    assert selected_meme == "/assets/memes/fresh.png"
+
+
+def test_daily_meme_falls_back_when_every_meme_is_recent(isolated_runtime):
+    refresh_key = isolated_runtime.daily_refresh_key()
+    meme = "/assets/memes/only.png"
+    previous_key = (datetime.strptime(refresh_key, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    with isolated_runtime.database_connection() as conn:
+        conn.execute(
+            "INSERT INTO daily_home_snapshots(recommendation_date, historical_low_appid, meme_url, created_at) VALUES (?, NULL, ?, ?)",
+            (previous_key, meme, isolated_runtime.now_iso()),
+        )
+
+    _, _, selected_meme = isolated_runtime.ensure_daily_home_snapshot([], [meme])
+    assert selected_meme == meme
+
+
 def _insert_historical_low_candidate(runtime, appid, *, reviews, players, current=5000, low=50.0):
     stamp = runtime.now_iso()
     with runtime.database_connection() as conn:

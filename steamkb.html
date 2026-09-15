@@ -708,6 +708,19 @@
       white-space: nowrap;
     }
 
+    .pill.price-unavailable {
+      min-width: 78px;
+      max-width: 108px;
+      min-height: 32px;
+      padding: 4px 7px;
+      color: #c8d4df;
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      text-overflow: clip;
+    }
+
     .price-low {
       background: #0f3a24;
       border-color: #1f8f51;
@@ -924,6 +937,7 @@
     .meme-file { display: flex; align-items: center; gap: 10px; padding: 8px; border-bottom: 1px solid var(--line-soft); }
     .meme-file img { width: 72px; height: 48px; object-fit: contain; background: #0b1116; border-radius: 4px; }
     .meme-file a { color: var(--text); overflow-wrap: anywhere; }
+    .meme-file .danger { margin-left: auto; }
     .meme-upload { display: grid; align-content: start; gap: 10px; }
     @media (max-width: 900px) { .meme-manager { grid-template-columns: 1fr; } }
     .monitor-log-list { margin: 0; padding: 0; list-style: none; max-height: 360px; overflow: auto; background: #0b1116; border: 1px solid var(--line-soft); }
@@ -1260,6 +1274,7 @@
             <div>{{ t('welcome3') }}</div>
           </div>
           <div class="home-sign">——by KK</div>
+          <div class="muted"><a href="mailto:cutekk1337@gmail.com">{{ t('supportContact') }}</a></div>
           <div class="home-picks">
             <article class="pick-card">
               <div class="pick-label">{{ t('todayLow') }}</div>
@@ -1431,7 +1446,7 @@
         </article>
         <article class="panel monitor-card monitor-health"><h2><span class="health-state" :class="monitoring.health_summary.ok ? 'ok' : 'problem'"></span>{{ t('healthSummary') }}</h2><div v-for="item in monitoring.health_summary.items" :key="item.label" class="monitor-row health-item" :class="item.ok ? 'ok' : 'problem'"><span>{{ item.label }} · {{ item.detail }}</span><strong>{{ item.ok ? t('healthy') : t('needsAttention') }}</strong></div></article>
         <article class="panel monitor-card monitor-logs"><h2>{{ t('recentLogs') }}</h2><ul class="monitor-log-list"><li v-for="(line, index) in monitoring.recent_logs" :key="index">{{ line }}</li><li v-if="!monitoring.recent_logs.length">-</li></ul></article>
-        <article v-if="account?.is_owner" class="panel monitor-card monitor-memes"><h2>{{ t('memeManager') }}</h2><div class="meme-manager"><div><p class="muted">{{ t('memeManagerHint') }}</p><div class="meme-file-list"><div v-for="meme in adminMemes" :key="meme.name" class="meme-file"><img :src="meme.url" alt="" loading="lazy"><a :href="meme.url" download>{{ meme.name }}</a><span class="muted">{{ formatBytes(meme.size) }}</span></div><div v-if="!adminMemes.length" class="empty">-</div></div></div><form class="meme-upload" @submit.prevent="uploadMeme"><p class="muted">{{ t('memeUploadHint') }}</p><input ref="memeUploadInput" type="file" accept="image/jpeg,image/png,image/gif,image/webp" :disabled="memeUploadBusy" required><button :disabled="memeUploadBusy">{{ memeUploadBusy ? '…' : t('uploadMeme') }}</button></form></div></article>
+        <article v-if="account?.is_owner" class="panel monitor-card monitor-memes"><h2>{{ t('memeManager') }} <span class="muted">{{ adminMemes.length }} · {{ formatBytes(adminMemesTotalBytes) }}</span></h2><div class="meme-manager"><div><p class="muted">{{ t('memeManagerHint') }}</p><div class="meme-file-list"><div v-for="meme in adminMemes" :key="meme.name" class="meme-file"><img :src="meme.url" alt="" loading="lazy"><a :href="meme.url" download>{{ meme.name }}</a><span class="muted">{{ formatBytes(meme.size) }}</span><button class="danger" :disabled="memeBusyName === meme.name" @click="memeDeleteConfirmName=meme.name">{{ memeBusyName === meme.name ? '…' : t('remove') }}</button></div><div v-if="!adminMemes.length" class="empty">-</div></div></div><form class="meme-upload" @submit.prevent="uploadMeme"><p class="muted">{{ t('memeUploadHint') }}</p><input ref="memeUploadInput" type="file" accept="image/jpeg,image/png,image/gif,image/webp" :disabled="memeUploadBusy" required><button :disabled="memeUploadBusy">{{ memeUploadBusy ? '…' : t('uploadMeme') }}</button></form></div></article>
       </section>
       <section v-else class="panel empty">{{ t('loadingMonitor') }}</section>
     </main>
@@ -1643,6 +1658,14 @@
       <div class="auth-actions"><button type="button" @click="controlConfirmAction = null">{{ t('cancel') }}</button><button type="button" @click="confirmControl">{{ t('confirm') }}</button></div>
     </section>
   </div>
+  <div v-if="memeDeleteConfirmName" class="auth-dialog" @click.self="memeDeleteConfirmName = ''">
+    <section class="auth-card" role="dialog" aria-modal="true" :aria-label="t('deleteMemeTitle')">
+      <h3>{{ t('deleteMemeTitle') }}</h3>
+      <p class="auth-note">{{ memeDeleteConfirmName }}</p>
+      <p>{{ t('deleteMemeWarning') }}</p>
+      <div class="auth-actions"><button type="button" @click="memeDeleteConfirmName = ''">{{ t('cancel') }}</button><button class="danger" type="button" @click="confirmDeleteMeme">{{ t('confirmDelete') }}</button></div>
+    </section>
+  </div>
   </div>
 
   <script>
@@ -1656,10 +1679,10 @@
         searching: '正在搜索…', noSearchResults: '暂无本地结果，目录仍在持续补充', selectPriceRegion: '选择价格地区',
         selectLanguage: '选择界面语言', refreshList: '刷新列表', backgroundCollecting: '后台自动采集中，页面可正常使用。',
         autoCollection: '自动采集：在线人数每 {players} 分钟一次，价格/评价每 {prices} 小时一次。',
-        welcome1: '欢迎来到 SteamKaKaBase！', welcome2: '希望你能在这里找到想要的游戏！', welcome3: '今天也别忘了享受游戏！',
+        welcome1: '欢迎来到 SteamKaKaBase！', welcome2: '希望你能在这里找到想要的游戏！', welcome3: '今天也别忘了享受游戏！', supportContact: '忘记密码或反馈问题：cutekk1337@gmail.com',
         todayLow: '今日史低', positive: '好评', viewDetails: '查看详情', noCnLow: '暂无国区史低数据',
         dailyGem: '每日小众宝藏游戏', noEligibleGames: '暂无符合条件的游戏', todayMeme: '今日表情包',
-        noMeme: '暂无今日表情包', downloadOriginal: '下载原图', memeManager: '每日表情包管理', memeManagerHint: '已有表情包（仅服主可查看和上传）', memeUploadHint: '支持 JPEG、PNG、GIF、WebP；单个最多 10 MB。', uploadMeme: '上传表情包', peak: '峰值', updatedAt: '更新于',
+        noMeme: '暂无今日表情包', downloadOriginal: '下载原图', memeManager: '每日表情包管理', memeManagerHint: '已有表情包（仅服主可查看、上传和删除）', memeUploadHint: '支持 JPEG、PNG、GIF、WebP；单个最多 10 MB。', uploadMeme: '上传表情包', deleteMemeTitle: '删除表情包', deleteMemeWarning: '删除后不能恢复；若它是今日表情包，首页会在下次读取时选择替代项。', peak: '峰值', updatedAt: '更新于',
         nicheBuilding: '小众池正在建立，满足条件的游戏会自动出现在这里。', todayLowPool: '今日史低池', newLowPool: '新史低池', highReviewLowPool: '高好评史低池', localObserved: '本站观测', paidOnly: '仅查看付费游戏',
         lowOnly: '仅查看史低游戏', newLowOnly: '仅查看新史低', pricedOnly: '仅查看有价格', newHistoricalLow: '新史低', noDealPoolGames: '暂无符合条件的近期价格数据。', sortPositive: '按好评率排序', refreshHot: '刷新热门榜', scrollMore: '向下滚动继续加载',
         localLimit: '已加载到本地上限', hotBuilding: '正在建立热门榜，稍后会自动显示本地缓存。',
@@ -1704,10 +1727,10 @@
         searching: 'Searching…', noSearchResults: 'No local results yet; the catalog is still being enriched', selectPriceRegion: 'Select price region',
         selectLanguage: 'Select interface language', refreshList: 'Refresh', backgroundCollecting: 'Background collection is running; the page remains available.',
         autoCollection: 'Auto collection: players every {players} min; prices/reviews every {prices} hr.',
-        welcome1: 'Welcome to SteamKaKaBase!', welcome2: 'Hope you can find what you want here!', welcome3: "Don't forget to have fun today!",
+        welcome1: 'Welcome to SteamKaKaBase!', welcome2: 'Hope you can find what you want here!', welcome3: "Don't forget to have fun today!", supportContact: 'Lost your password or found a problem? Contact cutekk1337@gmail.com',
         todayLow: "Today's historical low", positive: 'positive', viewDetails: 'View details', noCnLow: 'No China-region historical low available',
         dailyGem: 'Daily hidden gem', noEligibleGames: 'No eligible games yet', todayMeme: "Today's meme",
-        noMeme: 'No daily meme yet', downloadOriginal: 'Download original', memeManager: 'Daily meme manager', memeManagerHint: 'Existing memes (owner only)', memeUploadHint: 'JPEG, PNG, GIF, or WebP; up to 10 MB each.', uploadMeme: 'Upload meme', peak: 'Peak', updatedAt: 'Updated',
+        noMeme: 'No daily meme yet', downloadOriginal: 'Download original', memeManager: 'Daily meme manager', memeManagerHint: 'Existing memes (owner can view, upload, and delete)', memeUploadHint: 'JPEG, PNG, GIF, or WebP; up to 10 MB each.', uploadMeme: 'Upload meme', deleteMemeTitle: 'Delete meme', deleteMemeWarning: "This cannot be undone. If it is today's meme, Home will choose a replacement on its next read.", peak: 'Peak', updatedAt: 'Updated',
         nicheBuilding: 'The hidden-gem pool is being built. Eligible games will appear automatically.', todayLowPool: "Today's low pool", newLowPool: 'New low pool', highReviewLowPool: 'High-review low pool', localObserved: 'Locally observed', paidOnly: 'Paid games only',
         lowOnly: 'Historical lows only', newLowOnly: 'New lows only', pricedOnly: 'Priced only', newHistoricalLow: 'New low', noDealPoolGames: 'No recent qualifying price data yet.', sortPositive: 'Sort by positive reviews', refreshHot: 'Refresh list', scrollMore: 'Scroll down to load more',
         localLimit: 'Local limit reached', hotBuilding: 'Building the popular list; cached results will appear shortly.',
@@ -1826,7 +1849,7 @@
           busy: false,
           favoriteBusy: false,
           account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true, authBusy: false, authError: '', deleteAccountOpen: false, deleteAccountPassword: '',
-          monitoring: null, admins: [], adminMemes: [], memeUploadBusy: false, adminUsername: '', resetUsername: '', resetPassword: '', resetBusy: false, controlBusy: null, controlConfirmAction: null,
+          monitoring: null, admins: [], adminMemes: [], memeUploadBusy: false, memeBusyName: '', memeDeleteConfirmName: '', adminUsername: '', resetUsername: '', resetPassword: '', resetBusy: false, controlBusy: null, controlConfirmAction: null,
           refreshing: false,
           wasRefreshing: false,
           statusTimer: null,
@@ -1861,6 +1884,9 @@
         };
       },
       computed: {
+        adminMemesTotalBytes() {
+          return this.adminMemes.reduce((total, meme) => total + Number(meme.size || 0), 0);
+        },
         nichePoolSummary() {
           const reviewCap = this.nicheMaxReviews.toLocaleString(this.locale);
           const formula = this.t('nicheFormula', { cap: reviewCap });
@@ -2201,6 +2227,7 @@
         },
         pricePillClass(game) {
           return {
+            'price-unavailable': Boolean(!game?.is_free && !game?.cn_price_final && /暂无售价|unavailable/i.test(game?.cn_price_display || '')),
             'price-new-low': Boolean(game?.cn_price_new_historical_low),
             'price-low': Boolean(game?.cn_price_historical_low && !game?.cn_price_new_historical_low),
             'price-discount': Boolean(game?.cn_price_discounted)
@@ -2993,6 +3020,8 @@
         formatMonitorTime(value) { return value ? this.localTime(value) : '-'; },
         async loadMonitoring() { try { const [monitor, users] = await Promise.all([this.api('/api/admin/monitoring'), this.api('/api/admin/users')]); this.monitoring = monitor; this.admins = users.admins || []; this.adminMemes = this.account?.is_owner ? (await this.api('/api/admin/memes')).memes || [] : []; } catch (err) { this.message = err.message; this.switchPage('home'); } },
         async uploadMeme() { const input=this.$refs.memeUploadInput; const file=input?.files?.[0]; if (!file || this.memeUploadBusy) return; this.memeUploadBusy=true; try { const result=await this.api('/api/admin/memes', {method:'POST', headers:{'Content-Type':file.type || 'application/octet-stream'}, body:await file.arrayBuffer()}); this.adminMemes=[...this.adminMemes, result.meme].sort((a,b)=>a.name.localeCompare(b.name)); input.value=''; this.message=this.t('uploadMeme') + '。'; } catch (err) { this.message=err.message; } finally { this.memeUploadBusy=false; } },
+        async deleteMeme(name) { if (!name || this.memeBusyName) return; this.memeBusyName=name; try { await this.api(`/api/admin/memes/${encodeURIComponent(name)}`, {method:'DELETE'}); this.adminMemes=this.adminMemes.filter(meme => meme.name !== name); this.message=this.t('remove') + '。'; } catch (err) { this.message=err.message; } finally { this.memeBusyName=''; } },
+        confirmDeleteMeme() { const name=this.memeDeleteConfirmName; this.memeDeleteConfirmName=''; if (name) this.deleteMeme(name); },
         async addAdmin() { try { await this.api('/api/admin/users', {method:'POST', body: JSON.stringify({username:this.adminUsername})}); this.adminUsername=''; await this.loadMonitoring(); } catch (err) { this.message=err.message; } },
         async removeAdmin(username) { try { await this.api(`/api/admin/users/${encodeURIComponent(username)}/remove`, {method:'POST'}); await this.loadMonitoring(); } catch (err) { this.message=err.message; } },
         async resetUserPassword() { if (this.resetBusy) return; this.resetBusy=true; try { const result=await this.api(`/api/admin/users/${encodeURIComponent(this.resetUsername)}/reset-password`, {method:'POST', body:JSON.stringify({password:this.resetPassword})}); this.resetPassword=''; this.message=result.message; if (this.account?.username?.toLowerCase() === this.resetUsername.toLowerCase()) { this.account=null; this.csrfToken=''; this.switchPage('home'); } } catch (err) { this.message=err.message; } finally { this.resetBusy=false; } },

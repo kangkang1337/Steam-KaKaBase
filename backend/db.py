@@ -801,6 +801,28 @@ def read_home_snapshot_context(refresh_key, repeat_days):
     return recent, current
 
 
+def query_recent_home_meme_urls(refresh_key, days):
+    """Return prior daily-meme URLs, newest first, without exposing file paths."""
+    with transaction(rows=True) as conn:
+        return {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT meme_url FROM daily_home_snapshots
+                WHERE recommendation_date < ? AND meme_url IS NOT NULL
+                ORDER BY recommendation_date DESC LIMIT ?
+                """,
+                (refresh_key, int(days)),
+            ).fetchall()
+        }
+
+
+def clear_home_snapshot_meme(meme_url):
+    """Avoid retaining a broken daily image URL after an owner deletion."""
+    with transaction() as conn:
+        conn.execute("UPDATE daily_home_snapshots SET meme_url=NULL WHERE meme_url=?", (meme_url,))
+
+
 def upsert_home_snapshot(refresh_key, historical_low_appid, meme_url):
     with transaction() as conn:
         conn.execute(
@@ -1136,6 +1158,7 @@ __all__ = [
     "query_catalog_game_stub", "query_game_detail", "query_header_image_url", "query_hot_games", "query_latest_prices_by_region",
     "query_missing_historylow_appids", "query_search_index", "query_tracked_games", "query_user_favorite_games",
     "query_popular_historical_low_rows", "query_deal_pool_rows", "read_home_snapshot_context",
+    "query_recent_home_meme_urls", "clear_home_snapshot_meme",
     "query_daily_niche_snapshot", "query_home_snapshot", "query_tracked_appids",
     "upsert_home_snapshot",
     "CURRENT_SCHEMA_VERSION", "DatabaseMigrationError", "create_database_backup",

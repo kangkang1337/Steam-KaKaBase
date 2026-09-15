@@ -373,6 +373,18 @@ def create_app():
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "meme": meme}
 
+    @application.delete("/api/admin/memes/{name}")
+    def delete_admin_meme(name: str, request: Request):
+        dashboard_admin(request, csrf=True, owner=True)
+        enforce_ip_rate(request, "admin-memes", limit=20, window_seconds=300)
+        try:
+            deleted = services.delete_uploaded_meme(name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="表情包不存在")
+        return {"ok": True}
+
     @application.post("/api/admin/users")
     def add_admin(body: AdminUserRequest, request: Request):
         owner = dashboard_admin(request, csrf=True, owner=True)

@@ -42,7 +42,9 @@ from .db import (
     query_popular_historical_low_rows,
     query_tracked_appids,
     query_user_favorite_games,
+    query_recent_home_meme_urls,
     read_home_snapshot_context,
+    clear_home_snapshot_meme,
     transaction,
     upsert_home_snapshot,
 )
@@ -238,6 +240,23 @@ def save_uploaded_meme(payload):
             "modified_at": datetime.now(timezone.utc).isoformat()}
 
 
+def delete_uploaded_meme(name):
+    """Delete exactly one managed meme, never a caller-controlled path."""
+    if not isinstance(name, str) or not name or Path(name).name != name:
+        raise ValueError("无效的表情包文件名")
+    path = config.ROOT / "assets" / "memes" / name
+    try:
+        resolved = path.resolve(strict=True)
+        meme_dir = path.parent.resolve(strict=True)
+    except FileNotFoundError:
+        return False
+    if resolved.parent != meme_dir or not resolved.is_file() or resolved.suffix.lower() not in _MEME_EXTENSIONS:
+        raise ValueError("无效的表情包文件名")
+    resolved.unlink()
+    clear_home_snapshot_meme(f"/assets/memes/{name}")
+    return True
+
+
 def ensure_daily_home_snapshot(historical_lows, memes):
     refresh_key = daily_refresh_key()
     lows_by_appid = {int(game["appid"]): game for game in historical_lows}
@@ -261,7 +280,10 @@ def ensure_daily_home_snapshot(historical_lows, memes):
         selected_low = preferred_low
         needs_update = True
     if memes and selected_meme is None:
-        selected_meme = memes[daily_index(len(memes), refresh_key)]
+        recent_memes = query_recent_home_meme_urls(refresh_key, 14)
+        candidates = [meme for meme in memes if meme not in recent_memes]
+        pool = candidates or memes
+        selected_meme = pool[daily_index(len(pool), refresh_key)]
         needs_update = True
     if needs_update:
         upsert_home_snapshot(

@@ -150,6 +150,8 @@ def mock_frontend_api(page, *, admin=False):
         if path == "/api/games" and request.method == "GET":
             games = [{**detail["game"], "tracked": True}] if state["tracked"] else []
             return reply(route, {"games": games})
+        if path == "/api/favorites" and request.method == "GET":
+            return reply(route, {"games": []})
         if path == "/api/home-picks":
             return reply(route, {"refresh_key": "2026-09-07", "historical_low": None, "niche": None, "meme": None})
         if path == "/api/hot-games":
@@ -163,6 +165,8 @@ def mock_frontend_api(page, *, admin=False):
             return reply(route, {"games": []})
         if path == "/api/admin/users":
             return reply(route, {"admins": []})
+        if path == "/api/admin/memes":
+            return reply(route, {"memes": []})
         if path == "/api/admin/monitoring":
             return reply(route, {
                 "today": {"visitors": 1, "requests": 2, "new_visitors": 0, "new_users_today": 0, "favorites_total": 0},

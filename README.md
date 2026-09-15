@@ -226,7 +226,10 @@ Copy-Item .env.example .env
 | `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 兼容旧配置；分层调度中热门和收藏为 24 小时 |
 | `STEAMKB_PLAYER_DAILY_REQUEST_BUDGET` | `7500` | 每日非热门玩家历史覆盖尝试上限；热门榜刷新独立计算，不挤占此额度。约可支持 5 万主要游戏在一周内轮转一次，额度随上海当天时间逐步放行 |
 | `STEAMKB_PRICE_DAILY_REQUEST_BUDGET` | `7500` | 每日非热门后台中国区价格覆盖尝试上限；热门榜价格独立计算，约可支持 5 万主要游戏一周轮转，并随当天时间逐步放行 |
-| `STEAMKB_COVERAGE_PLAYER_BATCH_LIMIT` | `60` | 每轮额外玩家覆盖候选数；保持单路错峰请求，但更快追上按日释放的预算 |
+| `STEAMKB_COVERAGE_PLAYER_BATCH_LIMIT` | `100` | 每轮额外玩家覆盖候选数；保持单路错峰请求，但更快追上按日释放的预算 |
+| `STEAMKB_MEME_UPLOAD_MAX_BYTES` | `10485760` | 服主上传单个表情包的最大字节数（默认 10 MB） |
+| `STEAMKB_MEME_MAX_FILES` | `300` | 表情包目录可保留的最大文件数 |
+| `STEAMKB_MEME_MAX_TOTAL_BYTES` | `268435456` | 表情包目录总容量上限（默认 256 MB） |
 | `STEAMKB_COVERAGE_PRICE_BATCH_LIMIT` | `20` | 每轮额外价格覆盖候选数 |
 | `STEAMKB_COVERAGE_BACKGROUND_COHORT_LIMIT` | `8000` | 每轮背景覆盖候选池大小；配合每日 7,500 预算，目标约一周为 5 万主要游戏补齐或轮转主要样本 |
 | `STEAMKB_SPECIAL_APP_REFRESH_MINUTES` | `15` | 受限免费 App（当前为 Deadlock）从 Steam 官方热门榜记录在线人数的间隔 |
@@ -373,7 +376,7 @@ GET /api/status
 
 ## 首页与图片
 
-首页三项内容共用 `00:10` 日界线，并保存 SQLite 每日快照。刷新页面或重启服务不会改变当天选择，快照默认保留两年。今日史低优先排除过去 7 天已经推荐过的游戏，只有候选不足时才允许重复。
+首页三项内容共用 `00:10` 日界线，并保存 SQLite 每日快照。刷新页面或重启服务不会改变当天选择，快照默认保留两年。今日史低优先排除过去 7 天已经推荐过的游戏；每日表情包优先避开过去 14 天已选文件；只有候选不足时才允许重复。
 
 表情包放在 `assets/memes/`，支持以下浏览器图片格式，扩展名不区分大小写：
 
@@ -381,7 +384,7 @@ GET /api/status
 GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
 ```
 
-服主也可在管理员监控页的“每日表情包管理”直接上传 JPEG、PNG、GIF 或 WebP（单个默认最多 10 MB），并下载首页当天表情包的原图。上传接口只允许服主 Cookie + CSRF 会话访问，目录有总大小和文件数上限，部署不会再覆盖已上传文件。
+服主也可在管理员监控页的“每日表情包管理”直接上传、删除 JPEG、PNG、GIF 或 WebP（单个默认最多 10 MB），查看文件总数及总容量，并下载首页当天表情包的原图。上传和删除接口只允许服主 Cookie + CSRF 会话访问，目录有总大小和文件数上限，部署不会再覆盖已上传文件。
 
 游戏头图通过 `/api/image-cache` 使用本地限量缓存。缓存默认最长保留 30 天、总量上限 512 MB、单张上限 2 MB，并采用最近最少使用方向清理。当前没有批量截图缓存。
 

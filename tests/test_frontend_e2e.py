@@ -65,7 +65,7 @@ def frontend_server(isolated_runtime):
         thread.join(timeout=5)
 
 
-def mock_frontend_api(page):
+def mock_frontend_api(page, *, admin=False):
     state = {"tracked": False, "track_calls": 0, "untrack_calls": 0, "detail_calls": 0}
     hot_games = [
         {
@@ -140,7 +140,12 @@ def mock_frontend_api(page):
                 "steam_catalog_game_count": 4000,
                 "steam_catalog_excluded_count": 1000,
                 "steam_catalog_enriched_count": 5000,
-                "catalog_enrich_daily_limit": 1500,
+                "catalog_enrich_daily_limit": 2000,
+            })
+        if path == "/api/auth/me":
+            return reply(route, {
+                "user": {"username": "owner", "is_admin": True, "is_owner": True} if admin else None,
+                "csrf_token": "test-csrf" if admin else None,
             })
         if path == "/api/games" and request.method == "GET":
             games = [{**detail["game"], "tracked": True}] if state["tracked"] else []
@@ -154,6 +159,19 @@ def mock_frontend_api(page):
         if path == "/api/niche-pool":
             niche = [{**hot_games[1], "rank": 1, "peak_players": 700, "weighted_score": 0.91}]
             return reply(route, {"games": niche, "count": 1, "pool_count": 20, "selection_mode": "all"})
+        if path.startswith("/api/deal-pools/"):
+            return reply(route, {"games": []})
+        if path == "/api/admin/users":
+            return reply(route, {"admins": []})
+        if path == "/api/admin/monitoring":
+            return reply(route, {
+                "today": {"visitors": 1, "requests": 2, "new_visitors": 0, "new_users_today": 0, "favorites_total": 0},
+                "server": {"web": "ok", "crawler": {"running": True}, "database": "ok", "backup": "ok", "controls": {"enabled": False, "actions": [], "recent": []}, "resources": {"cpu_cores": 2, "load": [], "memory": {"total_bytes": 1, "available_bytes": 1}, "disk": {"total_bytes": 1, "used_bytes": 0}}},
+                "crawler": {"queue": {"active_total": 0}, "rate_limits": {}, "coverage_budget": {}, "heartbeat_age_seconds": 0, "last_success_at": None},
+                "database": {"games_total": 0, "player_snapshots": 0, "price_snapshots": 0, "review_snapshots": 0, "storage": {"database_bytes": 0, "wal_bytes": 0}, "schema": 12},
+                "backups": {"local": {"at": None}, "offsite": {"at": None}, "drill": None},
+                "health_summary": {"ok": True, "items": []}, "recent_logs": [],
+            })
         if path == "/api/search":
             if "scroll" in request.url:
                 return reply(route, {"items": [
@@ -204,12 +222,12 @@ def mock_frontend_api(page):
     return state
 
 
-def open_test_page(browser, frontend_server, *, viewport=None):
+def open_test_page(browser, frontend_server, *, viewport=None, fragment="", admin=False):
     page = browser.new_page(viewport=viewport or {"width": 1440, "height": 900})
     errors = []
     page.on("pageerror", lambda error: errors.append(error.stack or str(error)))
-    state = mock_frontend_api(page)
-    page.goto(frontend_server, wait_until="domcontentloaded")
+    state = mock_frontend_api(page, admin=admin)
+    page.goto(f"{frontend_server}/{fragment}", wait_until="domcontentloaded")
     expect(page.locator(".brand")).to_contain_text("Steam-KaKaBase", timeout=15000)
     return page, state, errors
 
@@ -246,6 +264,30 @@ def test_navigation_hot_filters_and_niche_pool(browser, frontend_server):
         expect(page.locator(".hot-row")).to_contain_text("Paid Bravo")
         expect(page.locator(".panel-head .muted")).to_contain_text("当前池 20 条，展示全部")
         expect(page.locator(".panel-head .muted")).not_to_contain_text("未满")
+        assert errors == []
+    finally:
+        page.close()
+
+
+def test_refresh_restores_admin_and_public_hash_routes(browser, frontend_server):
+    page, _, errors = open_test_page(
+        browser, frontend_server, fragment="#page=monitor", admin=True
+    )
+    try:
+        expect(page.locator(".monitor-grid")).to_be_visible(timeout=15000)
+        page.reload(wait_until="domcontentloaded")
+        expect(page.locator(".monitor-grid")).to_be_visible(timeout=15000)
+
+        for fragment, selector in (
+            ("#page=hot", ".hot-row"),
+            ("#page=niche", ".hot-row"),
+            ("#page=deal&pool=new-low", ".hot-page"),
+            ("#page=tracker&game=4242", ".hero h1"),
+        ):
+            page.goto(f"{frontend_server}/{fragment}", wait_until="domcontentloaded")
+            expect(page.locator(selector).first).to_be_visible(timeout=15000)
+            page.reload(wait_until="domcontentloaded")
+            expect(page.locator(selector).first).to_be_visible(timeout=15000)
         assert errors == []
     finally:
         page.close()

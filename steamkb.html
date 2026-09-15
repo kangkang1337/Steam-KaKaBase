@@ -2072,7 +2072,10 @@
         if (pageIcon) pageIcon.href = this.logoSrc;
         this.restoreLocale();
         this.restoreSelectedRegion();
-        this.restoreAuth();
+        // Routes are restored after authentication: otherwise an owner
+        // refreshing #page=monitor is temporarily anonymous and gets sent
+        // to the home page before /api/auth/me has completed.
+        this.restoreAuth().finally(() => this.restoreRouteFromUrl());
         this.loadGames();
         this.loadHomePicks();
         this.clockTimer = setInterval(() => {
@@ -2086,7 +2089,6 @@
         window.addEventListener('scroll', this.onWindowScroll, { passive: true });
         window.addEventListener('popstate', this.restoreRouteFromUrl);
         window.addEventListener('hashchange', this.restoreRouteFromUrl);
-        this.restoreRouteFromUrl();
       },
       beforeUnmount() {
         clearInterval(this.statusTimer);

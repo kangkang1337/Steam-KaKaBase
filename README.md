@@ -14,7 +14,8 @@
 - 查看当前在线人数、本站开始记录后的历史峰值和趋势图。
 - 查看 Steam 好评率、评测数量、简介、开发商、发行商和发售日期。
 - 愿望单支持账号同步；收藏可标为“想买、观望、已拥有”，可按状态、折扣、本站史低、价格或在线人数筛选排序。未登录时同样可使用浏览器本地愿望单。
-- 热门榜默认展示 Steam Top 100，支持仅看付费、仅看史低和按好评率排序。
+- 热门榜默认展示 Steam Top 200，支持仅看付费、仅看史低、仅看新史低和按好评率排序。
+- “更多”菜单提供三个只读价格池：24 小时内达到史低、低于此前本站记录的新史低，以及好评率不低于 90% 的史低游戏。
 - 独立维护小众游戏池，并从候选池较强的前 50% 随机抽取最多 20 款展示。
 - 首页展示今日史低、每日小众宝藏游戏和今日表情包，统一在本地时间每天 00:10 更新。
 - Vue 3 + ECharts 前端，价格折线图和在线人数快照柱形图支持悬停查看数据；玩家图以等宽快照柱显示，并固定展示最多 7 个横轴时间点。
@@ -231,7 +232,10 @@ Copy-Item .env.example .env
 | `STEAMKB_SPECIAL_APP_REFRESH_MINUTES` | `15` | 受限免费 App（当前为 Deadlock）从 Steam 官方热门榜记录在线人数的间隔 |
 | `STEAMKB_COVERAGE_ACTIVITY_DAYS` | `14` | 最近打开详情游戏保持较高覆盖频率的天数 |
 | `STEAMKB_PLAYER_REQUEST_DELAY_SECONDS` | `0.5` | 单路玩家请求之间的错峰间隔；设为 `0` 仅在确认额度充足时使用 |
-| `STEAMKB_HOTLIST_TARGET` | `100` | 本地热门榜目标数量 |
+| `STEAMKB_HOTLIST_TARGET` | `200` | 本地热门榜目标数量（最大 200） |
+| `STEAMKB_DEAL_POOL_DISPLAY_LIMIT` | `200` | 每个近期史低池最多展示的游戏数 |
+| `STEAMKB_DEAL_POOL_CANDIDATE_LIMIT` | `800` | 史低池在本地 SQLite 中筛选的候选上限 |
+| `STEAMKB_DEAL_HIGH_REVIEW_MIN` | `90` | 高好评史低池要求的最低好评率百分比 |
 | `STEAMKB_CATALOG_LIMIT` | `0` | 兼容旧配置；非零时仅作为旧版扫描批量回退值，不再限制目录总量 |
 | `STEAMKB_CATALOG_SCAN_BATCH_LIMIT` | `10000` | 每天推进的轻量 AppList 条目上限 |
 | `STEAMKB_CATALOG_RESCAN_DAYS` | `7` | 全量扫描完成后的校验周期 |

@@ -12,6 +12,7 @@ from collections import OrderedDict
 from . import config
 from .db import (
     query_catalog_game_stub,
+    query_deal_pool_rows,
     query_game_detail,
     query_hot_games,
     query_search_index,
@@ -65,7 +66,16 @@ def clean_game(row, summary=False):
     if summary:
         current_cny = amount_int_to_cny(item.get("cn_price_final"), item.get("cn_price_currency") or "CNY")
         low_cny, low_source = effective_historical_low(item.get("cn_itad_low_cny", item.get("cn_historical_low_cny")), item.get("cn_observed_low_cny"))
-        is_low = cached_historical_low_match(current_cny, low_cny, low_source, item.get("cn_discount_percent"), item.get("cn_observed_snapshot_count"))
+        previous_amount = item.get("cn_previous_observed_low_amount_int")
+        is_new_low = bool(
+            item.get("cn_discount_percent") and item.get("cn_price_final") is not None
+            and ((previous_amount is not None and int(item["cn_price_final"]) < int(previous_amount))
+                 or (low_cny is not None and current_cny is not None
+                     and current_cny < float(low_cny) - config.HISTORICAL_LOW_TOLERANCE_CNY))
+        )
+        is_low = is_new_low or cached_historical_low_match(
+            current_cny, low_cny, low_source, item.get("cn_discount_percent"), item.get("cn_observed_snapshot_count")
+        )
         return {
             "appid": item.get("appid"), "name": display_name, "name_zh": display_name,
             "name_en": clean_hot_name(item.get("name_en")), "header_image": item.get("header_image"),
@@ -74,12 +84,14 @@ def clean_game(row, summary=False):
             "cn_price_display": item.get("cn_price") or ("免费" if item.get("is_free") else "国区暂无售价"),
             "cn_price_final": item.get("cn_price_final"),
             "is_free": bool(item.get("is_free")), "cn_price_historical_low": is_low,
+            "cn_price_new_historical_low": is_new_low,
             "cn_price_discounted": bool((item.get("cn_discount_percent") or 0) > 0 and not is_low),
             "cn_discount_percent": item.get("cn_discount_percent") or 0,
             "cn_historical_low_cny": low_cny, "cn_historical_low_source": low_source,
             "cn_observed_low_since": item.get("cn_observed_low_since"),
             "cn_observed_low_last_at": item.get("cn_observed_low_last_at"),
             "cn_observed_snapshot_count": item.get("cn_observed_snapshot_count") or 0,
+            "cn_price_updated_at": item.get("cn_price_updated_at"),
             "favorite_status": item.get("favorite_status") or "wish",
             "favorite_created_at": item.get("favorite_created_at"),
             "updated_at": item.get("updated_at"), "tracked": bool(item.get("tracked")),
@@ -99,11 +111,19 @@ def clean_price(row):
     current_cny = price_row_cny(item)
     observed_low_cny = amount_int_to_cny(item.get("observed_low_amount_int"), item.get("currency"))
     low_cny, low_source = effective_historical_low(item.get("historical_low_cny"), observed_low_cny)
+    previous_amount = item.get("previous_observed_low_amount_int")
+    is_new_low = bool(
+        item.get("discount_percent") and item.get("final") is not None
+        and ((previous_amount is not None and int(item["final"]) < int(previous_amount))
+             or (low_cny is not None and current_cny is not None
+                 and current_cny < float(low_cny) - config.HISTORICAL_LOW_TOLERANCE_CNY))
+    )
     return {
         "region": item.get("region"), "currency": item.get("currency"), "initial": item.get("initial"),
         "final": item.get("final"), "discount_percent": item.get("discount_percent"),
         "final_formatted": item.get("final_formatted"), "source": item.get("source"), "fetched_at": item.get("fetched_at"),
-        "historical_low": cached_historical_low_match(current_cny, low_cny, low_source, item.get("discount_percent"), item.get("observed_snapshot_count")),
+        "historical_low": is_new_low or cached_historical_low_match(current_cny, low_cny, low_source, item.get("discount_percent"), item.get("observed_snapshot_count")),
+        "new_historical_low": is_new_low,
         "current_cny": current_cny, "historical_low_cny": low_cny, "historical_low_source": low_source,
         "itad_historical_low_cny": item.get("historical_low_cny"), "observed_low_cny": observed_low_cny,
         "observed_low_amount_int": item.get("observed_low_amount_int"), "observed_low_since": item.get("observed_low_since"),
@@ -193,17 +213,38 @@ def list_hot_games(limit=100):
     for rank, row in enumerate(query_hot_games(limit, UNKNOWN_GAME_NAME), 1):
         current_cny = amount_int_to_cny(row["cn_price_final"], row["cn_price_currency"] or "CNY")
         low_cny, low_source = effective_historical_low(row["cn_itad_low_cny"], row["cn_observed_low_cny"])
-        is_low = cached_historical_low_match(current_cny, low_cny, low_source, row["cn_discount_percent"], row["cn_observed_snapshot_count"])
+        previous_amount = row["cn_previous_observed_low_amount_int"]
+        is_new_low = bool(
+            row["cn_discount_percent"] and row["cn_price_final"] is not None
+            and ((previous_amount is not None and int(row["cn_price_final"]) < int(previous_amount))
+                 or (low_cny is not None and current_cny is not None
+                     and current_cny < float(low_cny) - config.HISTORICAL_LOW_TOLERANCE_CNY))
+        )
+        is_low = is_new_low or cached_historical_low_match(
+            current_cny, low_cny, low_source, row["cn_discount_percent"], row["cn_observed_snapshot_count"]
+        )
         games.append({"appid": row["appid"], "rank": rank, "original_rank": row["original_rank"],
             "name": fallback_game_name(row["appid"], row["name"]), "name_zh": fallback_game_name(row["appid"], row["name_zh"] or row["name"]),
             "name_en": clean_hot_name(row["name_en"]), "header_image": row["header_image"], "current_players": row["current_players"], "peak_players": row["peak_players"],
             "review_score": row["review_score"], "is_free": bool(row["is_free"]), "is_paid": not bool(row["is_free"]),
             "cn_price": row["cn_price"], "cn_price_display": row["cn_price"] or ("免费" if row["is_free"] else "国区暂无售价"),
             "cn_price_final": row["cn_price_final"], "cn_discount_percent": row["cn_discount_percent"] or 0,
-            "cn_price_historical_low": is_low, "cn_price_discounted": bool((row["cn_discount_percent"] or 0) > 0 and not is_low),
+            "cn_price_historical_low": is_low, "cn_price_new_historical_low": is_new_low,
+            "cn_price_discounted": bool((row["cn_discount_percent"] or 0) > 0 and not is_low),
             "cn_historical_low_cny": low_cny, "cn_historical_low_source": low_source,
             "cn_observed_low_since": row["cn_observed_low_since"], "source": row["source"], "fetched_at": row["fetched_at"], "tracked": bool(row["tracked"])})
     return games
+
+
+def list_deal_pool(pool, limit=None):
+    """Serialize a bounded set of recent price changes without external I/O."""
+    requested = config.DEAL_POOL_DISPLAY_LIMIT if limit is None else int(limit)
+    requested = min(max(1, requested), config.DEAL_POOL_DISPLAY_LIMIT)
+    rows = query_deal_pool_rows(
+        pool, requested, config.DEAL_POOL_CANDIDATE_LIMIT, config.DEAL_HIGH_REVIEW_MIN
+    )
+    games = [clean_game(row, summary=True) for row in rows]
+    return [game for game in games if game["cn_price_historical_low"]][:requested]
 
 
 def _normalize_search_term(term):

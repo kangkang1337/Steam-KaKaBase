@@ -735,8 +735,8 @@ async def fetch_official_hotlist_async():
         **steam_httpx_options(),
     ) as client:
         urls = [
-            "https://api.steampowered.com/ISteamChartsService/GetGamesByConcurrentPlayers/v1/",
-            "https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/",
+            f"https://api.steampowered.com/ISteamChartsService/GetGamesByConcurrentPlayers/v1/?count={config.HOTLIST_TARGET}",
+            f"https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?count={config.HOTLIST_TARGET}",
         ]
         for url in urls:
             try:

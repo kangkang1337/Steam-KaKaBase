@@ -292,6 +292,13 @@ def create_app():
     def hot_games_version():
         return services.hot_games_version()
 
+    @application.get("/api/deal-pools/{pool}")
+    def deal_pool(pool: str, limit: int = Query(default=200, ge=1, le=500)):
+        try:
+            return services.list_deal_pool(pool, limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="not found") from exc
+
     @application.get("/api/niche-pool")
     def niche_pool():
         return services.list_niche_pool()

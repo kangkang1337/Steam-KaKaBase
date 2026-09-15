@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -142,6 +143,35 @@ def test_favoriting_preserves_completed_crawler_work(api_client):
             "SELECT task_type, status FROM crawl_tasks WHERE appid=? ORDER BY task_type", (appid,)
         ).fetchall()
     assert [tuple(row) for row in rows] == [(task_type, "done") for task_type in sorted(task_types)]
+
+
+def test_recent_historical_low_deal_pools_are_cache_only(api_client):
+    runtime, client = api_client
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat()
+    current = runtime.now_iso()
+    appid = 4270
+    runtime.quick_track_game(appid, "Fresh Record", "https://cdn.akamai.steamstatic.com/steam/apps/4270/header.jpg")
+    with runtime.database_connection() as conn:
+        conn.execute(
+            "INSERT INTO price_snapshots(appid,region,currency,initial,final,discount_percent,final_formatted,source,fetched_at) VALUES (?, 'CN', 'CNY', 10000, 6000, 40, '¥ 60.00', 'steam', ?)",
+            (appid, old),
+        )
+        conn.execute(
+            "INSERT INTO price_snapshots(appid,region,currency,initial,final,discount_percent,final_formatted,source,fetched_at) VALUES (?, 'CN', 'CNY', 10000, 4000, 60, '¥ 40.00', 'steam', ?)",
+            (appid, current),
+        )
+        conn.execute(
+            "INSERT INTO review_snapshots(appid,review_score,total_reviews,fetched_at) VALUES (?, 95, 1000, ?)",
+            (appid, current),
+        )
+
+    for pool in ("today-low", "new-low", "high-review-low"):
+        response = client.get(f"/api/deal-pools/{pool}")
+        assert response.status_code == 200
+        game = next(game for game in response.json()["games"] if game["appid"] == appid)
+        assert game["cn_price_historical_low"] is True
+        assert game["cn_price_new_historical_low"] is True
+    assert client.get("/api/deal-pools/not-a-pool").status_code == 404
 
 
 def test_failed_login_has_a_uniform_message_and_minimum_delay(api_client, monkeypatch):

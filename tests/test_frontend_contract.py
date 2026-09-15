@@ -135,6 +135,20 @@ def test_wishlist_filters_and_recent_site_low_are_local_cache_only():
     assert "recentSiteLow" in source
 
 
+def test_deal_pools_and_new_low_filters_use_cached_api_data():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert "todayLowPool" in source
+    assert "newLowPool" in source
+    assert "highReviewLowPool" in source
+    assert "async loadDealPool()" in source
+    assert "/api/deal-pools/" in source
+    assert "hotFilterNewLow: false" in source
+    assert "favoriteFilterNewLow: false" in source
+    assert "game.cn_price_new_historical_low" in source
+    assert "'price-new-low'" in source
+
+
 def test_wishlist_statuses_and_sorting_stay_scoped_to_the_current_account():
     source = FRONTEND.read_text(encoding="utf-8")
 

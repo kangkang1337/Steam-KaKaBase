@@ -24,7 +24,9 @@ def price_row_cny(row):
 def compare_historical_low(current_cny, low_cny, tolerance_cny):
     if current_cny is None or low_cny is None:
         return False
-    return abs(float(current_cny) - float(low_cny)) <= float(tolerance_cny)
+    # A newly observed lower price is also a historical low.  The tolerance
+    # only applies above the stored low, to absorb minor currency rounding.
+    return float(current_cny) <= float(low_cny) + float(tolerance_cny)
 
 
 def effective_historical_low(itad_low_cny, observed_low_cny):

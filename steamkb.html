@@ -775,6 +775,13 @@
       background: rgba(199, 165, 60, .12);
     }
 
+    .price-new-low {
+      background: #4a183c;
+      border-color: #dc5b9d;
+      color: #ffe3f2;
+      box-shadow: inset 0 0 0 1px rgba(255, 131, 190, .14);
+    }
+
     .favorite-status-editor {
       display: inline-flex;
       align-items: center;
@@ -821,6 +828,15 @@
       border-color: #1f8f51;
     }
 
+    .stat.price-new-low {
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      text-align: center;
+      background: #4a183c;
+      border-color: #dc5b9d;
+    }
+
     .stat.price-discount {
       display: grid;
       align-content: center;
@@ -840,6 +856,10 @@
       color: #9edfb9;
     }
 
+    .stat.price-new-low .stat-label {
+      color: #ffb6dc;
+    }
+
     .stat.price-discount .stat-label {
       color: #95d6ff;
     }
@@ -856,6 +876,10 @@
       color: #effff5;
     }
 
+    .stat.price-new-low .stat-value {
+      color: #fff0f8;
+    }
+
     .stat.price-discount .stat-value {
       color: #f1f9ff;
     }
@@ -868,6 +892,7 @@
     }
 
     .stat.price-low .stat-note,
+    .stat.price-new-low .stat-note,
     .stat.price-discount .stat-note {
       color: rgba(235, 247, 255, .78);
     }
@@ -1176,6 +1201,9 @@
           <button :class="{active: activePage === 'tracker'}" @click="switchPage('tracker')">{{ t('gameDetail') }}</button>
           <button :class="{active: activePage === 'hot'}" @click="switchPage('hot')">{{ t('hotList') }}</button>
           <button :class="{active: activePage === 'niche'}" @click="switchPage('niche')">{{ t('nichePool') }}</button>
+          <button :class="{active: activePage === 'deal' && dealPool === 'today-low'}" @click="openDealPool('today-low')">{{ t('todayLowPool') }}</button>
+          <button :class="{active: activePage === 'deal' && dealPool === 'new-low'}" @click="openDealPool('new-low')">{{ t('newLowPool') }}</button>
+          <button :class="{active: activePage === 'deal' && dealPool === 'high-review-low'}" @click="openDealPool('high-review-low')">{{ t('highReviewLowPool') }}</button>
           <button v-if="account?.is_admin" :class="{active: activePage === 'monitor'}" @click="switchPage('monitor')">{{ t('adminMonitor') }}</button>
         </div>
       </div>
@@ -1254,7 +1282,7 @@
                   <div class="pick-meta">
                     <span>{{ formatPlayers(homePicks.niche.current_players) }} {{ t('online') }}</span>
                     <span>{{ homePicks.niche.review_score ?? '-' }}% {{ t('positive') }}</span>
-                    <span class="pill" :class="{'price-low': homePicks.niche.cn_price_historical_low, 'price-discount': homePicks.niche.cn_price_discounted}">{{ displayCnPrice(homePicks.niche) }}</span>
+                    <span class="pill" :class="pricePillClass(homePicks.niche)">{{ displayCnPrice(homePicks.niche) }}</span>
                   </div>
                   <button @click="selectGame(homePicks.niche.appid)">{{ t('viewDetails') }}</button>
                 </div>
@@ -1289,10 +1317,32 @@
             </span>
             <span class="hot-review">{{ game.review_score ?? '-' }}% {{ t('positive') }}</span>
             <span class="hot-players">{{ formatPlayers(game.current_players) }} {{ t('online') }}</span>
-            <span class="pill hot-price" :class="{'price-low': game.cn_price_historical_low, 'price-discount': game.cn_price_discounted}">{{ displayCnPrice(game) }}</span>
+            <span class="pill hot-price" :class="pricePillClass(game)">{{ displayCnPrice(game) }}</span>
           </button>
         </div>
         <div v-else class="empty">{{ t('nicheBuilding') }}</div>
+      </section>
+    </main>
+
+    <main v-else-if="activePage === 'deal'" class="shell single">
+      <section class="panel hot-page">
+        <div class="panel-head">
+          <span>{{ dealPoolTitle }}</span>
+          <span class="muted">{{ dealPoolDescription }}</span>
+        </div>
+        <div v-if="dealGames.length" class="hot-list">
+          <button v-for="game in dealGames" :key="game.appid" class="hot-row" @click="selectGame(game.appid)">
+            <img :src="cachedImage(game) || placeholderImage" @error="retryImage" alt="" loading="lazy" decoding="async">
+            <span class="hot-title">
+              <span class="hot-name">{{ displayGameName(game) }}</span>
+              <span class="hot-meta">{{ t('updatedAt') }} {{ localTime(game.cn_price_updated_at, true) }}</span>
+            </span>
+            <span class="hot-review">{{ game.review_score ?? '-' }}% {{ t('positive') }}</span>
+            <span class="hot-players">{{ formatPlayers(game.player_count) }} {{ t('online') }}</span>
+            <span class="pill hot-price" :class="pricePillClass(game)">{{ displayCnPrice(game) }}</span>
+          </button>
+        </div>
+        <div v-else class="empty">{{ t('noDealPoolGames') }}</div>
       </section>
     </main>
 
@@ -1312,6 +1362,10 @@
             <span>{{ t('lowOnly') }}</span>
           </label>
           <label class="toggle">
+            <input type="checkbox" v-model="hotFilterNewLow">
+            <span>{{ t('newLowOnly') }}</span>
+          </label>
+          <label class="toggle">
             <input type="checkbox" v-model="hotSortReview">
             <span>{{ t('sortPositive') }}</span>
           </label>
@@ -1326,9 +1380,9 @@
             </span>
             <span class="hot-review">{{ game.review_score ?? '-' }}% {{ t('positive') }}</span>
             <span class="hot-players">{{ formatPlayers(game.current_players) }} {{ t('online') }}</span>
-            <span class="pill hot-price" :class="{'price-low': game.cn_price_historical_low, 'price-discount': game.cn_price_discounted}">{{ displayCnPrice(game) }}</span>
+            <span class="pill hot-price" :class="pricePillClass(game)">{{ displayCnPrice(game) }}</span>
           </button>
-          <div class="empty-cell">{{ hotPageLimit < 1000 ? t('scrollMore') : t('localLimit') }}</div>
+          <div class="empty-cell">{{ hotPageLimit < 200 ? t('scrollMore') : t('localLimit') }}</div>
         </div>
         <div v-else-if="!hotPageGames.length && hotRunning" class="empty">{{ t('hotBuilding') }}</div>
         <div v-else class="empty">{{ hotPageGames.length ? t('noFilteredHot') : t('noHot') }}</div>
@@ -1386,6 +1440,10 @@
             <input type="checkbox" v-model="favoriteFilterLow">
             <span>{{ t('siteLowOnly') }}</span>
           </label>
+          <label class="toggle">
+            <input type="checkbox" v-model="favoriteFilterNewLow">
+            <span>{{ t('newLowOnly') }}</span>
+          </label>
           <label class="favorite-select">
             <span>{{ t('wishlistStatus') }}</span>
             <select v-model="favoriteStatusFilter" :aria-label="t('wishlistStatus')">
@@ -1416,11 +1474,12 @@
               </span>
               <span class="row-context" v-if="game.cn_price_discounted || game.cn_price_historical_low || game.cn_observed_low_last_at">
                 <span v-if="game.cn_price_discounted">-{{ game.cn_discount_percent }}%</span>
-                <span v-if="game.cn_price_historical_low">{{ t('siteLow') }}</span>
+                <span v-if="game.cn_price_new_historical_low">{{ t('newHistoricalLow') }}</span>
+                <span v-else-if="game.cn_price_historical_low">{{ t('siteLow') }}</span>
                 <span v-if="game.cn_observed_low_last_at">{{ t('recentSiteLow') }} {{ localTime(game.cn_observed_low_last_at, true) }}</span>
               </span>
             </span>
-            <span class="pill" :class="{'price-low': game.cn_price_historical_low, 'price-discount': game.cn_price_discounted}">{{ displayCnPrice(game) }}</span>
+            <span class="pill" :class="pricePillClass(game)">{{ displayCnPrice(game) }}</span>
           </button>
         </div>
         <div v-else class="empty">{{ games.length ? t('noWishlistMatch') : t('noTrackedGames') }}</div>
@@ -1463,7 +1522,7 @@
                 <div class="stat-label">{{ t('playerReviews') }}</div>
                 <div class="stat-value">{{ latestReviewScore }}</div>
               </div>
-              <div class="stat" :class="{'price-low': isHistoricalLow(), 'price-discount': isDiscounted()}">
+              <div class="stat" :class="{'price-new-low': isNewHistoricalLow(), 'price-low': isHistoricalLow() && !isNewHistoricalLow(), 'price-discount': isDiscounted()}">
                 <div class="stat-label">{{ selectedRegionLabel }} {{ t('price') }}</div>
                 <div class="stat-value">{{ currentPrice() }}</div>
                 <div v-if="historicalLowLabel()" class="stat-note">{{ historicalLowLabel() }}</div>
@@ -1586,8 +1645,8 @@
         todayLow: '今日史低', positive: '好评', viewDetails: '查看详情', noCnLow: '暂无国区史低数据',
         dailyGem: '每日小众宝藏游戏', noEligibleGames: '暂无符合条件的游戏', todayMeme: '今日表情包',
         noMeme: '把 gif / webp / png 放进 assets/memes 后会显示', peak: '峰值', updatedAt: '更新于',
-        nicheBuilding: '小众池正在建立，满足条件的游戏会自动出现在这里。', paidOnly: '仅查看付费游戏',
-        lowOnly: '仅查看史低游戏', sortPositive: '按好评率排序', refreshHot: '刷新热门榜', scrollMore: '向下滚动继续加载',
+        nicheBuilding: '小众池正在建立，满足条件的游戏会自动出现在这里。', todayLowPool: '今日史低池', newLowPool: '新史低池', highReviewLowPool: '高好评史低池', paidOnly: '仅查看付费游戏',
+        lowOnly: '仅查看史低游戏', newLowOnly: '仅查看新史低', newHistoricalLow: '新史低', noDealPoolGames: '暂无符合条件的近期价格数据。', sortPositive: '按好评率排序', refreshHot: '刷新热门榜', scrollMore: '向下滚动继续加载',
         localLimit: '已加载到本地上限', hotBuilding: '正在建立热门榜，稍后会自动显示本地缓存。',
         noFilteredHot: '暂无符合条件的热门游戏。', noHot: '暂无本地热门榜，后台会自动建立。', trackedGames: '已跟踪游戏', wishlist: '愿望单', discountedOnly: '仅查看打折', siteLowOnly: '仅查看本站史低', siteLow: '本站史低', recentSiteLow: '最近本站低价：', noWishlistMatch: '暂无符合筛选条件的愿望单游戏。', wishlistStatus: '状态', allStatuses: '全部', statusWish: '想买', statusWatching: '观望', statusOwned: '已拥有', sortBy: '排序', sortAdded: '最近添加', sortDiscount: '折扣最高', sortPrice: '价格最低', sortPlayers: '在线人数',
         noTrackedGames: '暂无数据，搜索游戏后加入跟踪。', noDescription: '暂无简介。', releaseDate: '发行日期：', dataUpdated: '数据更新：',
@@ -1634,8 +1693,8 @@
         todayLow: "Today's historical low", positive: 'positive', viewDetails: 'View details', noCnLow: 'No China-region historical low available',
         dailyGem: 'Daily hidden gem', noEligibleGames: 'No eligible games yet', todayMeme: "Today's meme",
         noMeme: 'Add a gif / webp / png to assets/memes to show it here', peak: 'Peak', updatedAt: 'Updated',
-        nicheBuilding: 'The hidden-gem pool is being built. Eligible games will appear automatically.', paidOnly: 'Paid games only',
-        lowOnly: 'Historical lows only', sortPositive: 'Sort by positive reviews', refreshHot: 'Refresh list', scrollMore: 'Scroll down to load more',
+        nicheBuilding: 'The hidden-gem pool is being built. Eligible games will appear automatically.', todayLowPool: "Today's low pool", newLowPool: 'New low pool', highReviewLowPool: 'High-review low pool', paidOnly: 'Paid games only',
+        lowOnly: 'Historical lows only', newLowOnly: 'New lows only', newHistoricalLow: 'New low', noDealPoolGames: 'No recent qualifying price data yet.', sortPositive: 'Sort by positive reviews', refreshHot: 'Refresh list', scrollMore: 'Scroll down to load more',
         localLimit: 'Local limit reached', hotBuilding: 'Building the popular list; cached results will appear shortly.',
         noFilteredHot: 'No popular games match these filters.', noHot: 'No local popular list yet; it will be built in the background.', trackedGames: 'Tracked games', wishlist: 'Wishlist', discountedOnly: 'Discounted only', siteLowOnly: 'Site lows only', siteLow: 'Site low', recentSiteLow: 'Latest site low:', noWishlistMatch: 'No wishlist games match these filters.', wishlistStatus: 'Status', allStatuses: 'All', statusWish: 'Want', statusWatching: 'Watching', statusOwned: 'Owned', sortBy: 'Sort', sortAdded: 'Recently added', sortDiscount: 'Highest discount', sortPrice: 'Lowest price', sortPlayers: 'Players online',
         noTrackedGames: 'No tracked games. Search for a game to add one.', noDescription: 'No description available.', releaseDate: 'Release date: ', dataUpdated: 'Data updated: ',
@@ -1715,15 +1774,20 @@
           hotGames: [],
           hotPageGames: [],
           nicheGames: [],
+          dealGames: [],
+          dealPool: 'today-low',
+          dealHighReviewMin: 90,
           nichePoolTotal: 0,
           hotFilterPaid: false,
           hotFilterLow: false,
+          hotFilterNewLow: false,
           hotSortReview: false,
           favoriteFilterDiscount: false,
           favoriteFilterLow: false,
+          favoriteFilterNewLow: false,
           favoriteStatusFilter: 'all',
           favoriteSort: 'added',
-          hotPageLimit: 100,
+          hotPageLimit: 200,
           hotLoadingMore: false,
           hotLastAutoRefreshAt: 0,
           hotVersion: '',
@@ -1831,6 +1895,9 @@
           if (this.hotFilterLow) {
             rows = rows.filter(game => game.cn_price_historical_low);
           }
+          if (this.hotFilterNewLow) {
+            rows = rows.filter(game => game.cn_price_new_historical_low);
+          }
           if (this.hotSortReview) {
             rows.sort((a, b) => {
               const reviewDiff = Number(b.review_score ?? -1) - Number(a.review_score ?? -1);
@@ -1847,6 +1914,9 @@
           }
           if (this.favoriteFilterLow) {
             rows = rows.filter(game => game.cn_price_historical_low === true);
+          }
+          if (this.favoriteFilterNewLow) {
+            rows = rows.filter(game => game.cn_price_new_historical_low === true);
           }
           if (this.favoriteStatusFilter !== 'all') {
             rows = rows.filter(game => (game.favorite_status || 'wish') === this.favoriteStatusFilter);
@@ -1869,6 +1939,20 @@
             rows.sort((left, right) => Number(right.player_count || 0) - Number(left.player_count || 0));
           }
           return rows;
+        },
+        dealPoolTitle() {
+          return this.t({
+            'today-low': 'todayLowPool',
+            'new-low': 'newLowPool',
+            'high-review-low': 'highReviewLowPool'
+          }[this.dealPool] || 'todayLowPool');
+        },
+        dealPoolDescription() {
+          if (this.dealPool === 'today-low') return this.locale === 'en-US' ? 'Reached a historical low in the last 24 hours' : '24 小时内达到历史最低价';
+          if (this.dealPool === 'new-low') return this.locale === 'en-US' ? 'A discounted price lower than a prior site or ITAD low' : '本次折扣价格低于此前本站或 ITAD 史低记录';
+          return this.locale === 'en-US'
+            ? `At least ${this.dealHighReviewMin}% positive and at a historical low`
+            : `好评率至少 ${this.dealHighReviewMin}% 且达到历史最低价`;
         },
         latestHotUpdatedAt() {
           const times = this.hotPageGames
@@ -2094,6 +2178,13 @@
           if (!name || name === '未命名游戏' || /^(Steam\s+)?App\s+\d+$/i.test(name)) return this.t('namePending');
           return name;
         },
+        pricePillClass(game) {
+          return {
+            'price-new-low': Boolean(game?.cn_price_new_historical_low),
+            'price-low': Boolean(game?.cn_price_historical_low && !game?.cn_price_new_historical_low),
+            'price-discount': Boolean(game?.cn_price_discounted)
+          };
+        },
         cancelDetailNavigation() {
           // A detail request or its cache-poll may complete after the user has
           // already navigated elsewhere. Invalidate it so it cannot pull the
@@ -2106,7 +2197,7 @@
           this.selectedDetailIncomplete = false;
         },
         switchPage(page, options = {}) {
-          if (!['home', 'hot', 'niche', 'tracker', 'monitor'].includes(page)) page = 'home';
+          if (!['home', 'hot', 'niche', 'deal', 'tracker', 'monitor'].includes(page)) page = 'home';
           if (page === 'monitor' && !this.account?.is_admin) page = 'home';
           if (page !== 'tracker') this.cancelDetailNavigation();
           this.activePage = page;
@@ -2116,11 +2207,14 @@
             this.loadHomePicks();
           }
           if (page === 'hot' && !this.hotPageGames.length) {
-            this.hotPageLimit = 100;
+            this.hotPageLimit = 200;
             this.loadHotPageGames();
           }
           if (page === 'niche') {
             this.loadNichePool();
+          }
+          if (page === 'deal') {
+            this.loadDealPool();
           }
           if (page === 'monitor' && this.account?.is_admin) {
             this.loadMonitoring();
@@ -2135,10 +2229,10 @@
           const value = params.get('game');
           const appid = Number(value);
           if (Number.isSafeInteger(appid) && appid > 0) return { page: 'tracker', appid };
-          return {
-            page: ['home', 'hot', 'niche', 'monitor'].includes(requestedPage) ? requestedPage : 'home',
-            appid: null
-          };
+          const page = ['home', 'hot', 'niche', 'deal', 'monitor'].includes(requestedPage) ? requestedPage : 'home';
+          const pool = ['today-low', 'new-low', 'high-review-low'].includes(params.get('pool'))
+            ? params.get('pool') : 'today-low';
+          return { page, pool, appid: null };
         },
         updateRouteUrl(page, appid, replace = false) {
           const url = new URL(window.location.href);
@@ -2148,6 +2242,7 @@
             params.set('game', String(appid));
           } else if (page && page !== 'home') {
             params.set('page', page);
+            if (page === 'deal') params.set('pool', this.dealPool);
           }
           url.hash = params.toString();
           const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -2162,6 +2257,7 @@
           if (route.appid) {
             this.selectGame(route.appid, { updateUrl: false });
           } else {
+            if (route.page === 'deal') this.dealPool = route.pool;
             this.switchPage(route.page, { updateUrl: false });
           }
         },
@@ -2530,6 +2626,21 @@
             this.message = err.message;
           }
         },
+        async openDealPool(pool) {
+          if (!['today-low', 'new-low', 'high-review-low'].includes(pool)) return;
+          this.dealPool = pool;
+          this.dealGames = [];
+          this.switchPage('deal');
+        },
+        async loadDealPool() {
+          try {
+            const data = await this.api(`/api/deal-pools/${encodeURIComponent(this.dealPool)}?limit=200`);
+            this.dealGames = (data.games || []).map(item => ({ ...item, tiny_image: item.header_image }));
+            this.dealHighReviewMin = Number(data.high_review_min || this.dealHighReviewMin);
+          } catch (err) {
+            this.message = err.message;
+          }
+        },
         async loadHotPageGames(options = {}) {
           const silent = Boolean(options.silent);
           if (!silent) this.busy = true;
@@ -2548,16 +2659,16 @@
           }
         },
         async refreshHotPage() {
-          this.hotPageLimit = 100;
+          this.hotPageLimit = 200;
           await this.loadHotPageGames();
         },
         async onWindowScroll() {
           if (this.activePage !== 'hot' || this.hotLoadingMore || this.busy) return;
-          if (this.hotPageLimit >= 1000) return;
+          if (this.hotPageLimit >= 200) return;
           const remaining = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
           if (remaining > 420) return;
           this.hotLoadingMore = true;
-          this.hotPageLimit = Math.min(1000, this.hotPageLimit + 100);
+          this.hotPageLimit = Math.min(200, this.hotPageLimit + 100);
           try {
             await this.loadHotPageGames({ silent: true });
           } finally {
@@ -2955,6 +3066,10 @@
         isHistoricalLow(region = this.selectedRegion) {
           const row = this.selectedPrices.find(item => item.region === region);
           return Boolean(row?.historical_low);
+        },
+        isNewHistoricalLow(region = this.selectedRegion) {
+          const row = this.selectedPrices.find(item => item.region === region);
+          return Boolean(row?.new_historical_low);
         },
         isDiscounted(region = this.selectedRegion) {
           const row = this.selectedPrices.find(item => item.region === region);

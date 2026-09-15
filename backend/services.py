@@ -25,6 +25,7 @@ from .game_queries import (
     ensure_game_from_catalog,
     get_game_payload,
     list_games as query_list_games,
+    list_deal_pool as query_deal_pool,
     list_hot_games as query_list_hot_games,
     search_games,
 )
@@ -274,6 +275,14 @@ def admin_monitoring():
         "backups": {"local": {"at": counts["local_backup_at"], "path": counts["local_backup_path"]}, "offsite": {"at": counts["offsite_backup_at"], "path": counts["offsite_backup_path"]}, "drill": drill},
         "recent_logs": _recent_log_lines(),
         "health_summary": _health_summary(status, counts, drill),
+    }
+
+
+def list_deal_pool(pool, limit=None):
+    return {
+        "pool": pool,
+        "games": query_deal_pool(pool, limit),
+        "high_review_min": config.DEAL_HIGH_REVIEW_MIN,
     }
 
 

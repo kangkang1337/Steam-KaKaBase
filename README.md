@@ -242,7 +242,7 @@ Copy-Item .env.example .env
 | `STEAMKB_CATALOG_LIMIT` | `0` | 兼容旧配置；非零时仅作为旧版扫描批量回退值，不再限制目录总量 |
 | `STEAMKB_CATALOG_SCAN_BATCH_LIMIT` | `10000` | 每天推进的轻量 AppList 条目上限 |
 | `STEAMKB_CATALOG_RESCAN_DAYS` | `7` | 全量扫描完成后的校验周期 |
-| `STEAMKB_CATALOG_ENRICH_DAILY_LIMIT` | `1500` | 每日目录 enrich 尝试额度 |
+| `STEAMKB_CATALOG_ENRICH_DAILY_LIMIT` | `2000` | 每日目录 enrich 尝试额度；生产环境已连续运行 24 小时验证该额度 |
 | `STEAMKB_CATALOG_ENRICH_BATCH_LIMIT` | `50` | 单轮 enrich 数量 |
 | `STEAMKB_NICHE_POOL_LIMIT` | `500` | 小众候选池上限 |
 | `STEAMKB_NICHE_MAX_REVIEWS` | `50000` | 小众候选游戏允许的最大 Steam 评测数 |

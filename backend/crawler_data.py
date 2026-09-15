@@ -53,6 +53,54 @@ def upsert_hot_games_batch(rows, stamp):
         )
 
 
+def extend_hotlist_with_recent_players(rows, target):
+    """Fill Steam's Top 100 ceiling from fresh local player observations.
+
+    The extension is deliberately marked with its own source: it is useful for
+    a Top 200 browsing list but is never presented as an official Steam rank.
+    """
+    result = [dict(row) for row in rows[:int(target)]]
+    remaining = int(target) - len(result)
+    if remaining <= 0:
+        return result
+    selected_appids = {int(row["appid"]) for row in result}
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).replace(microsecond=0).isoformat()
+    with transaction(rows=True) as conn:
+        candidates = conn.execute(
+            """
+            SELECT g.appid, g.name, g.header_image, s.current_players
+            FROM games g
+            JOIN game_latest_state s ON s.appid=g.appid
+            LEFT JOIN steam_catalog c ON c.appid=g.appid
+            WHERE COALESCE(c.app_type, 'game') = 'game'
+              AND COALESCE(s.current_players, 0) > 0
+              AND s.players_updated_at >= ?
+              AND g.name IS NOT NULL AND TRIM(g.name) != ''
+              AND g.name NOT LIKE 'App %' AND g.name NOT LIKE 'Steam App %'
+            ORDER BY s.current_players DESC, s.players_updated_at DESC, g.appid ASC
+            LIMIT ?
+            """,
+            (cutoff, max(remaining * 3, remaining)),
+        ).fetchall()
+    for candidate in candidates:
+        appid = int(candidate["appid"])
+        if appid in selected_appids:
+            continue
+        result.append({
+            "appid": appid,
+            "rank": len(result) + 1,
+            "name": candidate["name"],
+            "current_players": candidate["current_players"],
+            "peak_players": candidate["current_players"],
+            "header_image": candidate["header_image"] or f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg",
+            "source": "local_player_snapshot",
+        })
+        selected_appids.add(appid)
+        if len(result) >= int(target):
+            break
+    return result
+
+
 def insert_player_batch(rows):
     if not rows:
         return

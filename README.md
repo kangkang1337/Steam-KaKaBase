@@ -236,6 +236,9 @@ Copy-Item .env.example .env
 | `STEAMKB_DEAL_POOL_DISPLAY_LIMIT` | `200` | 每个近期史低池最多展示的游戏数 |
 | `STEAMKB_DEAL_POOL_CANDIDATE_LIMIT` | `800` | 史低池在本地 SQLite 中筛选的候选上限 |
 | `STEAMKB_DEAL_HIGH_REVIEW_MIN` | `90` | 高好评史低池要求的最低好评率百分比 |
+| `STEAMKB_DEAL_POOL_MIN_REVIEWS` | `500` | 今日史低、新史低池的最低评测数；与在线人数门槛满足其一即可 |
+| `STEAMKB_DEAL_POOL_MIN_PLAYERS` | `500` | 今日史低、新史低池的最低当前在线人数；与评测数门槛满足其一即可 |
+| `STEAMKB_DEAL_HIGH_REVIEW_MIN_REVIEWS` | `1000` | 高好评史低池的最低评测数；同时仍要求好评率门槛 |
 | `STEAMKB_CATALOG_LIMIT` | `0` | 兼容旧配置；非零时仅作为旧版扫描批量回退值，不再限制目录总量 |
 | `STEAMKB_CATALOG_SCAN_BATCH_LIMIT` | `10000` | 每天推进的轻量 AppList 条目上限 |
 | `STEAMKB_CATALOG_RESCAN_DAYS` | `7` | 全量扫描完成后的校验周期 |

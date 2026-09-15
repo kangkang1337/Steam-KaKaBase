@@ -448,7 +448,7 @@ def query_tracked_games():
             FROM games g
             LEFT JOIN steam_catalog c ON c.appid = g.appid
             WHERE tracked = 1
-            ORDER BY player_count DESC, name ASC
+            ORDER BY player_count DESC, g.name ASC
             """
         ).fetchall()
 
@@ -510,7 +510,8 @@ def query_hot_games(limit, unknown_name):
                        END AS name,
                        g.name AS name_zh,
                        COALESCE(NULLIF(TRIM(c.name), ''), NULLIF(TRIM(san.name), ''), NULLIF(TRIM(h.name), '')) AS name_en,
-                       COALESCE(NULLIF(TRIM(g.header_image), ''), NULLIF(TRIM(h.header_image), '')) AS header_image,
+                       COALESCE(NULLIF(TRIM(g.header_image), ''), NULLIF(TRIM(h.header_image), ''),
+                                'https://cdn.akamai.steamstatic.com/steam/apps/' || h.appid || '/header.jpg') AS header_image,
                        COALESCE(gls.current_players, h.current_players, 0) AS current_players,
                        h.peak_players, h.source, h.fetched_at, g.tracked, g.is_free,
                        gls.review_score, gls.cn_price, gls.cn_price_final,
@@ -528,8 +529,8 @@ def query_hot_games(limit, unknown_name):
                 LEFT JOIN game_latest_state gls ON gls.appid = h.appid
             )
             SELECT * FROM hot
-            WHERE name != ? AND header_image IS NOT NULL
-            ORDER BY current_players DESC, COALESCE(original_rank, 999999)
+            WHERE name != ?
+            ORDER BY COALESCE(original_rank, 999999), current_players DESC
             LIMIT ?
             """,
             (unknown_name, unknown_name, unknown_name, unknown_name, int(limit)),
@@ -539,7 +540,8 @@ def query_hot_games(limit, unknown_name):
         return conn.execute(
             """
             SELECT g.appid, NULL AS original_rank, g.name, g.name AS name_zh,
-                   c.name AS name_en, g.header_image,
+                   c.name AS name_en, COALESCE(NULLIF(TRIM(g.header_image), ''),
+                     'https://cdn.akamai.steamstatic.com/steam/apps/' || g.appid || '/header.jpg') AS header_image,
                    COALESCE(gls.current_players, 0) AS current_players,
                    NULL AS peak_players, 'local_snapshots' AS source,
                    g.updated_at AS fetched_at, g.tracked, g.is_free,
@@ -706,7 +708,7 @@ def query_popular_historical_low_rows(limit, min_reviews, min_players):
         ).fetchall()
 
 
-def query_deal_pool_rows(pool, limit, candidate_limit, min_review_score):
+def query_deal_pool_rows(pool, limit, candidate_limit, min_review_score, min_reviews, min_players, high_review_min_reviews):
     """Return recent CN price candidates for public, cache-only deal pools."""
     if pool not in {"today-low", "new-low", "high-review-low"}:
         raise ValueError("unsupported deal pool")
@@ -714,7 +716,6 @@ def query_deal_pool_rows(pool, limit, candidate_limit, min_review_score):
     where = [
         "COALESCE(c.app_type, 'game') = 'game'",
         "COALESCE(g.is_free, 0) = 0",
-        "g.header_image IS NOT NULL",
         "s.cn_price_final IS NOT NULL",
         "s.cn_price_currency = 'CNY'",
         "s.price_updated_at >= ?",
@@ -729,18 +730,30 @@ def query_deal_pool_rows(pool, limit, candidate_limit, min_review_score):
             "OR (h.amount_cny IS NOT NULL AND s.cn_price_final < (h.amount_cny * 100)))",
         ))
     elif pool == "high-review-low":
-        where.append("COALESCE(s.review_score, 0) >= ?")
-        params.append(int(min_review_score))
+        where.extend((
+            "COALESCE(s.review_score, 0) >= ?",
+            "COALESCE(s.total_reviews, 0) >= ?",
+        ))
+        params.extend((int(min_review_score), int(high_review_min_reviews)))
+    else:
+        where.append("(COALESCE(s.total_reviews, 0) >= ? OR COALESCE(s.current_players, 0) >= ?)")
+        params.extend((int(min_reviews), int(min_players)))
     order = (
-        "COALESCE(s.review_score, 0) DESC, COALESCE(s.cn_discount_percent, 0) DESC, s.price_updated_at DESC"
+        "COALESCE(s.total_reviews, 0) DESC, COALESCE(s.current_players, 0) DESC, "
+        "COALESCE(s.review_score, 0) DESC, s.price_updated_at DESC"
         if pool == "high-review-low" else
-        "s.price_updated_at DESC, COALESCE(s.cn_discount_percent, 0) DESC, COALESCE(s.review_score, 0) DESC"
+        "COALESCE(s.current_players, 0) DESC, COALESCE(s.total_reviews, 0) DESC, "
+        "COALESCE(s.review_score, 0) DESC, COALESCE(s.cn_discount_percent, 0) DESC, s.price_updated_at DESC"
     )
     with transaction(rows=True) as conn:
         return conn.execute(
             f"""
-            SELECT g.*, c.name AS name_en,
-                   s.current_players AS player_count, s.review_score,
+            SELECT g.appid, g.name, g.short_description, g.developer, g.publisher,
+                   g.release_date, g.is_free, g.screenshots_json, g.tracked, g.updated_at,
+                   c.name AS name_en,
+                   COALESCE(NULLIF(TRIM(g.header_image), ''),
+                     'https://cdn.akamai.steamstatic.com/steam/apps/' || g.appid || '/header.jpg') AS header_image,
+                   s.current_players AS player_count, s.review_score, s.total_reviews,
                    s.cn_price, s.cn_price_final, s.cn_price_currency,
                    COALESCE(s.cn_discount_percent, 0) AS cn_discount_percent,
                    s.price_updated_at AS cn_price_updated_at,

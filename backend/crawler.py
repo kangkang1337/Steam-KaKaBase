@@ -42,11 +42,12 @@ def run_hotlist_task(force=False):
     if not rows:
         runtime.log_event("hotlist refresh skipped: no rows returned")
         return False
+    rows = crawler_data.extend_hotlist_with_recent_players(rows, runtime.HOTLIST_TARGET)
     stamp = runtime.now_iso()
-    for batch in runtime.chunks(rows[:runtime.HOTLIST_TARGET], runtime.HOTLIST_BATCH_SIZE):
+    for batch in runtime.chunks(rows, runtime.HOTLIST_BATCH_SIZE):
         crawler_data.upsert_hot_games_batch(batch, stamp)
     with runtime.database_connection() as conn:
-        appids = [int(row["appid"]) for row in rows[:runtime.HOTLIST_TARGET]]
+        appids = [int(row["appid"]) for row in rows]
         if appids:
             conn.execute(
                 f"DELETE FROM hot_games WHERE appid NOT IN ({','.join('?' for _ in appids)})",
@@ -65,7 +66,7 @@ def run_hotlist_task(force=False):
     )
     if queued:
         runtime.log_event(f"hot preview metadata queued rows={queued}")
-    runtime.log_event(f"hotlist refreshed rows={len(rows[:runtime.HOTLIST_TARGET])}")
+    runtime.log_event(f"hotlist refreshed rows={len(rows)}")
     return True
 
 

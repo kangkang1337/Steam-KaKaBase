@@ -1337,7 +1337,7 @@
               <span class="hot-name">{{ displayGameName(game) }}</span>
               <span class="hot-meta">{{ t('updatedAt') }} {{ localTime(game.cn_price_updated_at, true) }}</span>
             </span>
-            <span class="hot-review">{{ game.review_score ?? '-' }}% {{ t('positive') }}</span>
+            <span class="hot-review">{{ game.review_score ?? '-' }}% {{ t('positive') }} · {{ formatReviews(game.total_reviews) }} {{ t('reviews') }}</span>
             <span class="hot-players">{{ formatPlayers(game.player_count) }} {{ t('online') }}</span>
             <span class="pill hot-price" :class="pricePillClass(game)">{{ displayCnPrice(game) }}</span>
           </button>
@@ -1376,7 +1376,7 @@
             <img :src="cachedImage(game) || placeholderImage" @error="retryImage" alt="" loading="lazy" decoding="async">
             <span class="hot-title">
               <span class="hot-name"><span class="hot-rank">#{{ game.rank }}</span>{{ displayGameName(game) }}</span>
-              <span class="hot-meta">{{ t('updatedAt') }} {{ localTime(game.fetched_at, true) }}</span>
+              <span class="hot-meta">{{ t('updatedAt') }} {{ localTime(game.fetched_at, true) }}<template v-if="game.source === 'local_player_snapshot'"> · {{ t('localObserved') }}</template></span>
             </span>
             <span class="hot-review">{{ game.review_score ?? '-' }}% {{ t('positive') }}</span>
             <span class="hot-players">{{ formatPlayers(game.current_players) }} {{ t('online') }}</span>
@@ -1645,7 +1645,7 @@
         todayLow: '今日史低', positive: '好评', viewDetails: '查看详情', noCnLow: '暂无国区史低数据',
         dailyGem: '每日小众宝藏游戏', noEligibleGames: '暂无符合条件的游戏', todayMeme: '今日表情包',
         noMeme: '把 gif / webp / png 放进 assets/memes 后会显示', peak: '峰值', updatedAt: '更新于',
-        nicheBuilding: '小众池正在建立，满足条件的游戏会自动出现在这里。', todayLowPool: '今日史低池', newLowPool: '新史低池', highReviewLowPool: '高好评史低池', paidOnly: '仅查看付费游戏',
+        nicheBuilding: '小众池正在建立，满足条件的游戏会自动出现在这里。', todayLowPool: '今日史低池', newLowPool: '新史低池', highReviewLowPool: '高好评史低池', localObserved: '本站观测', paidOnly: '仅查看付费游戏',
         lowOnly: '仅查看史低游戏', newLowOnly: '仅查看新史低', newHistoricalLow: '新史低', noDealPoolGames: '暂无符合条件的近期价格数据。', sortPositive: '按好评率排序', refreshHot: '刷新热门榜', scrollMore: '向下滚动继续加载',
         localLimit: '已加载到本地上限', hotBuilding: '正在建立热门榜，稍后会自动显示本地缓存。',
         noFilteredHot: '暂无符合条件的热门游戏。', noHot: '暂无本地热门榜，后台会自动建立。', trackedGames: '已跟踪游戏', wishlist: '愿望单', discountedOnly: '仅查看打折', siteLowOnly: '仅查看本站史低', siteLow: '本站史低', recentSiteLow: '最近本站低价：', noWishlistMatch: '暂无符合筛选条件的愿望单游戏。', wishlistStatus: '状态', allStatuses: '全部', statusWish: '想买', statusWatching: '观望', statusOwned: '已拥有', sortBy: '排序', sortAdded: '最近添加', sortDiscount: '折扣最高', sortPrice: '价格最低', sortPlayers: '在线人数',
@@ -1693,7 +1693,7 @@
         todayLow: "Today's historical low", positive: 'positive', viewDetails: 'View details', noCnLow: 'No China-region historical low available',
         dailyGem: 'Daily hidden gem', noEligibleGames: 'No eligible games yet', todayMeme: "Today's meme",
         noMeme: 'Add a gif / webp / png to assets/memes to show it here', peak: 'Peak', updatedAt: 'Updated',
-        nicheBuilding: 'The hidden-gem pool is being built. Eligible games will appear automatically.', todayLowPool: "Today's low pool", newLowPool: 'New low pool', highReviewLowPool: 'High-review low pool', paidOnly: 'Paid games only',
+        nicheBuilding: 'The hidden-gem pool is being built. Eligible games will appear automatically.', todayLowPool: "Today's low pool", newLowPool: 'New low pool', highReviewLowPool: 'High-review low pool', localObserved: 'Locally observed', paidOnly: 'Paid games only',
         lowOnly: 'Historical lows only', newLowOnly: 'New lows only', newHistoricalLow: 'New low', noDealPoolGames: 'No recent qualifying price data yet.', sortPositive: 'Sort by positive reviews', refreshHot: 'Refresh list', scrollMore: 'Scroll down to load more',
         localLimit: 'Local limit reached', hotBuilding: 'Building the popular list; cached results will appear shortly.',
         noFilteredHot: 'No popular games match these filters.', noHot: 'No local popular list yet; it will be built in the background.', trackedGames: 'Tracked games', wishlist: 'Wishlist', discountedOnly: 'Discounted only', siteLowOnly: 'Site lows only', siteLow: 'Site low', recentSiteLow: 'Latest site low:', noWishlistMatch: 'No wishlist games match these filters.', wishlistStatus: 'Status', allStatuses: 'All', statusWish: 'Want', statusWatching: 'Watching', statusOwned: 'Owned', sortBy: 'Sort', sortAdded: 'Recently added', sortDiscount: 'Highest discount', sortPrice: 'Lowest price', sortPlayers: 'Players online',
@@ -1948,11 +1948,11 @@
           }[this.dealPool] || 'todayLowPool');
         },
         dealPoolDescription() {
-          if (this.dealPool === 'today-low') return this.locale === 'en-US' ? 'Reached a historical low in the last 24 hours' : '24 小时内达到历史最低价';
-          if (this.dealPool === 'new-low') return this.locale === 'en-US' ? 'A discounted price lower than a prior site or ITAD low' : '本次折扣价格低于此前本站或 ITAD 史低记录';
+          if (this.dealPool === 'today-low') return this.locale === 'en-US' ? 'Historical low in 24h · at least 500 reviews or 500 players' : '24 小时内达到史低 · 至少 500 条评测或 500 人在线';
+          if (this.dealPool === 'new-low') return this.locale === 'en-US' ? 'New site or ITAD low · at least 500 reviews or 500 players' : '低于本站或 ITAD 旧史低 · 至少 500 条评测或 500 人在线';
           return this.locale === 'en-US'
-            ? `At least ${this.dealHighReviewMin}% positive and at a historical low`
-            : `好评率至少 ${this.dealHighReviewMin}% 且达到历史最低价`;
+            ? `At least ${this.dealHighReviewMin}% positive, 1,000 reviews and at a historical low`
+            : `好评率至少 ${this.dealHighReviewMin}%、1,000 条评测且达到历史最低价`;
         },
         latestHotUpdatedAt() {
           const times = this.hotPageGames
@@ -3054,6 +3054,10 @@
           const minutes = Math.floor(total / 60);
           const remainder = total % 60;
           return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+        },
+        formatReviews(value) {
+          const reviews = Number(value || 0);
+          return reviews > 0 ? reviews.toLocaleString(this.locale) : '-';
         },
         dailyNicheBlurb(game) {
           const score = Number(game?.review_score || 0);

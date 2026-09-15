@@ -174,6 +174,48 @@ def test_recent_historical_low_deal_pools_are_cache_only(api_client):
     assert client.get("/api/deal-pools/not-a-pool").status_code == 404
 
 
+def test_deal_pools_require_meaningful_reviews_or_player_activity(api_client):
+    runtime, client = api_client
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0).isoformat()
+    current = runtime.now_iso()
+    low_review, active, established = 4281, 4282, 4283
+    for appid, name in ((low_review, "Tiny Perfect"), (active, "Active New"), (established, "Established Low")):
+        runtime.quick_track_game(appid, name, f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg")
+        with runtime.database_connection() as conn:
+            conn.execute(
+                "INSERT INTO price_snapshots(appid,region,currency,initial,final,discount_percent,final_formatted,source,fetched_at) VALUES (?, 'CN', 'CNY', 10000, 6000, 40, '¥ 60.00', 'steam', ?)",
+                (appid, old),
+            )
+            conn.execute(
+                "INSERT INTO price_snapshots(appid,region,currency,initial,final,discount_percent,final_formatted,source,fetched_at) VALUES (?, 'CN', 'CNY', 10000, 4000, 60, '¥ 40.00', 'steam', ?)",
+                (appid, current),
+            )
+    with runtime.database_connection() as conn:
+        conn.executemany(
+            """INSERT INTO game_latest_state(appid,current_players,players_updated_at,cn_price,cn_price_final,cn_price_currency,cn_discount_percent,price_updated_at,review_score,total_reviews,updated_at)
+            VALUES (?, ?, ?, '¥ 40.00', 4000, 'CNY', 60, ?, 100, ?, ?)
+            ON CONFLICT(appid) DO UPDATE SET current_players=excluded.current_players,players_updated_at=excluded.players_updated_at,cn_price=excluded.cn_price,cn_price_final=excluded.cn_price_final,cn_price_currency=excluded.cn_price_currency,cn_discount_percent=excluded.cn_discount_percent,price_updated_at=excluded.price_updated_at,review_score=excluded.review_score,total_reviews=excluded.total_reviews,updated_at=excluded.updated_at""",
+            [
+                (low_review, 1, current, current, 2, current),
+                (active, 600, current, current, 10, current),
+                (established, 20, current, current, 1000, current),
+            ],
+        )
+
+    today = client.get("/api/deal-pools/today-low").json()["games"]
+    today_ids = [game["appid"] for game in today]
+    assert active in today_ids and established in today_ids
+    assert low_review not in today_ids
+    assert today_ids.index(active) < today_ids.index(established)
+
+    high_review = client.get("/api/deal-pools/high-review-low").json()["games"]
+    high_review_ids = [game["appid"] for game in high_review]
+    assert established in high_review_ids
+    assert active not in high_review_ids and low_review not in high_review_ids
+    established_game = next(game for game in high_review if game["appid"] == established)
+    assert established_game["total_reviews"] == 1000
+
+
 def test_failed_login_has_a_uniform_message_and_minimum_delay(api_client, monkeypatch):
     _, client = api_client
     pauses = []
@@ -348,13 +390,14 @@ def test_hot_games_endpoint_does_not_require_network(api_client):
             INSERT INTO hot_games(appid, rank, name, current_players, header_image, source, fetched_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (730, 1, "Counter-Strike 2", 100, "https://example.test/header.jpg", "test", stamp),
+            (730, 1, "Counter-Strike 2", 100, None, "test", stamp),
         )
 
     response = client.get("/api/hot-games?limit=100")
     assert response.status_code == 200
     assert response.json()["games"][0]["appid"] == 730
     assert response.json()["games"][0]["current_players"] == 100
+    assert response.json()["games"][0]["header_image"].endswith("/730/header.jpg")
 
 
 def test_detail_poll_does_not_revive_completed_missing_tasks(api_client, insert_game, monkeypatch):

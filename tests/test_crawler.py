@@ -37,6 +37,28 @@ def test_coverage_tiers_prioritize_hot_favorites_and_recent_interest(
     assert priorities[cold] == 10
 
 
+def test_hotlist_extension_uses_only_fresh_distinct_local_observations(isolated_runtime, insert_game):
+    runtime = isolated_runtime
+    now = runtime.now_iso()
+    stale = (datetime.now(timezone.utc) - timedelta(hours=25)).replace(microsecond=0).isoformat()
+    insert_game(5201, "Fresh local")
+    insert_game(5202, "Official duplicate")
+    insert_game(5203, "Stale local")
+    with runtime.database_connection() as conn:
+        conn.executemany(
+            "INSERT INTO game_latest_state(appid,current_players,players_updated_at,updated_at) VALUES (?, ?, ?, ?)",
+            [(5201, 500, now, now), (5202, 400, now, now), (5203, 900, stale, now)],
+        )
+    rows = crawler_data.extend_hotlist_with_recent_players(
+        [{"appid": 5202, "rank": 1, "name": "Official duplicate", "current_players": 400}], 3
+    )
+
+    assert [row["appid"] for row in rows] == [5202, 5201]
+    assert rows[-1]["rank"] == 2
+    assert rows[-1]["source"] == "local_player_snapshot"
+    assert rows[-1]["header_image"].endswith("/5201/header.jpg")
+
+
 def test_coverage_budget_is_daily_and_bounded(isolated_runtime):
     end_of_day = datetime(2030, 1, 1, 23, 59, tzinfo=config.DAILY_REFRESH_TZINFO)
     assert crawler_data.remaining_coverage_budget("players", 3, now=end_of_day) == 3

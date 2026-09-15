@@ -80,6 +80,7 @@ def clean_game(row, summary=False):
             "appid": item.get("appid"), "name": display_name, "name_zh": display_name,
             "name_en": clean_hot_name(item.get("name_en")), "header_image": item.get("header_image"),
             "player_count": item.get("player_count"), "review_score": item.get("review_score"),
+            "total_reviews": item.get("total_reviews"),
             "cn_price": item.get("cn_price"),
             "cn_price_display": item.get("cn_price") or ("免费" if item.get("is_free") else "国区暂无售价"),
             "cn_price_final": item.get("cn_price_final"),
@@ -241,7 +242,9 @@ def list_deal_pool(pool, limit=None):
     requested = config.DEAL_POOL_DISPLAY_LIMIT if limit is None else int(limit)
     requested = min(max(1, requested), config.DEAL_POOL_DISPLAY_LIMIT)
     rows = query_deal_pool_rows(
-        pool, requested, config.DEAL_POOL_CANDIDATE_LIMIT, config.DEAL_HIGH_REVIEW_MIN
+        pool, requested, config.DEAL_POOL_CANDIDATE_LIMIT, config.DEAL_HIGH_REVIEW_MIN,
+        config.DEAL_POOL_MIN_REVIEWS, config.DEAL_POOL_MIN_PLAYERS,
+        config.DEAL_HIGH_REVIEW_MIN_REVIEWS,
     )
     games = [clean_game(row, summary=True) for row in rows]
     return [game for game in games if game["cn_price_historical_low"]][:requested]

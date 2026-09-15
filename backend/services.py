@@ -7,6 +7,7 @@ import re
 import shutil
 import socket
 import threading
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 import urllib.parse
@@ -185,6 +186,56 @@ def list_local_memes():
         if path.is_file() and path.suffix.lower() in _MEME_EXTENSIONS
     )
     return [f"/assets/memes/{path.name}" for path in files]
+
+
+def list_local_meme_files():
+    meme_dir = config.ROOT / "assets" / "memes"
+    if not meme_dir.is_dir():
+        return []
+    return [
+        {"name": path.name, "url": f"/assets/memes/{path.name}", "size": path.stat().st_size,
+         "modified_at": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()}
+        for path in sorted(meme_dir.iterdir(), key=lambda item: item.name.casefold())
+        if path.is_file() and path.suffix.lower() in _MEME_EXTENSIONS
+    ]
+
+
+def _uploaded_meme_suffix(payload):
+    if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if payload.startswith((b"GIF87a", b"GIF89a")):
+        return ".gif"
+    if payload.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+
+def save_uploaded_meme(payload):
+    """Store one owner-uploaded image using a generated name and fixed limits."""
+    if not payload or len(payload) > config.MEME_UPLOAD_MAX_BYTES:
+        raise ValueError("表情包文件为空或超过大小限制")
+    suffix = _uploaded_meme_suffix(payload)
+    if suffix is None:
+        raise ValueError("仅支持 JPEG、PNG、GIF 或 WebP 图片")
+    meme_dir = config.ROOT / "assets" / "memes"
+    meme_dir.mkdir(parents=True, exist_ok=True)
+    existing = list_local_meme_files()
+    if len(existing) >= config.MEME_MAX_FILES:
+        raise ValueError("表情包数量已达到上限")
+    if sum(item["size"] for item in existing) + len(payload) > config.MEME_MAX_TOTAL_BYTES:
+        raise ValueError("表情包目录总容量已达到上限")
+    name = f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{secrets.token_hex(6)}{suffix}"
+    destination = meme_dir / name
+    temporary = meme_dir / f".{name}.upload"
+    try:
+        temporary.write_bytes(payload)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {"name": name, "url": f"/assets/memes/{name}", "size": len(payload),
+            "modified_at": datetime.now(timezone.utc).isoformat()}
 
 
 def ensure_daily_home_snapshot(historical_lows, memes):

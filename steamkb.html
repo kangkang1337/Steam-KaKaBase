@@ -660,6 +660,7 @@
       text-overflow: ellipsis;
       margin-bottom: 5px;
     }
+    .meme-download { justify-self: end; margin-top: 8px; }
 
     .game-copy {
       min-width: 0;
@@ -917,6 +918,14 @@
     .monitor-admins form { display: flex; gap: 8px; margin-top: 10px; }
     .monitor-admins input { min-width: 0; flex: 1; }
     .monitor-logs { grid-column: 1 / -1; }
+    .monitor-memes { grid-column: 1 / -1; }
+    .meme-manager { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .75fr); gap: 16px; }
+    .meme-file-list { max-height: 260px; overflow: auto; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+    .meme-file { display: flex; align-items: center; gap: 10px; padding: 8px; border-bottom: 1px solid var(--line-soft); }
+    .meme-file img { width: 72px; height: 48px; object-fit: contain; background: #0b1116; border-radius: 4px; }
+    .meme-file a { color: var(--text); overflow-wrap: anywhere; }
+    .meme-upload { display: grid; align-content: start; gap: 10px; }
+    @media (max-width: 900px) { .meme-manager { grid-template-columns: 1fr; } }
     .monitor-log-list { margin: 0; padding: 0; list-style: none; max-height: 360px; overflow: auto; background: #0b1116; border: 1px solid var(--line-soft); }
     .monitor-log-list li { padding: 7px 9px; border-bottom: 1px solid var(--line-soft); color: var(--muted); font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
     .monitor-health h2 { display: flex; align-items: center; gap: 8px; }
@@ -1294,6 +1303,7 @@
               <div class="pick-label">{{ t('todayMeme') }}</div>
               <div class="meme-frame" v-if="homePicks.meme && homePicks.meme.url">
                 <img :src="homePicks.meme.url" alt="" loading="lazy" decoding="async">
+                <a class="meme-download" :href="homePicks.meme.url" download>{{ t('downloadOriginal') }}</a>
               </div>
               <div v-else class="pick-empty">{{ t('noMeme') }}</div>
             </article>
@@ -1421,6 +1431,7 @@
         </article>
         <article class="panel monitor-card monitor-health"><h2><span class="health-state" :class="monitoring.health_summary.ok ? 'ok' : 'problem'"></span>{{ t('healthSummary') }}</h2><div v-for="item in monitoring.health_summary.items" :key="item.label" class="monitor-row health-item" :class="item.ok ? 'ok' : 'problem'"><span>{{ item.label }} · {{ item.detail }}</span><strong>{{ item.ok ? t('healthy') : t('needsAttention') }}</strong></div></article>
         <article class="panel monitor-card monitor-logs"><h2>{{ t('recentLogs') }}</h2><ul class="monitor-log-list"><li v-for="(line, index) in monitoring.recent_logs" :key="index">{{ line }}</li><li v-if="!monitoring.recent_logs.length">-</li></ul></article>
+        <article v-if="account?.is_owner" class="panel monitor-card monitor-memes"><h2>{{ t('memeManager') }}</h2><div class="meme-manager"><div><p class="muted">{{ t('memeManagerHint') }}</p><div class="meme-file-list"><div v-for="meme in adminMemes" :key="meme.name" class="meme-file"><img :src="meme.url" alt="" loading="lazy"><a :href="meme.url" download>{{ meme.name }}</a><span class="muted">{{ formatBytes(meme.size) }}</span></div><div v-if="!adminMemes.length" class="empty">-</div></div></div><form class="meme-upload" @submit.prevent="uploadMeme"><p class="muted">{{ t('memeUploadHint') }}</p><input ref="memeUploadInput" type="file" accept="image/jpeg,image/png,image/gif,image/webp" :disabled="memeUploadBusy" required><button :disabled="memeUploadBusy">{{ memeUploadBusy ? '…' : t('uploadMeme') }}</button></form></div></article>
       </section>
       <section v-else class="panel empty">{{ t('loadingMonitor') }}</section>
     </main>
@@ -1443,6 +1454,10 @@
           <label class="toggle">
             <input type="checkbox" v-model="favoriteFilterNewLow">
             <span>{{ t('newLowOnly') }}</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" v-model="favoriteFilterPriced">
+            <span>{{ t('pricedOnly') }}</span>
           </label>
           <label class="favorite-select">
             <span>{{ t('wishlistStatus') }}</span>
@@ -1644,9 +1659,9 @@
         welcome1: '欢迎来到 SteamKaKaBase！', welcome2: '希望你能在这里找到想要的游戏！', welcome3: '今天也别忘了享受游戏！',
         todayLow: '今日史低', positive: '好评', viewDetails: '查看详情', noCnLow: '暂无国区史低数据',
         dailyGem: '每日小众宝藏游戏', noEligibleGames: '暂无符合条件的游戏', todayMeme: '今日表情包',
-        noMeme: '把 gif / webp / png 放进 assets/memes 后会显示', peak: '峰值', updatedAt: '更新于',
+        noMeme: '暂无今日表情包', downloadOriginal: '下载原图', memeManager: '每日表情包管理', memeManagerHint: '已有表情包（仅服主可查看和上传）', memeUploadHint: '支持 JPEG、PNG、GIF、WebP；单个最多 10 MB。', uploadMeme: '上传表情包', peak: '峰值', updatedAt: '更新于',
         nicheBuilding: '小众池正在建立，满足条件的游戏会自动出现在这里。', todayLowPool: '今日史低池', newLowPool: '新史低池', highReviewLowPool: '高好评史低池', localObserved: '本站观测', paidOnly: '仅查看付费游戏',
-        lowOnly: '仅查看史低游戏', newLowOnly: '仅查看新史低', newHistoricalLow: '新史低', noDealPoolGames: '暂无符合条件的近期价格数据。', sortPositive: '按好评率排序', refreshHot: '刷新热门榜', scrollMore: '向下滚动继续加载',
+        lowOnly: '仅查看史低游戏', newLowOnly: '仅查看新史低', pricedOnly: '仅查看有价格', newHistoricalLow: '新史低', noDealPoolGames: '暂无符合条件的近期价格数据。', sortPositive: '按好评率排序', refreshHot: '刷新热门榜', scrollMore: '向下滚动继续加载',
         localLimit: '已加载到本地上限', hotBuilding: '正在建立热门榜，稍后会自动显示本地缓存。',
         noFilteredHot: '暂无符合条件的热门游戏。', noHot: '暂无本地热门榜，后台会自动建立。', trackedGames: '已跟踪游戏', wishlist: '愿望单', discountedOnly: '仅查看打折', siteLowOnly: '仅查看本站史低', siteLow: '本站史低', recentSiteLow: '最近本站低价：', noWishlistMatch: '暂无符合筛选条件的愿望单游戏。', wishlistStatus: '状态', allStatuses: '全部', statusWish: '想买', statusWatching: '观望', statusOwned: '已拥有', sortBy: '排序', sortAdded: '最近添加', sortDiscount: '折扣最高', sortPrice: '价格最低', sortPlayers: '在线人数',
         noTrackedGames: '暂无数据，搜索游戏后加入跟踪。', noDescription: '暂无简介。', releaseDate: '发行日期：', dataUpdated: '数据更新：',
@@ -1692,9 +1707,9 @@
         welcome1: 'Welcome to SteamKaKaBase!', welcome2: 'Hope you can find what you want here!', welcome3: "Don't forget to have fun today!",
         todayLow: "Today's historical low", positive: 'positive', viewDetails: 'View details', noCnLow: 'No China-region historical low available',
         dailyGem: 'Daily hidden gem', noEligibleGames: 'No eligible games yet', todayMeme: "Today's meme",
-        noMeme: 'Add a gif / webp / png to assets/memes to show it here', peak: 'Peak', updatedAt: 'Updated',
+        noMeme: 'No daily meme yet', downloadOriginal: 'Download original', memeManager: 'Daily meme manager', memeManagerHint: 'Existing memes (owner only)', memeUploadHint: 'JPEG, PNG, GIF, or WebP; up to 10 MB each.', uploadMeme: 'Upload meme', peak: 'Peak', updatedAt: 'Updated',
         nicheBuilding: 'The hidden-gem pool is being built. Eligible games will appear automatically.', todayLowPool: "Today's low pool", newLowPool: 'New low pool', highReviewLowPool: 'High-review low pool', localObserved: 'Locally observed', paidOnly: 'Paid games only',
-        lowOnly: 'Historical lows only', newLowOnly: 'New lows only', newHistoricalLow: 'New low', noDealPoolGames: 'No recent qualifying price data yet.', sortPositive: 'Sort by positive reviews', refreshHot: 'Refresh list', scrollMore: 'Scroll down to load more',
+        lowOnly: 'Historical lows only', newLowOnly: 'New lows only', pricedOnly: 'Priced only', newHistoricalLow: 'New low', noDealPoolGames: 'No recent qualifying price data yet.', sortPositive: 'Sort by positive reviews', refreshHot: 'Refresh list', scrollMore: 'Scroll down to load more',
         localLimit: 'Local limit reached', hotBuilding: 'Building the popular list; cached results will appear shortly.',
         noFilteredHot: 'No popular games match these filters.', noHot: 'No local popular list yet; it will be built in the background.', trackedGames: 'Tracked games', wishlist: 'Wishlist', discountedOnly: 'Discounted only', siteLowOnly: 'Site lows only', siteLow: 'Site low', recentSiteLow: 'Latest site low:', noWishlistMatch: 'No wishlist games match these filters.', wishlistStatus: 'Status', allStatuses: 'All', statusWish: 'Want', statusWatching: 'Watching', statusOwned: 'Owned', sortBy: 'Sort', sortAdded: 'Recently added', sortDiscount: 'Highest discount', sortPrice: 'Lowest price', sortPlayers: 'Players online',
         noTrackedGames: 'No tracked games. Search for a game to add one.', noDescription: 'No description available.', releaseDate: 'Release date: ', dataUpdated: 'Data updated: ',
@@ -1785,6 +1800,7 @@
           favoriteFilterDiscount: false,
           favoriteFilterLow: false,
           favoriteFilterNewLow: false,
+          favoriteFilterPriced: false,
           favoriteStatusFilter: 'all',
           favoriteSort: 'added',
           hotPageLimit: 200,
@@ -1810,7 +1826,7 @@
           busy: false,
           favoriteBusy: false,
           account: null, csrfToken: '', authOpen: false, authMode: 'login', authUsername: '', authPassword: '', authRemember: true, authBusy: false, authError: '', deleteAccountOpen: false, deleteAccountPassword: '',
-          monitoring: null, admins: [], adminUsername: '', resetUsername: '', resetPassword: '', resetBusy: false, controlBusy: null, controlConfirmAction: null,
+          monitoring: null, admins: [], adminMemes: [], memeUploadBusy: false, adminUsername: '', resetUsername: '', resetPassword: '', resetBusy: false, controlBusy: null, controlConfirmAction: null,
           refreshing: false,
           wasRefreshing: false,
           statusTimer: null,
@@ -1917,6 +1933,9 @@
           }
           if (this.favoriteFilterNewLow) {
             rows = rows.filter(game => game.cn_price_new_historical_low === true);
+          }
+          if (this.favoriteFilterPriced) {
+            rows = rows.filter(game => game.is_free || (game.cn_price_final !== null && game.cn_price_final !== undefined));
           }
           if (this.favoriteStatusFilter !== 'all') {
             rows = rows.filter(game => (game.favorite_status || 'wish') === this.favoriteStatusFilter);
@@ -2284,16 +2303,14 @@
             image.src = `${original}${separator}retry=${attempts + 1}`;
           }, attempts === 0 ? 5000 : 10000);
         },
-        async api(path, options) {
+        async api(path, options = {}) {
           if (window.location.protocol === 'file:') {
             throw new Error(this.t('fileModeError'));
           }
           let res;
           try {
-            res = await fetch(path, {
-              headers: { 'Content-Type': 'application/json', ...(this.csrfToken ? {'X-CSRF-Token': this.csrfToken} : {}) },
-              ...options
-            });
+            const headers = { 'Content-Type': 'application/json', ...(this.csrfToken ? {'X-CSRF-Token': this.csrfToken} : {}), ...(options.headers || {}) };
+            res = await fetch(path, { ...options, headers });
           } catch (err) {
             throw new Error(this.t('backendError'));
           }
@@ -2974,7 +2991,8 @@
         async restoreAuth() { try { const data = await this.api('/api/auth/me'); this.account = data.user; this.csrfToken = data.csrf_token || ''; if (this.account) await this.loadGames(); } catch (_e) {} },
         formatBytes(value) { const bytes = Number(value || 0); if (bytes < 1024) return `${bytes} B`; const units = ['KB', 'MB', 'GB']; let amount = bytes / 1024; let index = 0; while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index++; } return `${amount.toFixed(1)} ${units[index]}`; },
         formatMonitorTime(value) { return value ? this.localTime(value) : '-'; },
-        async loadMonitoring() { try { const [monitor, users] = await Promise.all([this.api('/api/admin/monitoring'), this.api('/api/admin/users')]); this.monitoring = monitor; this.admins = users.admins || []; } catch (err) { this.message = err.message; this.switchPage('home'); } },
+        async loadMonitoring() { try { const [monitor, users] = await Promise.all([this.api('/api/admin/monitoring'), this.api('/api/admin/users')]); this.monitoring = monitor; this.admins = users.admins || []; this.adminMemes = this.account?.is_owner ? (await this.api('/api/admin/memes')).memes || [] : []; } catch (err) { this.message = err.message; this.switchPage('home'); } },
+        async uploadMeme() { const input=this.$refs.memeUploadInput; const file=input?.files?.[0]; if (!file || this.memeUploadBusy) return; this.memeUploadBusy=true; try { const result=await this.api('/api/admin/memes', {method:'POST', headers:{'Content-Type':file.type || 'application/octet-stream'}, body:await file.arrayBuffer()}); this.adminMemes=[...this.adminMemes, result.meme].sort((a,b)=>a.name.localeCompare(b.name)); input.value=''; this.message=this.t('uploadMeme') + '。'; } catch (err) { this.message=err.message; } finally { this.memeUploadBusy=false; } },
         async addAdmin() { try { await this.api('/api/admin/users', {method:'POST', body: JSON.stringify({username:this.adminUsername})}); this.adminUsername=''; await this.loadMonitoring(); } catch (err) { this.message=err.message; } },
         async removeAdmin(username) { try { await this.api(`/api/admin/users/${encodeURIComponent(username)}/remove`, {method:'POST'}); await this.loadMonitoring(); } catch (err) { this.message=err.message; } },
         async resetUserPassword() { if (this.resetBusy) return; this.resetBusy=true; try { const result=await this.api(`/api/admin/users/${encodeURIComponent(this.resetUsername)}/reset-password`, {method:'POST', body:JSON.stringify({password:this.resetPassword})}); this.resetPassword=''; this.message=result.message; if (this.account?.username?.toLowerCase() === this.resetUsername.toLowerCase()) { this.account=null; this.csrfToken=''; this.switchPage('home'); } } catch (err) { this.message=err.message; } finally { this.resetBusy=false; } },

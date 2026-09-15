@@ -43,7 +43,7 @@ fi
 mkdir -p "${APP_DIR}"
 if [[ $(realpath "${SOURCE_DIR}") != $(realpath "${APP_DIR}") ]]; then
   rsync -a --delete \
-    --exclude .git --exclude .env --exclude data/ \
+    --exclude .git --exclude .env --exclude data/ --exclude assets/memes/ \
     "${SOURCE_DIR}/" "${APP_DIR}/"
 fi
 
@@ -55,6 +55,7 @@ mkdir -p "${APP_DIR}/data"
 chown -R root:root "${APP_DIR}"
 chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}/data"
 chmod 750 "${APP_DIR}/data"
+install -d -o "${APP_USER}" -g "${APP_USER}" -m 750 "${APP_DIR}/assets/memes"
 
 set_env() {
   local key=$1 value=$2 file=${APP_DIR}/.env

@@ -128,7 +128,9 @@ def create_app():
     async def traffic_metrics(request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if not path.startswith(("/assets/", "/api/admin/")) and path not in {"/health", "/ready", "/favicon.ico"}:
+        user_agent = request.headers.get("user-agent", "").lower()
+        automated = any(marker in user_agent for marker in ("bot", "crawler", "spider", "curl", "wget", "python-requests", "httpx", "uptime"))
+        if not automated and not path.startswith(("/assets/", "/api/admin/")) and path not in {"/health", "/ready", "/favicon.ico"}:
             token = request.cookies.get("steamkb_visitor") or (secrets.token_urlsafe(24) if request.method == "GET" else None)
             digest = hmac.new(config.VISITOR_METRICS_SECRET.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest() if token else None
             try:
@@ -347,6 +349,29 @@ def create_app():
     def admin_users(request: Request):
         dashboard_admin(request)
         return {"admins": auth.list_admins()}
+
+    @application.get("/api/admin/memes")
+    def admin_memes(request: Request):
+        dashboard_admin(request, owner=True)
+        return {"memes": services.list_local_meme_files()}
+
+    @application.post("/api/admin/memes")
+    async def upload_admin_meme(request: Request):
+        dashboard_admin(request, csrf=True, owner=True)
+        enforce_ip_rate(request, "admin-memes", limit=20, window_seconds=300)
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                too_large = int(content_length) > config.MEME_UPLOAD_MAX_BYTES
+            except ValueError:
+                raise HTTPException(status_code=400, detail="无效的文件长度") from None
+            if too_large:
+                raise HTTPException(status_code=413, detail="表情包文件超过大小限制")
+        try:
+            meme = services.save_uploaded_meme(await request.body())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "meme": meme}
 
     @application.post("/api/admin/users")
     def add_admin(body: AdminUserRequest, request: Request):

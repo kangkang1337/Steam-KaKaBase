@@ -226,7 +226,7 @@ Copy-Item .env.example .env
 | `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 兼容旧配置；分层调度中热门和收藏为 24 小时 |
 | `STEAMKB_PLAYER_DAILY_REQUEST_BUDGET` | `7500` | 每日非热门玩家历史覆盖尝试上限；热门榜刷新独立计算，不挤占此额度。约可支持 5 万主要游戏在一周内轮转一次，额度随上海当天时间逐步放行 |
 | `STEAMKB_PRICE_DAILY_REQUEST_BUDGET` | `7500` | 每日非热门后台中国区价格覆盖尝试上限；热门榜价格独立计算，约可支持 5 万主要游戏一周轮转，并随当天时间逐步放行 |
-| `STEAMKB_COVERAGE_PLAYER_BATCH_LIMIT` | `25` | 每轮额外覆盖候选数；热门榜仍优先完整轮转 |
+| `STEAMKB_COVERAGE_PLAYER_BATCH_LIMIT` | `60` | 每轮额外玩家覆盖候选数；保持单路错峰请求，但更快追上按日释放的预算 |
 | `STEAMKB_COVERAGE_PRICE_BATCH_LIMIT` | `20` | 每轮额外价格覆盖候选数 |
 | `STEAMKB_COVERAGE_BACKGROUND_COHORT_LIMIT` | `8000` | 每轮背景覆盖候选池大小；配合每日 7,500 预算，目标约一周为 5 万主要游戏补齐或轮转主要样本 |
 | `STEAMKB_SPECIAL_APP_REFRESH_MINUTES` | `15` | 受限免费 App（当前为 Deadlock）从 Steam 官方热门榜记录在线人数的间隔 |
@@ -380,6 +380,8 @@ GET /api/status
 ```text
 GIF, WebP, PNG, APNG, JPG, JPEG, JFIF, AVIF, BMP
 ```
+
+服主也可在管理员监控页的“每日表情包管理”直接上传 JPEG、PNG、GIF 或 WebP（单个默认最多 10 MB），并下载首页当天表情包的原图。上传接口只允许服主 Cookie + CSRF 会话访问，目录有总大小和文件数上限，部署不会再覆盖已上传文件。
 
 游戏头图通过 `/api/image-cache` 使用本地限量缓存。缓存默认最长保留 30 天、总量上限 512 MB、单张上限 2 MB，并采用最近最少使用方向清理。当前没有批量截图缓存。
 

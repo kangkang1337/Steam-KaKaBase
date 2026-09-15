@@ -50,6 +50,8 @@ def test_nginx_limits_public_search_and_admin_routes():
     assert "limit_req zone=steamkb_auth" in site
     assert "limit_req zone=steamkb_auth burst=8 nodelay;" in site
     assert "limit_req zone=steamkb_favorites" in site
+    assert "location = /api/admin/memes" in site
+    assert "client_max_body_size 10m;" in site
     assert "proxy_pass http://127.0.0.1:8765" in site
     assert "include /etc/nginx/proxy_params;" in site
     assert "include proxy_params;" not in site
@@ -78,6 +80,7 @@ def test_systemd_services_are_separate_and_sandboxed():
         assert "NoNewPrivileges=true" in unit
         assert "ProtectSystem=strict" in unit
         assert "ReadWritePaths=@@APP_DIR@@/data" in unit
+    assert "ReadWritePaths=@@APP_DIR@@/data @@APP_DIR@@/assets/memes" in web
 
 
 def test_deployment_restarts_application_processes_after_sync():

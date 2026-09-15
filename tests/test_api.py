@@ -279,7 +279,7 @@ def test_status_endpoint(api_client):
     assert payload == {"status": "ok"}
 
 
-def test_owner_can_read_monitoring_and_manage_admins(api_client, monkeypatch):
+def test_owner_can_read_monitoring_and_manage_admins(api_client, monkeypatch, tmp_path):
     _, client = api_client
     monkeypatch.setattr(config, "ADMIN_OWNER_USERNAME", "owner")
     owner = {"username": "owner", "password": "password123", "remember": True}
@@ -289,6 +289,13 @@ def test_owner_can_read_monitoring_and_manage_admins(api_client, monkeypatch):
     login = client.post("/api/auth/login", json=owner)
     csrf = login.json()["csrf_token"]
     assert login.json()["user"]["is_owner"] is True
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    (tmp_path / "assets" / "memes").mkdir(parents=True)
+    meme = client.post(
+        "/api/admin/memes", content=b"\x89PNG\r\n\x1a\nminimal-png", headers={"X-CSRF-Token": csrf, "Content-Type": "image/png"}
+    )
+    assert meme.status_code == 200
+    assert client.get("/api/admin/memes").json()["memes"][0]["name"].endswith(".png")
     monitor = client.get("/api/admin/monitoring")
     assert monitor.status_code == 200
     assert {"today", "server", "crawler", "database", "backups"} <= set(monitor.json())
@@ -306,6 +313,7 @@ def test_owner_can_read_monitoring_and_manage_admins(api_client, monkeypatch):
     member_login = client.post("/api/auth/login", json=member)
     assert member_login.json()["user"]["is_admin"] is True
     assert client.get("/api/admin/monitoring").status_code == 200
+    assert client.get("/api/admin/memes").status_code == 403
     assert client.post("/api/admin/users", json={"username": "owner"}, headers={"X-CSRF-Token": member_login.json()["csrf_token"]}).status_code == 403
     assert client.post(
         "/api/admin/users/owner/reset-password",

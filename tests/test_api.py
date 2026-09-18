@@ -76,6 +76,8 @@ def test_account_session_and_favorite_isolation(api_client):
     assert favorites[0]["cn_price_final"] == 3000
     assert favorites[0]["cn_price_historical_low"] is True
     assert favorites[0]["cn_observed_low_last_at"] == "2026-09-12T00:00:00+00:00"
+
+
     assert favorites[0]["favorite_status"] == "wish"
     updated = client.patch(
         "/api/favorites/4242",
@@ -106,6 +108,24 @@ def test_account_session_and_favorite_isolation(api_client):
         assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM user_favorites").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM user_sessions").fetchone()[0] == 0
+
+
+def test_favorites_expose_explicit_steam_discount_end(api_client):
+    runtime, client = api_client
+    runtime.quick_track_game(9898, "Sale Game", None)
+    with runtime.database_connection() as conn:
+        conn.execute(
+            """INSERT INTO price_snapshots(
+                appid,region,currency,initial,final,discount_percent,discount_ends_at,
+                final_formatted,source,fetched_at
+            ) VALUES (9898,'CN','CNY',10000,5000,50,'2026-10-01T18:00:00+00:00','¥ 50.00','steam','2026-09-18T00:00:00+00:00')"""
+        )
+    credentials = {"username": "sale_user", "password": "password123", "remember": False}
+    assert client.post("/api/auth/register", json=credentials).status_code == 200
+    csrf = client.post("/api/auth/login", json=credentials).json()["csrf_token"]
+    assert client.post("/api/favorites", json={"appid": 9898, "name": "Sale Game"}, headers={"X-CSRF-Token": csrf}).status_code == 200
+    game = client.get("/api/favorites").json()["games"][0]
+    assert game["cn_discount_ends_at"] == "2026-10-01T18:00:00+00:00"
 
 
 def test_auth_rate_limit_is_enforced_by_ip(api_client, monkeypatch):

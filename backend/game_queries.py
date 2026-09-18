@@ -88,6 +88,7 @@ def clean_game(row, summary=False):
             "cn_price_new_historical_low": is_new_low,
             "cn_price_discounted": bool((item.get("cn_discount_percent") or 0) > 0 and not is_low),
             "cn_discount_percent": item.get("cn_discount_percent") or 0,
+            "cn_discount_ends_at": item.get("cn_discount_ends_at"),
             "cn_historical_low_cny": low_cny, "cn_historical_low_source": low_source,
             "cn_observed_low_since": item.get("cn_observed_low_since"),
             "cn_observed_low_last_at": item.get("cn_observed_low_last_at"),
@@ -122,6 +123,7 @@ def clean_price(row):
     return {
         "region": item.get("region"), "currency": item.get("currency"), "initial": item.get("initial"),
         "final": item.get("final"), "discount_percent": item.get("discount_percent"),
+        "discount_ends_at": item.get("discount_ends_at"),
         "final_formatted": item.get("final_formatted"), "source": item.get("source"), "fetched_at": item.get("fetched_at"),
         "historical_low": is_new_low or cached_historical_low_match(current_cny, low_cny, low_source, item.get("discount_percent"), item.get("observed_snapshot_count")),
         "new_historical_low": is_new_low,

@@ -2,6 +2,7 @@
 
 import asyncio
 import random
+from datetime import datetime, timezone
 
 from . import config
 from .crawler_data import insert_player_batch
@@ -65,6 +66,20 @@ def _review_summary(summary):
     }
 
 
+def discount_ends_at(price):
+    """Return Steam's explicit sale end as UTC ISO time, never an estimate."""
+    raw = (price or {}).get("discount_expiration")
+    if raw in (None, "", 0, "0"):
+        return None
+    try:
+        timestamp = int(raw)
+        if timestamp > 0:
+            return datetime.fromtimestamp(timestamp, timezone.utc).replace(microsecond=0).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+    return None
+
+
 async def fetch_hot_metadata_async(appids, full=True, include_reviews=False):
     httpx = require_httpx()
     semaphore = asyncio.Semaphore(config.HOT_METADATA_CONCURRENCY)
@@ -86,6 +101,7 @@ async def fetch_hot_metadata_async(appids, full=True, include_reviews=False):
                     "is_free": 1 if data.get("is_free") else 0, "screenshots_json": None,
                     "currency": price.get("currency"), "initial": price.get("initial", 0), "final": price.get("final", 0),
                     "discount_percent": price.get("discount_percent", 0),
+                    "discount_ends_at": discount_ends_at(price),
                     "final_formatted": price.get("final_formatted", "Free") if price or data.get("is_free") else None,
                     "has_price": bool(price or data.get("is_free")),
                 }

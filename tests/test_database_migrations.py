@@ -243,7 +243,7 @@ def test_wishlist_status_migration_preserves_existing_favorites(tmp_path):
     result = migrations.migrate_database(database)
 
     assert result["from_version"] == 11
-    assert result["applied"] == [12]
+    assert result["applied"] == [12, 13]
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT status FROM user_favorites WHERE user_id=1 AND appid=99").fetchone() == ("wish",)
         assert conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_user_favorites_status'").fetchone()

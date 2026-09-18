@@ -1470,10 +1470,6 @@
             <input type="checkbox" v-model="favoriteFilterNewLow">
             <span>{{ t('newLowOnly') }}</span>
           </label>
-          <label class="toggle">
-            <input type="checkbox" v-model="favoriteFilterPriced">
-            <span>{{ t('pricedOnly') }}</span>
-          </label>
           <label class="favorite-select">
             <span>{{ t('wishlistStatus') }}</span>
             <select v-model="favoriteStatusFilter" :aria-label="t('wishlistStatus')">
@@ -1488,6 +1484,7 @@
             <select v-model="favoriteSort" :aria-label="t('sortBy')">
               <option value="added">{{ t('sortAdded') }}</option>
               <option value="discount">{{ t('sortDiscount') }}</option>
+              <option value="discountEnd">{{ t('sortDiscountEnd') }}</option>
               <option value="price">{{ t('sortPrice') }}</option>
               <option value="players">{{ t('sortPlayers') }}</option>
             </select>
@@ -1502,11 +1499,12 @@
                 <span>{{ game.review_score ?? '-' }}% {{ t('positive') }}</span>
                 <span class="favorite-status" :class="game.favorite_status">{{ favoriteStatusLabel(game.favorite_status) }}</span>
               </span>
-              <span class="row-context" v-if="game.cn_price_discounted || game.cn_price_historical_low || game.cn_observed_low_last_at">
+              <span class="row-context" v-if="game.cn_price_discounted || game.cn_price_historical_low || game.cn_observed_low_last_at || saleEndsText(game.cn_discount_ends_at)">
                 <span v-if="game.cn_price_discounted">-{{ game.cn_discount_percent }}%</span>
                 <span v-if="game.cn_price_new_historical_low">{{ t('newHistoricalLow') }}</span>
                 <span v-else-if="game.cn_price_historical_low">{{ t('siteLow') }}</span>
                 <span v-if="game.cn_observed_low_last_at">{{ t('recentSiteLow') }} {{ localTime(game.cn_observed_low_last_at, true) }}</span>
+                <span v-if="saleEndsText(game.cn_discount_ends_at)">{{ t('discountEnds') }} {{ saleEndsText(game.cn_discount_ends_at) }}</span>
               </span>
             </span>
             <span class="pill" :class="pricePillClass(game)">{{ displayCnPrice(game) }}</span>
@@ -1556,6 +1554,7 @@
                 <div class="stat-label">{{ selectedRegionLabel }} {{ t('price') }}</div>
                 <div class="stat-value">{{ currentPrice() }}</div>
                 <div v-if="historicalLowLabel()" class="stat-note">{{ historicalLowLabel() }}</div>
+                <div v-if="saleEndsText(selectedRegionPrice?.discount_ends_at)" class="stat-note">{{ t('discountEnds') }} {{ saleEndsText(selectedRegionPrice.discount_ends_at) }}</div>
               </div>
             </div>
           </div>
@@ -1599,6 +1598,7 @@
                   <th>{{ t('price') }}</th>
                   <th>{{ t('originalPrice') }}</th>
                   <th>{{ t('discount') }}</th>
+                  <th>{{ t('discountEnds') }}</th>
                   <th>{{ t('currency') }}</th>
                   <th>{{ t('source') }}</th>
                   <th>{{ t('collectedAt') }}</th>
@@ -1610,12 +1610,13 @@
                   <td>{{ price.final_formatted || cents(price.final, price.currency) }}</td>
                   <td>{{ cents(price.initial, price.currency) }}</td>
                   <td class="discount">{{ price.discount_percent ? '-' + price.discount_percent + '%' : '-' }}</td>
+                  <td>{{ saleEndsText(price.discount_ends_at) || '-' }}</td>
                   <td>{{ price.currency || '-' }}</td>
                   <td>{{ price.source }}</td>
                   <td>{{ localTime(price.fetched_at) }}</td>
                 </tr>
                 <tr v-if="!selectedPrices.length">
-                  <td colspan="7" class="empty-cell">{{ t('noPriceSnapshot') }}</td>
+                  <td colspan="8" class="empty-cell">{{ t('noPriceSnapshot') }}</td>
                 </tr>
               </tbody>
             </table>
@@ -1684,9 +1685,9 @@
         dailyGem: '每日小众宝藏游戏', noEligibleGames: '暂无符合条件的游戏', todayMeme: '今日表情包',
         noMeme: '暂无今日表情包', downloadOriginal: '下载原图', memeManager: '每日表情包管理', memeManagerHint: '已有表情包（仅服主可查看、上传和删除）', memeUploadHint: '支持 JPEG、PNG、GIF、WebP；单个最多 10 MB。', uploadMeme: '上传表情包', deleteMemeTitle: '删除表情包', deleteMemeWarning: '删除后不能恢复；若它是今日表情包，首页会在下次读取时选择替代项。', peak: '峰值', updatedAt: '更新于',
         nicheBuilding: '小众池正在建立，满足条件的游戏会自动出现在这里。', todayLowPool: '今日史低池', newLowPool: '新史低池', highReviewLowPool: '高好评史低池', localObserved: '本站观测', paidOnly: '仅查看付费游戏',
-        lowOnly: '仅查看史低游戏', newLowOnly: '仅查看新史低', pricedOnly: '仅查看有价格', newHistoricalLow: '新史低', noDealPoolGames: '暂无符合条件的近期价格数据。', sortPositive: '按好评率排序', refreshHot: '刷新热门榜', scrollMore: '向下滚动继续加载',
+        lowOnly: '仅查看史低游戏', newLowOnly: '仅查看新史低', newHistoricalLow: '新史低', noDealPoolGames: '暂无符合条件的近期价格数据。', sortPositive: '按好评率排序', refreshHot: '刷新热门榜', scrollMore: '向下滚动继续加载',
         localLimit: '已加载到本地上限', hotBuilding: '正在建立热门榜，稍后会自动显示本地缓存。',
-        noFilteredHot: '暂无符合条件的热门游戏。', noHot: '暂无本地热门榜，后台会自动建立。', trackedGames: '已跟踪游戏', wishlist: '愿望单', discountedOnly: '仅查看打折', siteLowOnly: '仅查看本站史低', siteLow: '本站史低', recentSiteLow: '最近本站低价：', noWishlistMatch: '暂无符合筛选条件的愿望单游戏。', wishlistStatus: '状态', allStatuses: '全部', statusWish: '想买', statusWatching: '观望', statusOwned: '已拥有', sortBy: '排序', sortAdded: '最近添加', sortDiscount: '折扣最高', sortPrice: '价格最低', sortPlayers: '在线人数',
+        noFilteredHot: '暂无符合条件的热门游戏。', noHot: '暂无本地热门榜，后台会自动建立。', trackedGames: '已跟踪游戏', wishlist: '愿望单', discountedOnly: '仅查看打折', siteLowOnly: '仅查看本站史低', siteLow: '本站史低', recentSiteLow: '最近本站低价：', discountEnds: '折扣截止：', noWishlistMatch: '暂无符合筛选条件的愿望单游戏。', wishlistStatus: '状态', allStatuses: '全部', statusWish: '想买', statusWatching: '观望', statusOwned: '已拥有', sortBy: '排序', sortAdded: '最近添加', sortDiscount: '折扣最高', sortDiscountEnd: '折扣即将结束', sortPrice: '价格最低', sortPlayers: '在线人数',
         noTrackedGames: '暂无数据，搜索游戏后加入跟踪。', noDescription: '暂无简介。', releaseDate: '发行日期：', dataUpdated: '数据更新：',
         price: '价格', reviews: '评价', currentPlayers: '当前在线', sitePeak: '本站历史峰值', recordedSince: '记录始于', playerReviews: '玩家评价',
         priceHistory: '历史价格', nativeCurrency: '原币', nativePrice: '原币价格', onlinePlayers: '在线人数', snapshotBars: '快照柱形图',
@@ -1732,9 +1733,9 @@
         dailyGem: 'Daily hidden gem', noEligibleGames: 'No eligible games yet', todayMeme: "Today's meme",
         noMeme: 'No daily meme yet', downloadOriginal: 'Download original', memeManager: 'Daily meme manager', memeManagerHint: 'Existing memes (owner can view, upload, and delete)', memeUploadHint: 'JPEG, PNG, GIF, or WebP; up to 10 MB each.', uploadMeme: 'Upload meme', deleteMemeTitle: 'Delete meme', deleteMemeWarning: "This cannot be undone. If it is today's meme, Home will choose a replacement on its next read.", peak: 'Peak', updatedAt: 'Updated',
         nicheBuilding: 'The hidden-gem pool is being built. Eligible games will appear automatically.', todayLowPool: "Today's low pool", newLowPool: 'New low pool', highReviewLowPool: 'High-review low pool', localObserved: 'Locally observed', paidOnly: 'Paid games only',
-        lowOnly: 'Historical lows only', newLowOnly: 'New lows only', pricedOnly: 'Priced only', newHistoricalLow: 'New low', noDealPoolGames: 'No recent qualifying price data yet.', sortPositive: 'Sort by positive reviews', refreshHot: 'Refresh list', scrollMore: 'Scroll down to load more',
+        lowOnly: 'Historical lows only', newLowOnly: 'New lows only', newHistoricalLow: 'New low', noDealPoolGames: 'No recent qualifying price data yet.', sortPositive: 'Sort by positive reviews', refreshHot: 'Refresh list', scrollMore: 'Scroll down to load more',
         localLimit: 'Local limit reached', hotBuilding: 'Building the popular list; cached results will appear shortly.',
-        noFilteredHot: 'No popular games match these filters.', noHot: 'No local popular list yet; it will be built in the background.', trackedGames: 'Tracked games', wishlist: 'Wishlist', discountedOnly: 'Discounted only', siteLowOnly: 'Site lows only', siteLow: 'Site low', recentSiteLow: 'Latest site low:', noWishlistMatch: 'No wishlist games match these filters.', wishlistStatus: 'Status', allStatuses: 'All', statusWish: 'Want', statusWatching: 'Watching', statusOwned: 'Owned', sortBy: 'Sort', sortAdded: 'Recently added', sortDiscount: 'Highest discount', sortPrice: 'Lowest price', sortPlayers: 'Players online',
+        noFilteredHot: 'No popular games match these filters.', noHot: 'No local popular list yet; it will be built in the background.', trackedGames: 'Tracked games', wishlist: 'Wishlist', discountedOnly: 'Discounted only', siteLowOnly: 'Site lows only', siteLow: 'Site low', recentSiteLow: 'Latest site low:', discountEnds: 'Ends:', noWishlistMatch: 'No wishlist games match these filters.', wishlistStatus: 'Status', allStatuses: 'All', statusWish: 'Want', statusWatching: 'Watching', statusOwned: 'Owned', sortBy: 'Sort', sortAdded: 'Recently added', sortDiscount: 'Highest discount', sortDiscountEnd: 'Ending soonest', sortPrice: 'Lowest price', sortPlayers: 'Players online',
         noTrackedGames: 'No tracked games. Search for a game to add one.', noDescription: 'No description available.', releaseDate: 'Release date: ', dataUpdated: 'Data updated: ',
         price: 'Price', reviews: 'Reviews', currentPlayers: 'Players online', sitePeak: 'Site-recorded peak', recordedSince: 'Recorded since', playerReviews: 'Player reviews',
         priceHistory: 'price history', nativeCurrency: 'Native currency', nativePrice: 'native price', onlinePlayers: 'Players online', snapshotBars: 'Snapshot bar chart',
@@ -1823,7 +1824,6 @@
           favoriteFilterDiscount: false,
           favoriteFilterLow: false,
           favoriteFilterNewLow: false,
-          favoriteFilterPriced: false,
           favoriteStatusFilter: 'all',
           favoriteSort: 'added',
           hotPageLimit: 200,
@@ -1960,14 +1960,17 @@
           if (this.favoriteFilterNewLow) {
             rows = rows.filter(game => game.cn_price_new_historical_low === true);
           }
-          if (this.favoriteFilterPriced) {
-            rows = rows.filter(game => game.is_free || (game.cn_price_final !== null && game.cn_price_final !== undefined));
-          }
           if (this.favoriteStatusFilter !== 'all') {
             rows = rows.filter(game => (game.favorite_status || 'wish') === this.favoriteStatusFilter);
           }
           if (this.favoriteSort === 'discount') {
             rows.sort((left, right) => Number(right.cn_discount_percent || 0) - Number(left.cn_discount_percent || 0));
+          } else if (this.favoriteSort === 'discountEnd') {
+            const deadline = game => {
+              const timestamp = Date.parse(game.cn_discount_ends_at || '');
+              return Number.isFinite(timestamp) && timestamp > Date.now() ? timestamp : Number.POSITIVE_INFINITY;
+            };
+            rows.sort((left, right) => deadline(left) - deadline(right));
           } else if (this.favoriteSort === 'price') {
             rows.sort((left, right) => {
               const priceValue = game => {
@@ -3097,6 +3100,10 @@
           if (game?.cn_price) return game.cn_price;
           if (game?.is_free) return this.t('free');
           return this.locale === 'en-US' ? this.t('cnUnavailable') : '国区暂无售价';
+        },
+        saleEndsText(value) {
+          const timestamp = Date.parse(value || '');
+          return Number.isFinite(timestamp) && timestamp > Date.now() ? this.localTime(value) : '';
         },
         formatDuration(seconds) {
           const total = Math.max(0, Math.floor(Number(seconds) || 0));

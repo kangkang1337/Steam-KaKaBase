@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 
 
 class DatabaseMigrationError(RuntimeError):
@@ -65,7 +65,7 @@ def _migration_1_initial_schema(conn):
     );
     CREATE TABLE IF NOT EXISTS price_snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT, appid INTEGER NOT NULL, region TEXT NOT NULL,
-        currency TEXT, initial INTEGER, final INTEGER, discount_percent INTEGER,
+        currency TEXT, initial INTEGER, final INTEGER, discount_percent INTEGER, discount_ends_at TEXT,
         final_formatted TEXT, source TEXT NOT NULL, fetched_at TEXT NOT NULL,
         FOREIGN KEY(appid) REFERENCES games(appid)
     );
@@ -87,7 +87,7 @@ def _migration_1_initial_schema(conn):
     CREATE TABLE IF NOT EXISTS game_latest_state (
         appid INTEGER PRIMARY KEY, current_players INTEGER, players_updated_at TEXT,
         cn_price TEXT, cn_price_final INTEGER, cn_price_currency TEXT,
-        cn_discount_percent INTEGER DEFAULT 0, price_updated_at TEXT, review_score REAL,
+        cn_discount_percent INTEGER DEFAULT 0, cn_discount_ends_at TEXT, price_updated_at TEXT, review_score REAL,
         total_reviews INTEGER, review_updated_at TEXT, metadata_updated_at TEXT,
         historical_low_cny REAL, historical_low_updated_at TEXT, updated_at TEXT NOT NULL
     );
@@ -466,6 +466,32 @@ def _migration_12_wishlist_status(conn):
     """)
 
 
+def _migration_13_discount_expiry(conn):
+    """Persist Steam's explicit sale end timestamp when the Store provides it."""
+    _add_column(conn, "price_snapshots", "discount_ends_at", "TEXT")
+    _add_column(conn, "game_latest_state", "cn_discount_ends_at", "TEXT")
+    conn.execute("DROP TRIGGER IF EXISTS latest_cn_price_snapshot")
+    conn.execute("""
+        CREATE TRIGGER latest_cn_price_snapshot AFTER INSERT ON price_snapshots
+        WHEN NEW.region='CN' BEGIN
+          INSERT INTO game_latest_state(
+            appid, cn_price, cn_price_final, cn_price_currency,
+            cn_discount_percent, cn_discount_ends_at, price_updated_at, updated_at
+          ) VALUES (
+            NEW.appid, NEW.final_formatted, NEW.final, NEW.currency,
+            NEW.discount_percent, NEW.discount_ends_at, NEW.fetched_at, NEW.fetched_at
+          ) ON CONFLICT(appid) DO UPDATE SET
+            cn_price=CASE WHEN excluded.price_updated_at >= game_latest_state.price_updated_at OR game_latest_state.price_updated_at IS NULL THEN excluded.cn_price ELSE game_latest_state.cn_price END,
+            cn_price_final=CASE WHEN excluded.price_updated_at >= game_latest_state.price_updated_at OR game_latest_state.price_updated_at IS NULL THEN excluded.cn_price_final ELSE game_latest_state.cn_price_final END,
+            cn_price_currency=CASE WHEN excluded.price_updated_at >= game_latest_state.price_updated_at OR game_latest_state.price_updated_at IS NULL THEN excluded.cn_price_currency ELSE game_latest_state.cn_price_currency END,
+            cn_discount_percent=CASE WHEN excluded.price_updated_at >= game_latest_state.price_updated_at OR game_latest_state.price_updated_at IS NULL THEN excluded.cn_discount_percent ELSE game_latest_state.cn_discount_percent END,
+            cn_discount_ends_at=CASE WHEN excluded.price_updated_at >= game_latest_state.price_updated_at OR game_latest_state.price_updated_at IS NULL THEN excluded.cn_discount_ends_at ELSE game_latest_state.cn_discount_ends_at END,
+            price_updated_at=MAX(COALESCE(game_latest_state.price_updated_at, ''), excluded.price_updated_at),
+            updated_at=MAX(game_latest_state.updated_at, excluded.updated_at);
+        END;
+    """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_1_initial_schema),
     Migration(2, "legacy_columns", _migration_2_legacy_columns),
@@ -479,6 +505,7 @@ MIGRATIONS = (
     Migration(10, "monitor_error_counts", _migration_10_monitor_errors),
     Migration(11, "game_coverage_activity", _migration_11_game_coverage_activity),
     Migration(12, "wishlist_status", _migration_12_wishlist_status),
+    Migration(13, "discount_expiry", _migration_13_discount_expiry),
 )
 
 

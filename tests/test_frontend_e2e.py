@@ -194,7 +194,8 @@ def mock_frontend_api(page, *, admin=False):
                 })
             cn_price = {
                 "region": "CN", "final_formatted": "¥ 20.00", "final": 2000,
-                "currency": "CNY", "discount_percent": 0,
+                "currency": "CNY", "discount_percent": 50,
+                "discount_ends_at": "2026-10-01T18:00:00+00:00",
                 "fetched_at": "2026-09-07T10:01:00+00:00",
             }
             us_price = {
@@ -307,6 +308,7 @@ def test_search_detail_favorite_round_trip(browser, frontend_server):
 
         expect(page.locator(".hero h1")).to_have_text("测试任务")
         expect(page.locator(".hero")).to_contain_text("¥ 20.00", timeout=15000)
+        expect(page.locator(".hero")).to_contain_text("折扣截止：", timeout=15000)
         chart_axes = page.evaluate("""
           () => [...document.querySelectorAll('.chart')].map(element => {
             const chart = window.echarts?.getInstanceByDom(element);

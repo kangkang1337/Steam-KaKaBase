@@ -2530,6 +2530,8 @@ def refresh_regional_prices(appid, regions=None):
     requests.
     """
     appid = int(appid)
+    from .crawler_fetch import discount_ends_at
+
     stamp = now_iso()
     rows = []
     for region in (regions or TRACKED_REGIONS):
@@ -2540,15 +2542,15 @@ def refresh_regional_prices(appid, regions=None):
             rows.append((
                 appid, region, price.get("currency"), price.get("initial", 0),
                 price.get("final", 0), price.get("discount_percent", 0),
-                price.get("final_formatted", "Free"), stamp,
+                discount_ends_at(price), price.get("final_formatted", "Free"), stamp,
             ))
     with database_connection() as conn:
         conn.executemany(
             """
             INSERT INTO price_snapshots(
                 appid, region, currency, initial, final, discount_percent,
-                final_formatted, source, fetched_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'steam', ?)
+                discount_ends_at, final_formatted, source, fetched_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'steam', ?)
             """,
             rows,
         )
@@ -2671,6 +2673,8 @@ def refresh_game(
     price_regions=None,
 ):
     with REFRESH_LOCK:
+        from .crawler_fetch import discount_ends_at
+
         appid = int(appid)
         stamp = now_iso()
         errors = []
@@ -2718,6 +2722,7 @@ def refresh_game(
                                 (price or {}).get("initial", 0),
                                 (price or {}).get("final", 0),
                                 (price or {}).get("discount_percent", 0),
+                                discount_ends_at(price),
                                 (price or {}).get("final_formatted", "Free"),
                                 stamp,
                             )
@@ -2768,8 +2773,8 @@ def refresh_game(
 
             conn.executemany(
                 """
-                INSERT INTO price_snapshots(appid, region, currency, initial, final, discount_percent, final_formatted, source, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'steam', ?)
+                INSERT INTO price_snapshots(appid, region, currency, initial, final, discount_percent, discount_ends_at, final_formatted, source, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'steam', ?)
                 """,
                 price_rows,
             )

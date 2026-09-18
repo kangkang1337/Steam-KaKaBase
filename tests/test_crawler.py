@@ -4,6 +4,12 @@ from datetime import datetime, timedelta, timezone
 from backend import config, crawler, crawler_data, crawler_fetch, steam_client
 
 
+def test_discount_expiration_is_serialized_only_from_a_valid_steam_timestamp():
+    assert crawler_fetch.discount_ends_at({"discount_expiration": 1_800_000_000}) == "2027-01-15T08:00:00+00:00"
+    assert crawler_fetch.discount_ends_at({"discount_expiration": "invalid"}) is None
+    assert crawler_fetch.discount_ends_at({}) is None
+
+
 def test_coverage_tiers_prioritize_hot_favorites_and_recent_interest(
     isolated_runtime, insert_game
 ):

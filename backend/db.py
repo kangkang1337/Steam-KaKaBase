@@ -275,6 +275,7 @@ def query_latest_prices_by_region(conn, appid):
                ps.initial,
                ps.final,
                ps.discount_percent,
+               ps.discount_ends_at,
                ps.final_formatted,
                ps.source,
                ps.fetched_at,
@@ -340,9 +341,9 @@ def query_game_detail(conn, appid, history_limit):
         return None
     price_history = conn.execute(
         """
-        SELECT region, currency, initial, final, discount_percent, final_formatted, source, fetched_at
+        SELECT region, currency, initial, final, discount_percent, discount_ends_at, final_formatted, source, fetched_at
         FROM (
-            SELECT region, currency, initial, final, discount_percent, final_formatted, source, fetched_at,
+            SELECT region, currency, initial, final, discount_percent, discount_ends_at, final_formatted, source, fetched_at,
                    ROW_NUMBER() OVER (PARTITION BY region ORDER BY fetched_at DESC) AS row_number
             FROM price_snapshots
             WHERE appid = ? AND source = 'steam'
@@ -439,6 +440,7 @@ def query_tracked_games():
                    (SELECT final FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price_final,
                    (SELECT currency FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price_currency,
                    (SELECT discount_percent FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_discount_percent,
+                   (SELECT discount_ends_at FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_discount_ends_at,
                    (SELECT fetched_at FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price_updated_at,
                    (SELECT amount_cny FROM historical_lows WHERE appid = g.appid AND country = 'CN' LIMIT 1) AS cn_itad_low_cny,
                    (SELECT MIN(final) / 100.0 FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam' AND final IS NOT NULL) AS cn_observed_low_cny,
@@ -466,6 +468,7 @@ def query_user_favorite_games(user_id):
                    (SELECT final FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price_final,
                    (SELECT currency FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price_currency,
                    (SELECT discount_percent FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_discount_percent,
+                   (SELECT discount_ends_at FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_discount_ends_at,
                    (SELECT fetched_at FROM price_snapshots WHERE appid = g.appid AND region = 'CN' ORDER BY fetched_at DESC LIMIT 1) AS cn_price_updated_at,
                    (SELECT amount_cny FROM historical_lows WHERE appid = g.appid AND country = 'CN' LIMIT 1) AS cn_itad_low_cny,
                    (SELECT MIN(final) / 100.0 FROM price_snapshots WHERE appid = g.appid AND region = 'CN' AND source = 'steam' AND final IS NOT NULL) AS cn_observed_low_cny,

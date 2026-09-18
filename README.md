@@ -234,7 +234,7 @@ Copy-Item .env.example .env
 | `STEAMKB_COVERAGE_BACKGROUND_COHORT_LIMIT` | `8000` | 每轮背景覆盖候选池大小；配合每日 7,500 预算，目标约一周为 5 万主要游戏补齐或轮转主要样本 |
 | `STEAMKB_SPECIAL_APP_REFRESH_MINUTES` | `15` | 受限免费 App（当前为 Deadlock）从 Steam 官方热门榜记录在线人数的间隔 |
 | `STEAMKB_COVERAGE_ACTIVITY_DAYS` | `14` | 最近打开详情游戏保持较高覆盖频率的天数 |
-| `STEAMKB_PLAYER_REQUEST_DELAY_SECONDS` | `0.5` | 单路玩家请求之间的错峰间隔；设为 `0` 仅在确认额度充足时使用 |
+| `STEAMKB_PLAYER_REQUEST_DELAY_SECONDS` | `0.3` | 单路玩家请求之间的错峰间隔；经 48 小时无 429 运行验证后提高吞吐，仍保留单路采集和服务级 429 冷却 |
 | `STEAMKB_HOTLIST_TARGET` | `200` | 本地热门榜目标数量（最大 200） |
 | `STEAMKB_DEAL_POOL_DISPLAY_LIMIT` | `200` | 每个近期史低池最多展示的游戏数 |
 | `STEAMKB_DEAL_POOL_CANDIDATE_LIMIT` | `800` | 史低池在本地 SQLite 中筛选的候选上限 |
@@ -272,7 +272,7 @@ STEAMKB_PROXY_URL=http://127.0.0.1:7890
 
 ## 数据库迁移与备份
 
-SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v12：v9 新增管理员权限与匿名访问聚合表，v10 增加每日 5xx 聚合计数以生成健康摘要，v11 增加不含用户身份的游戏兴趣/收藏时间信号用于分层历史覆盖，v12 为账号愿望单增加同步状态和查询索引。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
+SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v13：v9 新增管理员权限与匿名访问聚合表，v10 增加每日 5xx 聚合计数以生成健康摘要，v11 增加不含用户身份的游戏兴趣/收藏时间信号用于分层历史覆盖，v12 为账号愿望单增加同步状态和查询索引，v13 保存 Steam 明确返回的折扣截止时间。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
 
 迁移中任意一步失败时，事务会整体回滚，服务停止启动，并在错误中给出升级前备份路径。crawler 还会使用 SQLite Backup API 每 24 小时在线创建一次 `daily` 备份，默认保留 14 份；每日备份、手动备份和迁移备份分别轮转，不会互相删除。数据库和备份文件均被 Git 忽略。
 

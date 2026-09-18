@@ -169,12 +169,12 @@ def upsert_hot_price_batch(rows, stamp):
         return
     with transaction() as conn:
         conn.executemany("UPDATE games SET name=COALESCE(?,name),header_image=COALESCE(?,header_image),is_free=COALESCE(?,is_free),updated_at=? WHERE appid=?", [(row.get("name"), row.get("header_image"), row.get("is_free"), stamp, row["appid"]) for row in rows])
-        conn.executemany("INSERT INTO price_snapshots(appid,region,currency,initial,final,discount_percent,final_formatted,source,fetched_at) VALUES (?, 'CN', ?, ?, ?, ?, ?, 'steam', ?)", [(row["appid"], row.get("currency"), row.get("initial"), row.get("final"), row.get("discount_percent"), row.get("final_formatted"), stamp) for row in rows if row.get("has_price")])
+        conn.executemany("INSERT INTO price_snapshots(appid,region,currency,initial,final,discount_percent,discount_ends_at,final_formatted,source,fetched_at) VALUES (?, 'CN', ?, ?, ?, ?, ?, ?, 'steam', ?)", [(row["appid"], row.get("currency"), row.get("initial"), row.get("final"), row.get("discount_percent"), row.get("discount_ends_at"), row.get("final_formatted"), stamp) for row in rows if row.get("has_price")])
         conn.executemany(
-            """INSERT INTO game_latest_state(appid,cn_price,cn_price_final,cn_price_currency,cn_discount_percent,price_updated_at,updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(appid) DO UPDATE SET cn_price=excluded.cn_price,cn_price_final=excluded.cn_price_final,
-            cn_price_currency=excluded.cn_price_currency,cn_discount_percent=excluded.cn_discount_percent,price_updated_at=excluded.price_updated_at,updated_at=excluded.updated_at""",
-            [(row["appid"], row.get("final_formatted") if row.get("has_price") else None, row.get("final") if row.get("has_price") else None, row.get("currency") if row.get("has_price") else None, row.get("discount_percent", 0) if row.get("has_price") else 0, stamp, stamp) for row in rows],
+            """INSERT INTO game_latest_state(appid,cn_price,cn_price_final,cn_price_currency,cn_discount_percent,cn_discount_ends_at,price_updated_at,updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(appid) DO UPDATE SET cn_price=excluded.cn_price,cn_price_final=excluded.cn_price_final,
+            cn_price_currency=excluded.cn_price_currency,cn_discount_percent=excluded.cn_discount_percent,cn_discount_ends_at=excluded.cn_discount_ends_at,price_updated_at=excluded.price_updated_at,updated_at=excluded.updated_at""",
+            [(row["appid"], row.get("final_formatted") if row.get("has_price") else None, row.get("final") if row.get("has_price") else None, row.get("currency") if row.get("has_price") else None, row.get("discount_percent", 0) if row.get("has_price") else 0, row.get("discount_ends_at") if row.get("has_price") else None, stamp, stamp) for row in rows],
         )
         conn.executemany("UPDATE niche_pool SET cn_price=?,cn_price_final=?,cn_price_currency=?,cn_discount_percent=?,is_free=? WHERE appid=?", [(row.get("final_formatted") if row.get("has_price") else None, row.get("final") if row.get("has_price") else None, row.get("currency") if row.get("has_price") else None, row.get("discount_percent", 0) if row.get("has_price") else 0, row.get("is_free", 0), row["appid"]) for row in rows])
 
@@ -207,7 +207,7 @@ def upsert_hot_metadata_batch(rows, stamp):
             release_date=COALESCE(excluded.release_date,games.release_date),is_free=excluded.is_free,screenshots_json=COALESCE(excluded.screenshots_json,games.screenshots_json),updated_at=excluded.updated_at""",
             [(row["appid"], fallback_game_name(row["appid"], row.get("name")), row.get("header_image"), row.get("short_description"), row.get("developer"), row.get("publisher"), row.get("release_date"), row.get("is_free"), row.get("screenshots_json"), stamp, UNKNOWN_GAME_NAME) for row in rows],
         )
-        conn.executemany("INSERT INTO price_snapshots(appid,region,currency,initial,final,discount_percent,final_formatted,source,fetched_at) VALUES (?, 'CN', ?, ?, ?, ?, ?, 'steam', ?)", [(row["appid"], row.get("currency"), row.get("initial"), row.get("final"), row.get("discount_percent"), row.get("final_formatted"), stamp) for row in rows if row.get("has_price")])
+        conn.executemany("INSERT INTO price_snapshots(appid,region,currency,initial,final,discount_percent,discount_ends_at,final_formatted,source,fetched_at) VALUES (?, 'CN', ?, ?, ?, ?, ?, ?, 'steam', ?)", [(row["appid"], row.get("currency"), row.get("initial"), row.get("final"), row.get("discount_percent"), row.get("discount_ends_at"), row.get("final_formatted"), stamp) for row in rows if row.get("has_price")])
         conn.executemany("INSERT INTO review_snapshots(appid,review_score,review_score_desc,total_positive,total_negative,total_reviews,fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [(row["appid"], row.get("review_score"), row.get("review_score_desc"), row.get("total_positive"), row.get("total_negative"), row.get("total_reviews"), stamp) for row in rows if row.get("has_reviews")])
 
 

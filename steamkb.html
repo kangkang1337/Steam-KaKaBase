@@ -1966,11 +1966,19 @@
           if (this.favoriteSort === 'discount') {
             rows.sort((left, right) => Number(right.cn_discount_percent || 0) - Number(left.cn_discount_percent || 0));
           } else if (this.favoriteSort === 'discountEnd') {
-            const deadline = game => {
+            const deadlineRank = game => {
               const timestamp = Date.parse(game.cn_discount_ends_at || '');
-              return Number.isFinite(timestamp) && timestamp > Date.now() ? timestamp : Number.POSITIVE_INFINITY;
+              if (Number.isFinite(timestamp) && timestamp > Date.now()) return [0, timestamp];
+              if (Number(game.cn_discount_percent || 0) > 0) return [1, 0];
+              return [2, 0];
             };
-            rows.sort((left, right) => deadline(left) - deadline(right));
+            rows.sort((left, right) => {
+              const leftRank = deadlineRank(left);
+              const rightRank = deadlineRank(right);
+              if (leftRank[0] !== rightRank[0]) return leftRank[0] - rightRank[0];
+              if (leftRank[1] !== rightRank[1]) return leftRank[1] - rightRank[1];
+              return Number(right.cn_discount_percent || 0) - Number(left.cn_discount_percent || 0);
+            });
           } else if (this.favoriteSort === 'price') {
             rows.sort((left, right) => {
               const priceValue = game => {

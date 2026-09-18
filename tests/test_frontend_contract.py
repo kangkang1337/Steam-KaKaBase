@@ -156,6 +156,7 @@ def test_wishlist_statuses_and_sorting_stay_scoped_to_the_current_account():
     assert "favoriteSort: 'added'" in source
     assert 'value="discountEnd"' in source
     assert "sortDiscountEnd" in source
+    assert "deadlineRank" in source
     assert "saleEndsText" in source
     assert "favoriteFilterPriced" not in source
     assert "favoriteStatusLabel(status)" in source

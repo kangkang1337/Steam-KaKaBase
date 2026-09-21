@@ -1,13 +1,123 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from backend import config, crawler, crawler_data, crawler_fetch, steam_client
+from backend import config, crawler, crawler_data, crawler_fetch, db, steam_client
 
 
 def test_discount_expiration_is_serialized_only_from_a_valid_steam_timestamp():
     assert crawler_fetch.discount_ends_at({"discount_expiration": 1_800_000_000}) == "2027-01-15T08:00:00+00:00"
     assert crawler_fetch.discount_ends_at({"discount_expiration": "invalid"}) is None
     assert crawler_fetch.discount_ends_at({}) is None
+
+
+def test_discount_package_and_store_countdown_are_matched_strictly():
+    details = {
+        "price_overview": {"final": 5120, "discount_percent": 60},
+        "package_groups": [{"subs": [
+            {"packageid": 999999, "price_in_cents_with_discount": 9900},
+            {"packageid": 155279, "price_in_cents_with_discount": 5120},
+        ]}],
+    }
+    now = datetime(2026, 9, 21, tzinfo=timezone.utc)
+    expiry = int(datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp())
+    html = f"""
+      var other = $J('#999999_countdown_0');
+      InitDailyDealTimer(other, {expiry + 100});
+      var target = $J('#155279_countdown_0');
+      InitDailyDealTimer(target, {expiry});
+    """
+
+    assert crawler_fetch.select_discount_package_id(details) == 155279
+    assert crawler_fetch.parse_store_discount_expiration(
+        html, 155279, now=now
+    ) == "2026-10-01T00:00:00+00:00"
+    assert crawler_fetch.parse_store_discount_expiration(html, 123, now=now) is None
+    details["price_overview"]["discount_percent"] = 0
+    assert crawler_fetch.select_discount_package_id(details) is None
+
+
+def test_store_countdown_rejects_expired_and_unreasonable_timestamps():
+    now = datetime(2026, 9, 21, tzinfo=timezone.utc)
+    expired = int((now - timedelta(days=1)).timestamp())
+    far_future = int((now + timedelta(days=400)).timestamp())
+    template = "var x=$J('#42_countdown_0');InitDailyDealTimer(x, {});"
+
+    assert crawler_fetch.parse_store_discount_expiration(
+        template.format(expired), 42, now=now
+    ) is None
+    assert crawler_fetch.parse_store_discount_expiration(
+        template.format(far_future), 42, now=now
+    ) is None
+
+
+def test_discount_expiry_queue_prioritizes_favorites_and_updates_latest_snapshot(
+    isolated_runtime, insert_game
+):
+    runtime = isolated_runtime
+    favorite = insert_game(5001, "Favorite sale")
+    unrelated = insert_game(5002, "Unrelated sale")
+    stamp = runtime.now_iso()
+    expiry = (datetime.now(timezone.utc) + timedelta(days=5)).replace(microsecond=0).isoformat()
+    with runtime.database_connection() as conn:
+        conn.execute(
+            "INSERT INTO users(username,password_hash,password_salt,created_at) VALUES ('sale-user','h','s',?)",
+            (stamp,),
+        )
+        user_id = conn.execute("SELECT id FROM users WHERE username='sale-user'").fetchone()[0]
+        conn.execute(
+            "INSERT INTO user_favorites(user_id,appid,created_at) VALUES (?,?,?)",
+            (user_id, favorite, stamp),
+        )
+        for appid in (favorite, unrelated):
+            conn.execute(
+                """INSERT INTO price_snapshots(
+                    appid,region,currency,initial,final,discount_percent,final_formatted,source,fetched_at
+                ) VALUES (?, 'CN', 'CNY', 1000, 500, 50, '¥ 5.00', 'steam', ?)""",
+                (appid, stamp),
+            )
+
+    assert crawler_data.get_due_discount_expiry_appids(10) == [(favorite, 90)]
+    assert crawler_data.update_discount_expiration(favorite, expiry) is True
+    with runtime.database_connection() as conn:
+        snapshot = conn.execute(
+            "SELECT discount_ends_at FROM price_snapshots WHERE appid=? ORDER BY id DESC LIMIT 1",
+            (favorite,),
+        ).fetchone()[0]
+        latest = conn.execute(
+            "SELECT cn_discount_ends_at FROM game_latest_state WHERE appid=?",
+            (favorite,),
+        ).fetchone()[0]
+    assert snapshot == expiry
+    assert latest == expiry
+
+
+def test_verified_deadline_survives_same_offer_snapshot(isolated_runtime, insert_game):
+    runtime = isolated_runtime
+    appid = insert_game(5003, "Stable sale")
+    first = "2026-09-21T00:00:00+00:00"
+    second = "2026-09-21T01:00:00+00:00"
+    expiry = "2026-10-01T00:00:00+00:00"
+    with runtime.database_connection() as conn:
+        conn.execute(
+            """INSERT INTO price_snapshots(
+                appid,region,currency,initial,final,discount_percent,discount_ends_at,
+                final_formatted,source,fetched_at
+            ) VALUES (?, 'CN', 'CNY', 1000, 500, 50, ?, '¥ 5.00', 'steam', ?)""",
+            (appid, expiry, first),
+        )
+        conn.execute(
+            """INSERT INTO price_snapshots(
+                appid,region,currency,initial,final,discount_percent,discount_ends_at,
+                final_formatted,source,fetched_at
+            ) VALUES (?, 'CN', 'CNY', 1000, 500, 50, NULL, '¥ 5.00', 'steam', ?)""",
+            (appid, second),
+        )
+        row = db.query_latest_prices_by_region(conn, appid)[0]
+        latest = conn.execute(
+            "SELECT cn_discount_ends_at FROM game_latest_state WHERE appid=?", (appid,)
+        ).fetchone()[0]
+    assert row[5] == expiry
+    assert latest == expiry
 
 
 def test_coverage_tiers_prioritize_hot_favorites_and_recent_interest(

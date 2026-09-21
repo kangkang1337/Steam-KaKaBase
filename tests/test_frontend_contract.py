@@ -127,9 +127,11 @@ def test_wishlist_filters_and_recent_site_low_are_local_cache_only():
 
     assert "favoriteFilterDiscount: false" in source
     assert "favoriteFilterLow: false" in source
+    assert "favoriteFilterHideOwned: false" in source
     assert "filteredFavoriteGames()" in source
-    assert "game.cn_price_discounted === true" in source
+    assert "Number(game.cn_discount_percent || 0) > 0" in source
     assert "game.cn_price_historical_low === true" in source
+    assert "(game.favorite_status || 'wish') !== 'owned'" in source
     assert "game.cn_price_final" in source
     assert "game.cn_observed_low_last_at" in source
     assert "recentSiteLow" in source

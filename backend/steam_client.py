@@ -477,6 +477,46 @@ async def async_get_json(client, semaphore, url, params=None):
                 await asyncio.sleep(retry_delay(attempt))
 
 
+async def async_get_text(client, semaphore, url, params=None, *, max_bytes):
+    """Read bounded text from a fixed caller-selected upstream endpoint."""
+    service = external_service_for_url(url)
+    check_service_cooldown(service)
+    async with semaphore:
+        for attempt in range(config.STEAM_MAX_RETRIES + 1):
+            try:
+                check_service_cooldown(service)
+                response = await async_request_direct_then_proxy(
+                    client, "GET", url, params=params
+                )
+                response.raise_for_status()
+                if (response.url.host or "").lower() != (
+                    urllib.parse.urlsplit(url).hostname or ""
+                ).lower():
+                    raise ExternalDataUnavailable("unexpected upstream redirect host")
+                if len(response.content) > int(max_bytes):
+                    raise ValueError("upstream text response exceeds configured limit")
+                return response.text
+            except SteamRateLimited:
+                raise
+            except ValueError:
+                raise
+            except Exception as exc:
+                status_code = _http_status(exc)
+                if status_code == 429:
+                    set_service_cooldown(service, 10)
+                    raise SteamRateLimited(f"{service} HTTP 429", service)
+                if status_code == 404:
+                    raise ExternalDataUnavailable(f"{service} resource unavailable (HTTP 404)")
+                retryable = status_code in config.STEAM_RETRY_STATUSES or status_code is None
+                if not retryable or attempt >= config.STEAM_MAX_RETRIES:
+                    log_event(
+                        f"http async text request failed status={status_code} "
+                        f"url={safe_log_url(url)} error={type(exc).__name__}"
+                    )
+                    raise
+                await asyncio.sleep(retry_delay(attempt))
+
+
 async def async_post_json(client, semaphore, url, params=None, json_body=None):
     service = external_service_for_url(url)
     check_service_cooldown(service)

@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14
 
 
 class DatabaseMigrationError(RuntimeError):
@@ -492,6 +492,38 @@ def _migration_13_discount_expiry(conn):
     """)
 
 
+def _migration_14_preserve_verified_discount_expiry(conn):
+    """Keep a verified countdown while the same discounted offer is current."""
+    conn.execute("DROP TRIGGER IF EXISTS latest_cn_price_snapshot")
+    conn.execute("""
+        CREATE TRIGGER latest_cn_price_snapshot AFTER INSERT ON price_snapshots
+        WHEN NEW.region='CN' BEGIN
+          INSERT INTO game_latest_state(
+            appid, cn_price, cn_price_final, cn_price_currency,
+            cn_discount_percent, cn_discount_ends_at, price_updated_at, updated_at
+          ) VALUES (
+            NEW.appid, NEW.final_formatted, NEW.final, NEW.currency,
+            NEW.discount_percent, NEW.discount_ends_at, NEW.fetched_at, NEW.fetched_at
+          ) ON CONFLICT(appid) DO UPDATE SET
+            cn_price=CASE WHEN excluded.price_updated_at >= game_latest_state.price_updated_at OR game_latest_state.price_updated_at IS NULL THEN excluded.cn_price ELSE game_latest_state.cn_price END,
+            cn_price_final=CASE WHEN excluded.price_updated_at >= game_latest_state.price_updated_at OR game_latest_state.price_updated_at IS NULL THEN excluded.cn_price_final ELSE game_latest_state.cn_price_final END,
+            cn_price_currency=CASE WHEN excluded.price_updated_at >= game_latest_state.price_updated_at OR game_latest_state.price_updated_at IS NULL THEN excluded.cn_price_currency ELSE game_latest_state.cn_price_currency END,
+            cn_discount_percent=CASE WHEN excluded.price_updated_at >= game_latest_state.price_updated_at OR game_latest_state.price_updated_at IS NULL THEN excluded.cn_discount_percent ELSE game_latest_state.cn_discount_percent END,
+            cn_discount_ends_at=CASE
+              WHEN excluded.price_updated_at < game_latest_state.price_updated_at THEN game_latest_state.cn_discount_ends_at
+              WHEN excluded.cn_discount_percent <= 0 THEN NULL
+              WHEN excluded.cn_discount_ends_at IS NOT NULL THEN excluded.cn_discount_ends_at
+              WHEN game_latest_state.cn_price_final=excluded.cn_price_final
+               AND game_latest_state.cn_discount_percent=excluded.cn_discount_percent
+                THEN game_latest_state.cn_discount_ends_at
+              ELSE NULL
+            END,
+            price_updated_at=MAX(COALESCE(game_latest_state.price_updated_at, ''), excluded.price_updated_at),
+            updated_at=MAX(game_latest_state.updated_at, excluded.updated_at);
+        END;
+    """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_1_initial_schema),
     Migration(2, "legacy_columns", _migration_2_legacy_columns),
@@ -506,6 +538,7 @@ MIGRATIONS = (
     Migration(11, "game_coverage_activity", _migration_11_game_coverage_activity),
     Migration(12, "wishlist_status", _migration_12_wishlist_status),
     Migration(13, "discount_expiry", _migration_13_discount_expiry),
+    Migration(14, "preserve_verified_discount_expiry", _migration_14_preserve_verified_discount_expiry),
 )
 
 

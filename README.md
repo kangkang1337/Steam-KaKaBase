@@ -226,7 +226,10 @@ Copy-Item .env.example .env
 | `STEAMKB_PRICE_REFRESH_HOURS` | `24` | 兼容旧配置；分层调度中热门和收藏为 24 小时 |
 | `STEAMKB_PLAYER_DAILY_REQUEST_BUDGET` | `7500` | 每日非热门玩家历史覆盖尝试上限；热门榜刷新独立计算，不挤占此额度。约可支持 5 万主要游戏在一周内轮转一次，额度随上海当天时间逐步放行 |
 | `STEAMKB_PRICE_DAILY_REQUEST_BUDGET` | `7500` | 每日非热门后台中国区价格覆盖尝试上限；热门榜价格独立计算，约可支持 5 万主要游戏一周轮转，并随当天时间逐步放行 |
-| `STEAMKB_COVERAGE_PLAYER_BATCH_LIMIT` | `100` | 每轮额外玩家覆盖候选数；保持单路错峰请求，但更快追上按日释放的预算 |
+| `STEAMKB_COVERAGE_PLAYER_BATCH_LIMIT` | `160` | 每轮额外玩家覆盖候选数；保持单路错峰请求，经持续无 429 运行后进一步追上按日释放的预算 |
+| `STEAMKB_DISCOUNT_EXPIRY_BATCH_LIMIT` | `4` | 每轮补全 Steam 官方折扣倒计时的最大游戏数；只处理打折中的收藏、热门或近期打开游戏 |
+| `STEAMKB_DISCOUNT_EXPIRY_RETRY_HOURS` | `24` | 商店页没有倒计时或补全失败后的低频复查间隔 |
+| `STEAMKB_STORE_HTML_MAX_BYTES` | `3145728` | 折扣倒计时解析允许读取的 Steam 官方商店页大小上限（默认 3 MiB） |
 | `STEAMKB_MEME_UPLOAD_MAX_BYTES` | `10485760` | 服主上传单个表情包的最大字节数（默认 10 MB） |
 | `STEAMKB_MEME_MAX_FILES` | `300` | 表情包目录可保留的最大文件数 |
 | `STEAMKB_MEME_MAX_TOTAL_BYTES` | `268435456` | 表情包目录总容量上限（默认 256 MB） |
@@ -272,7 +275,7 @@ STEAMKB_PROXY_URL=http://127.0.0.1:7890
 
 ## 数据库迁移与备份
 
-SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v13：v9 新增管理员权限与匿名访问聚合表，v10 增加每日 5xx 聚合计数以生成健康摘要，v11 增加不含用户身份的游戏兴趣/收藏时间信号用于分层历史覆盖，v12 为账号愿望单增加同步状态和查询索引，v13 保存 Steam 明确返回的折扣截止时间。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
+SQLite 结构使用 `PRAGMA user_version` 和 `schema_migrations` 表管理。当前 schema v14：v9 新增管理员权限与匿名访问聚合表，v10 增加每日 5xx 聚合计数以生成健康摘要，v11 增加不含用户身份的游戏兴趣/收藏时间信号用于分层历史覆盖，v12 为账号愿望单增加同步状态和查询索引，v13 增加折扣截止字段，v14 在同一优惠持续期间保留由 Steam 官方商店倒计时验证的截止时间。Web 和 crawler 启动时都只执行尚未应用的迁移；存在旧数据库且需要升级时，会先使用 SQLite Backup API 在 `data/backups/` 创建一致性备份，再在单个事务中应用全部待执行版本。
 
 迁移中任意一步失败时，事务会整体回滚，服务停止启动，并在错误中给出升级前备份路径。crawler 还会使用 SQLite Backup API 每 24 小时在线创建一次 `daily` 备份，默认保留 14 份；每日备份、手动备份和迁移备份分别轮转，不会互相删除。数据库和备份文件均被 Git 忽略。
 

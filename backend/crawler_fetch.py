@@ -2,13 +2,14 @@
 
 import asyncio
 import random
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 
 from . import config
 from .crawler_data import insert_player_batch
 from .external_errors import ExternalDataUnavailable, SteamRateLimited
 from .logging_utils import log_event
-from .steam_client import async_get_json, require_httpx, steam_httpx_options
+from .steam_client import async_get_json, async_get_text, require_httpx, steam_httpx_options
 from .utils import now_iso
 
 
@@ -78,6 +79,130 @@ def discount_ends_at(price):
     except (TypeError, ValueError, OverflowError, OSError):
         return None
     return None
+
+
+def select_discount_package_id(details):
+    """Select the Store package whose discounted amount matches AppDetails."""
+    details = details if isinstance(details, dict) else {}
+    price = details.get("price_overview") or {}
+    try:
+        final = int(price.get("final"))
+        discount = int(price.get("discount_percent") or 0)
+    except (TypeError, ValueError):
+        return None
+    if discount <= 0:
+        return None
+    matches = []
+    for group in details.get("package_groups") or []:
+        if not isinstance(group, dict):
+            continue
+        for package in group.get("subs") or []:
+            if not isinstance(package, dict):
+                continue
+            try:
+                package_id = int(package.get("packageid"))
+                package_final = int(package.get("price_in_cents_with_discount"))
+            except (TypeError, ValueError):
+                continue
+            if package_id > 0 and package_final == final:
+                matches.append(package_id)
+    return min(matches) if matches else None
+
+
+def parse_store_discount_expiration(html, package_id, *, now=None):
+    """Extract one package's official Store countdown without executing HTML."""
+    try:
+        package_id = int(package_id)
+    except (TypeError, ValueError):
+        return None
+    if package_id <= 0 or not isinstance(html, str):
+        return None
+    marker = re.compile(rf"['\"]#{package_id}_countdown_\d+['\"]")
+    timer = re.compile(
+        r"InitDailyDealTimer\s*\(\s*[^,]{1,200},\s*(\d{9,12})\s*\)",
+        re.DOTALL,
+    )
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    latest_allowed = current + timedelta(days=366)
+    for found in marker.finditer(html):
+        countdown = timer.search(html, found.start(), min(len(html), found.start() + 1500))
+        if not countdown:
+            continue
+        try:
+            expires = datetime.fromtimestamp(int(countdown.group(1)), timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            continue
+        if current < expires <= latest_allowed:
+            return expires.replace(microsecond=0).isoformat()
+    return None
+
+
+async def fetch_discount_expirations_async(appids):
+    """Resolve official CN Store countdowns serially for a very small queue."""
+    httpx = require_httpx()
+    semaphore = asyncio.Semaphore(1)
+    rows, unavailable, retry = [], [], []
+    headers = {
+        "User-Agent": config.STEAM_USER_AGENT,
+        "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+        # Generic age-gate cookies only; no Steam account or session data.
+        "Cookie": (
+            "birthtime=568022401; lastagecheckage=1-January-1988; "
+            "wants_mature_content=1; mature_content=1"
+        ),
+    }
+    async with httpx.AsyncClient(
+        timeout=config.STEAM_TIMEOUT_SECONDS,
+        headers=headers,
+        follow_redirects=True,
+        **steam_httpx_options(),
+    ) as client:
+        for index, raw_appid in enumerate(appids):
+            appid = int(raw_appid)
+            try:
+                if index:
+                    await asyncio.sleep(random.uniform(
+                        config.STORE_REQUEST_DELAY_MIN_SECONDS,
+                        config.STORE_REQUEST_DELAY_MAX_SECONDS,
+                    ))
+                payload = await async_get_json(
+                    client, semaphore,
+                    "https://store.steampowered.com/api/appdetails",
+                    {"appids": appid, "cc": "CN", "l": "schinese"},
+                )
+                details = (payload.get(str(appid)) or {}).get("data") or {}
+                if not details:
+                    unavailable.append(appid)
+                    continue
+                package_id = select_discount_package_id(details)
+                if package_id is None:
+                    rows.append({"appid": appid, "discount_ends_at": None})
+                    continue
+                await asyncio.sleep(random.uniform(
+                    config.STORE_REQUEST_DELAY_MIN_SECONDS,
+                    config.STORE_REQUEST_DELAY_MAX_SECONDS,
+                ))
+                html = await async_get_text(
+                    client, semaphore,
+                    f"https://store.steampowered.com/app/{appid}/",
+                    {"cc": "CN", "l": "schinese"},
+                    max_bytes=config.STORE_HTML_MAX_BYTES,
+                )
+                rows.append({
+                    "appid": appid,
+                    "discount_ends_at": parse_store_discount_expiration(html, package_id),
+                })
+            except ExternalDataUnavailable:
+                unavailable.append(appid)
+            except SteamRateLimited:
+                raise
+            except Exception as exc:
+                log_event(f"discount expiry skipped appid={appid}: {exc}")
+                retry.append(appid)
+    return rows, unavailable, retry
 
 
 async def fetch_hot_metadata_async(appids, full=True, include_reviews=False):

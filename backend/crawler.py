@@ -214,6 +214,57 @@ def run_coverage_price_task():
     )
 
 
+def run_discount_expiry_task():
+    """Backfill a bounded set of real Store countdowns after price writes."""
+    if runtime.service_cooldown_remaining_seconds("steam_store"):
+        return False
+    limit = config.DISCOUNT_EXPIRY_BATCH_LIMIT
+    crawler_data.enqueue_due_discount_expiry_tasks(limit)
+    appids = runtime.claim_crawl_tasks("discount_expiry", limit)
+    if not appids:
+        return False
+    try:
+        rows, unavailable, retry = asyncio.run(
+            crawler_fetch.fetch_discount_expirations_async(appids)
+        )
+        resolved = 0
+        for row in rows:
+            if crawler_data.update_discount_expiration(
+                row["appid"], row.get("discount_ends_at")
+            ):
+                resolved += 1
+        runtime.complete_crawl_tasks([row["appid"] for row in rows], "discount_expiry")
+        runtime.mark_crawl_tasks_not_available(
+            unavailable, "discount_expiry", "Steam Store page unavailable"
+        )
+        runtime.fail_crawl_tasks(
+            retry,
+            "discount_expiry",
+            "Steam Store countdown request failed",
+            retry_minutes=config.DISCOUNT_EXPIRY_RETRY_HOURS * 60,
+        )
+        runtime.log_event(
+            f"discount expiries refreshed resolved={resolved} "
+            f"without_timer={len(rows) - resolved} unavailable={len(unavailable)} "
+            f"retry={len(retry)}"
+        )
+        return True
+    except sqlite3.Error as exc:
+        runtime.fail_crawl_tasks(appids, "discount_expiry", exc, terminal=True)
+        raise
+    except runtime.SteamRateLimited as exc:
+        runtime.fail_crawl_tasks(appids, "discount_expiry", exc, retry_minutes=10)
+        raise
+    except Exception as exc:
+        runtime.fail_crawl_tasks(
+            appids,
+            "discount_expiry",
+            exc,
+            retry_minutes=config.DISCOUNT_EXPIRY_RETRY_HOURS * 60,
+        )
+        raise
+
+
 def run_preview_task():
     def persist(rows, stamp):
         crawler_data.upsert_hot_price_batch(rows, stamp)
@@ -468,6 +519,9 @@ def refresh_hot_database_once(force_hotlist=False, quick=False):
             except Exception as exc:
                 runtime.log_event(f"steam catalog sync skipped: {exc}")
             catalog.run_catalog_enrich_task()
+            # Run after every other Store writer so the verified deadline is
+            # attached to the newest CN price snapshot for this cycle.
+            run_discount_expiry_task()
             from .services import refresh_daily_home_picks
 
             refresh_daily_home_picks()

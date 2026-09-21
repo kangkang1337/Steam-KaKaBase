@@ -5,7 +5,7 @@ import math
 
 from . import config
 from .db import enqueue_crawl_tasks, get_crawl_state, is_due, set_crawl_state, transaction
-from .utils import UNKNOWN_GAME_NAME, clean_hot_name, fallback_game_name
+from .utils import UNKNOWN_GAME_NAME, clean_hot_name, fallback_game_name, now_iso
 
 
 def save_itad_game_ids(rows, stamp):
@@ -173,7 +173,16 @@ def upsert_hot_price_batch(rows, stamp):
         conn.executemany(
             """INSERT INTO game_latest_state(appid,cn_price,cn_price_final,cn_price_currency,cn_discount_percent,cn_discount_ends_at,price_updated_at,updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(appid) DO UPDATE SET cn_price=excluded.cn_price,cn_price_final=excluded.cn_price_final,
-            cn_price_currency=excluded.cn_price_currency,cn_discount_percent=excluded.cn_discount_percent,cn_discount_ends_at=excluded.cn_discount_ends_at,price_updated_at=excluded.price_updated_at,updated_at=excluded.updated_at""",
+            cn_price_currency=excluded.cn_price_currency,cn_discount_percent=excluded.cn_discount_percent,
+            cn_discount_ends_at=CASE
+              WHEN excluded.cn_discount_percent <= 0 THEN NULL
+              WHEN excluded.cn_discount_ends_at IS NOT NULL THEN excluded.cn_discount_ends_at
+              WHEN game_latest_state.cn_price_final=excluded.cn_price_final
+               AND game_latest_state.cn_discount_percent=excluded.cn_discount_percent
+                THEN game_latest_state.cn_discount_ends_at
+              ELSE NULL
+            END,
+            price_updated_at=excluded.price_updated_at,updated_at=excluded.updated_at""",
             [(row["appid"], row.get("final_formatted") if row.get("has_price") else None, row.get("final") if row.get("has_price") else None, row.get("currency") if row.get("has_price") else None, row.get("discount_percent", 0) if row.get("has_price") else 0, row.get("discount_ends_at") if row.get("has_price") else None, stamp, stamp) for row in rows],
         )
         conn.executemany("UPDATE niche_pool SET cn_price=?,cn_price_final=?,cn_price_currency=?,cn_discount_percent=?,is_free=? WHERE appid=?", [(row.get("final_formatted") if row.get("has_price") else None, row.get("final") if row.get("has_price") else None, row.get("currency") if row.get("has_price") else None, row.get("discount_percent", 0) if row.get("has_price") else 0, row.get("is_free", 0), row["appid"]) for row in rows])
@@ -397,6 +406,90 @@ def enqueue_due_coverage_tasks(kind, limit, *, include_hot=True):
             priority,
         )
     return len(rows)
+
+
+def get_due_discount_expiry_appids(limit):
+    """Prioritize missing sale countdowns without scanning every discounted game."""
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    stamp = now.isoformat()
+    retry_cutoff = (now - timedelta(hours=config.DISCOUNT_EXPIRY_RETRY_HOURS)).isoformat()
+    activity_cutoff = (now - timedelta(days=config.COVERAGE_ACTIVITY_DAYS)).isoformat()
+    with transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.appid,
+                   CASE
+                     WHEN EXISTS(SELECT 1 FROM user_favorites f WHERE f.appid=s.appid) THEN 90
+                     WHEN EXISTS(SELECT 1 FROM hot_games h WHERE h.appid=s.appid) THEN 80
+                     ELSE 70
+                   END AS priority
+            FROM game_latest_state s
+            LEFT JOIN crawl_tasks t
+              ON t.appid=s.appid AND t.task_type='discount_expiry'
+            WHERE COALESCE(s.cn_discount_percent, 0) > 0
+              AND (s.cn_discount_ends_at IS NULL OR s.cn_discount_ends_at <= ?)
+              AND (
+                EXISTS(SELECT 1 FROM user_favorites f WHERE f.appid=s.appid)
+                OR EXISTS(SELECT 1 FROM hot_games h WHERE h.appid=s.appid)
+                OR EXISTS(
+                  SELECT 1 FROM game_activity a
+                  WHERE a.appid=s.appid
+                    AND MAX(
+                      COALESCE(a.last_interested_at, ''),
+                      COALESCE(a.last_favorited_at, '')
+                    ) >= ?
+                )
+              )
+              AND (
+                t.appid IS NULL
+                OR (
+                  t.status='done' AND t.completed_at IS NOT NULL
+                  AND t.updated_at < ?
+                )
+              )
+            ORDER BY priority DESC, COALESCE(s.price_updated_at, ''), s.appid
+            LIMIT ?
+            """,
+            (stamp, activity_cutoff, retry_cutoff, max(1, int(limit))),
+        ).fetchall()
+    return [(int(appid), int(priority)) for appid, priority in rows]
+
+
+def enqueue_due_discount_expiry_tasks(limit):
+    rows = get_due_discount_expiry_appids(limit)
+    for priority in sorted({priority for _appid, priority in rows}, reverse=True):
+        enqueue_crawl_tasks(
+            [appid for appid, row_priority in rows if row_priority == priority],
+            "discount_expiry",
+            priority,
+        )
+    return len(rows)
+
+
+def update_discount_expiration(appid, expires_at):
+    """Attach a verified countdown to the current CN snapshot and read model."""
+    if not expires_at:
+        return False
+    appid = int(appid)
+    with transaction() as conn:
+        row = conn.execute(
+            """SELECT id,discount_percent FROM price_snapshots
+            WHERE appid=? AND region='CN' AND source='steam'
+            ORDER BY fetched_at DESC,id DESC LIMIT 1""",
+            (appid,),
+        ).fetchone()
+        if not row or int(row[1] or 0) <= 0:
+            return False
+        conn.execute(
+            "UPDATE price_snapshots SET discount_ends_at=? WHERE id=?",
+            (expires_at, int(row[0])),
+        )
+        conn.execute(
+            """UPDATE game_latest_state SET cn_discount_ends_at=?,updated_at=?
+            WHERE appid=? AND COALESCE(cn_discount_percent,0)>0""",
+            (expires_at, now_iso(), appid),
+        )
+    return True
 
 
 def _coverage_budget_now(now=None):

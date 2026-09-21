@@ -1470,6 +1470,10 @@
             <input type="checkbox" v-model="favoriteFilterNewLow">
             <span>{{ t('newLowOnly') }}</span>
           </label>
+          <label class="toggle">
+            <input type="checkbox" v-model="favoriteFilterHideOwned">
+            <span>{{ t('hideOwned') }}</span>
+          </label>
           <label class="favorite-select">
             <span>{{ t('wishlistStatus') }}</span>
             <select v-model="favoriteStatusFilter" :aria-label="t('wishlistStatus')">
@@ -1687,7 +1691,7 @@
         nicheBuilding: '小众池正在建立，满足条件的游戏会自动出现在这里。', todayLowPool: '今日史低池', newLowPool: '新史低池', highReviewLowPool: '高好评史低池', localObserved: '本站观测', paidOnly: '仅查看付费游戏',
         lowOnly: '仅查看史低游戏', newLowOnly: '仅查看新史低', newHistoricalLow: '新史低', noDealPoolGames: '暂无符合条件的近期价格数据。', sortPositive: '按好评率排序', refreshHot: '刷新热门榜', scrollMore: '向下滚动继续加载',
         localLimit: '已加载到本地上限', hotBuilding: '正在建立热门榜，稍后会自动显示本地缓存。',
-        noFilteredHot: '暂无符合条件的热门游戏。', noHot: '暂无本地热门榜，后台会自动建立。', trackedGames: '已跟踪游戏', wishlist: '愿望单', discountedOnly: '仅查看打折', siteLowOnly: '仅查看本站史低', siteLow: '本站史低', recentSiteLow: '最近本站低价：', discountEnds: '折扣截止：', noWishlistMatch: '暂无符合筛选条件的愿望单游戏。', wishlistStatus: '状态', allStatuses: '全部', statusWish: '想买', statusWatching: '观望', statusOwned: '已拥有', sortBy: '排序', sortAdded: '最近添加', sortDiscount: '折扣最高', sortDiscountEnd: '折扣即将结束', sortPrice: '价格最低', sortPlayers: '在线人数',
+        noFilteredHot: '暂无符合条件的热门游戏。', noHot: '暂无本地热门榜，后台会自动建立。', trackedGames: '已跟踪游戏', wishlist: '愿望单', discountedOnly: '仅查看打折', siteLowOnly: '仅查看本站史低', hideOwned: '过滤已拥有', siteLow: '本站史低', recentSiteLow: '最近本站低价：', discountEnds: '折扣截止：', noWishlistMatch: '暂无符合筛选条件的愿望单游戏。', wishlistStatus: '状态', allStatuses: '全部', statusWish: '想买', statusWatching: '观望', statusOwned: '已拥有', sortBy: '排序', sortAdded: '最近添加', sortDiscount: '折扣最高', sortDiscountEnd: '折扣即将结束', sortPrice: '价格最低', sortPlayers: '在线人数',
         noTrackedGames: '暂无数据，搜索游戏后加入跟踪。', noDescription: '暂无简介。', releaseDate: '发行日期：', dataUpdated: '数据更新：',
         price: '价格', reviews: '评价', currentPlayers: '当前在线', sitePeak: '本站历史峰值', recordedSince: '记录始于', playerReviews: '玩家评价',
         priceHistory: '历史价格', nativeCurrency: '原币', nativePrice: '原币价格', onlinePlayers: '在线人数', snapshotBars: '快照柱形图',
@@ -1735,7 +1739,7 @@
         nicheBuilding: 'The hidden-gem pool is being built. Eligible games will appear automatically.', todayLowPool: "Today's low pool", newLowPool: 'New low pool', highReviewLowPool: 'High-review low pool', localObserved: 'Locally observed', paidOnly: 'Paid games only',
         lowOnly: 'Historical lows only', newLowOnly: 'New lows only', newHistoricalLow: 'New low', noDealPoolGames: 'No recent qualifying price data yet.', sortPositive: 'Sort by positive reviews', refreshHot: 'Refresh list', scrollMore: 'Scroll down to load more',
         localLimit: 'Local limit reached', hotBuilding: 'Building the popular list; cached results will appear shortly.',
-        noFilteredHot: 'No popular games match these filters.', noHot: 'No local popular list yet; it will be built in the background.', trackedGames: 'Tracked games', wishlist: 'Wishlist', discountedOnly: 'Discounted only', siteLowOnly: 'Site lows only', siteLow: 'Site low', recentSiteLow: 'Latest site low:', discountEnds: 'Ends:', noWishlistMatch: 'No wishlist games match these filters.', wishlistStatus: 'Status', allStatuses: 'All', statusWish: 'Want', statusWatching: 'Watching', statusOwned: 'Owned', sortBy: 'Sort', sortAdded: 'Recently added', sortDiscount: 'Highest discount', sortDiscountEnd: 'Ending soonest', sortPrice: 'Lowest price', sortPlayers: 'Players online',
+        noFilteredHot: 'No popular games match these filters.', noHot: 'No local popular list yet; it will be built in the background.', trackedGames: 'Tracked games', wishlist: 'Wishlist', discountedOnly: 'Discounted only', siteLowOnly: 'Site lows only', hideOwned: 'Hide owned', siteLow: 'Site low', recentSiteLow: 'Latest site low:', discountEnds: 'Ends:', noWishlistMatch: 'No wishlist games match these filters.', wishlistStatus: 'Status', allStatuses: 'All', statusWish: 'Want', statusWatching: 'Watching', statusOwned: 'Owned', sortBy: 'Sort', sortAdded: 'Recently added', sortDiscount: 'Highest discount', sortDiscountEnd: 'Ending soonest', sortPrice: 'Lowest price', sortPlayers: 'Players online',
         noTrackedGames: 'No tracked games. Search for a game to add one.', noDescription: 'No description available.', releaseDate: 'Release date: ', dataUpdated: 'Data updated: ',
         price: 'Price', reviews: 'Reviews', currentPlayers: 'Players online', sitePeak: 'Site-recorded peak', recordedSince: 'Recorded since', playerReviews: 'Player reviews',
         priceHistory: 'price history', nativeCurrency: 'Native currency', nativePrice: 'native price', onlinePlayers: 'Players online', snapshotBars: 'Snapshot bar chart',
@@ -1824,6 +1828,7 @@
           favoriteFilterDiscount: false,
           favoriteFilterLow: false,
           favoriteFilterNewLow: false,
+          favoriteFilterHideOwned: false,
           favoriteStatusFilter: 'all',
           favoriteSort: 'added',
           hotPageLimit: 200,
@@ -1952,13 +1957,16 @@
         filteredFavoriteGames() {
           let rows = [...this.games];
           if (this.favoriteFilterDiscount) {
-            rows = rows.filter(game => game.cn_price_discounted === true);
+            rows = rows.filter(game => Number(game.cn_discount_percent || 0) > 0);
           }
           if (this.favoriteFilterLow) {
             rows = rows.filter(game => game.cn_price_historical_low === true);
           }
           if (this.favoriteFilterNewLow) {
             rows = rows.filter(game => game.cn_price_new_historical_low === true);
+          }
+          if (this.favoriteFilterHideOwned) {
+            rows = rows.filter(game => (game.favorite_status || 'wish') !== 'owned');
           }
           if (this.favoriteStatusFilter !== 'all') {
             rows = rows.filter(game => (game.favorite_status || 'wish') === this.favoriteStatusFilter);

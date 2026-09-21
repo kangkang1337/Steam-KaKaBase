@@ -232,6 +232,7 @@ def list_hot_games(limit=100):
             "review_score": row["review_score"], "is_free": bool(row["is_free"]), "is_paid": not bool(row["is_free"]),
             "cn_price": row["cn_price"], "cn_price_display": row["cn_price"] or ("免费" if row["is_free"] else "国区暂无售价"),
             "cn_price_final": row["cn_price_final"], "cn_discount_percent": row["cn_discount_percent"] or 0,
+            "cn_discount_ends_at": row["cn_discount_ends_at"],
             "cn_price_historical_low": is_low, "cn_price_new_historical_low": is_new_low,
             "cn_price_discounted": bool((row["cn_discount_percent"] or 0) > 0 and not is_low),
             "cn_historical_low_cny": low_cny, "cn_historical_low_source": low_source,

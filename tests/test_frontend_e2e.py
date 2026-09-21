@@ -237,6 +237,19 @@ def open_test_page(browser, frontend_server, *, viewport=None, fragment="", admi
     return page, state, errors
 
 
+def test_unmounted_vue_template_and_dialogs_remain_hidden(browser, frontend_server):
+    context = browser.new_context(java_script_enabled=False)
+    page = context.new_page()
+    try:
+        page.goto(frontend_server, wait_until="domcontentloaded")
+        expect(page.locator("#app")).to_be_hidden()
+        expect(page.locator(".auth-dialog")).to_have_count(4)
+        for dialog in page.locator(".auth-dialog").all():
+            expect(dialog).to_be_hidden()
+    finally:
+        context.close()
+
+
 def test_navigation_hot_filters_and_niche_pool(browser, frontend_server):
     page, _, errors = open_test_page(browser, frontend_server)
     try:

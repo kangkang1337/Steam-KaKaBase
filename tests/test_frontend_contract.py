@@ -4,6 +4,14 @@ from pathlib import Path
 FRONTEND = Path(__file__).resolve().parents[1] / "steamkb.html"
 
 
+def test_vue_template_is_cloaked_until_mount_completes():
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert '[v-cloak] { display: none !important; }' in source
+    assert '<div id="app" v-cloak>' in source
+    assert source.index('<div id="app" v-cloak>') < source.index('v-if="memeDeleteConfirmName"')
+
+
 def test_frontend_consumes_cooldown_and_proxy_status():
     source = FRONTEND.read_text(encoding="utf-8")
 

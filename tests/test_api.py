@@ -358,6 +358,27 @@ def test_owner_can_read_monitoring_and_manage_admins(api_client, monkeypatch, tm
     assert client.post("/api/auth/login", json={**member, "password": "newpassword123"}).status_code == 200
 
 
+def test_meme_upload_rejects_chunked_body_over_limit(api_client, monkeypatch, tmp_path):
+    _, client = api_client
+    monkeypatch.setattr(config, "ADMIN_OWNER_USERNAME", "owner")
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    monkeypatch.setattr(config, "MEME_UPLOAD_MAX_BYTES", 16)
+    credentials = {"username": "owner", "password": "password123"}
+    assert client.post("/api/auth/register", json=credentials).status_code == 200
+    csrf = client.post("/api/auth/login", json=credentials).json()["csrf_token"]
+
+    def chunks():
+        yield b"\x89PNG\r\n\x1a\n"
+        yield b"a" * 9
+
+    response = client.post(
+        "/api/admin/memes", content=chunks(),
+        headers={"X-CSRF-Token": csrf, "Transfer-Encoding": "chunked"},
+    )
+    assert response.status_code == 413
+    assert not (tmp_path / "assets" / "memes").exists()
+
+
 def test_only_owner_can_start_fixed_admin_controls(api_client, monkeypatch):
     _, client = api_client
     monkeypatch.setattr(config, "ADMIN_OWNER_USERNAME", "owner")

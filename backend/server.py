@@ -367,8 +367,13 @@ def create_app():
                 raise HTTPException(status_code=400, detail="无效的文件长度") from None
             if too_large:
                 raise HTTPException(status_code=413, detail="表情包文件超过大小限制")
+        payload = bytearray()
+        async for chunk in request.stream():
+            if len(payload) + len(chunk) > config.MEME_UPLOAD_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="表情包文件超过大小限制")
+            payload.extend(chunk)
         try:
-            meme = services.save_uploaded_meme(await request.body())
+            meme = services.save_uploaded_meme(bytes(payload))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "meme": meme}

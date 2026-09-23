@@ -379,6 +379,40 @@ def test_meme_upload_rejects_chunked_body_over_limit(api_client, monkeypatch, tm
     assert not (tmp_path / "assets" / "memes").exists()
 
 
+def test_meme_delete_only_removes_matching_file_inside_directory(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    cleared = []
+    monkeypatch.setattr(services, "clear_home_snapshot_meme", cleared.append)
+    meme_dir = tmp_path / "assets" / "memes"
+    meme_dir.mkdir(parents=True)
+    target = meme_dir / "target.png"
+    target.write_bytes(b"image")
+    sibling = meme_dir / "sibling.png"
+    sibling.write_bytes(b"image")
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"private")
+
+    with pytest.raises(ValueError, match="无效的表情包文件名"):
+        services.delete_uploaded_meme("../outside.png")
+    with pytest.raises(ValueError, match="无效的表情包文件名"):
+        services.delete_uploaded_meme(str(outside))
+    assert outside.read_bytes() == b"private"
+    link = meme_dir / "linked.png"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pass  # Some Windows test environments do not permit symlink creation.
+    else:
+        with pytest.raises(ValueError, match="无效的表情包文件名"):
+            services.delete_uploaded_meme(link.name)
+        assert outside.read_bytes() == b"private"
+    assert services.delete_uploaded_meme("missing.png") is False
+    assert services.delete_uploaded_meme("target.png") is True
+    assert not target.exists()
+    assert sibling.exists()
+    assert cleared == ["/assets/memes/target.png"]
+
+
 def test_only_owner_can_start_fixed_admin_controls(api_client, monkeypatch):
     _, client = api_client
     monkeypatch.setattr(config, "ADMIN_OWNER_USERNAME", "owner")

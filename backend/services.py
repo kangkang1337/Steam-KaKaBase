@@ -244,17 +244,20 @@ def delete_uploaded_meme(name):
     """Delete exactly one managed meme, never a caller-controlled path."""
     if not isinstance(name, str) or not name or Path(name).name != name:
         raise ValueError("无效的表情包文件名")
-    path = config.ROOT / "assets" / "memes" / name
+    meme_dir = config.ROOT / "assets" / "memes"
     try:
-        resolved = path.resolve(strict=True)
-        meme_dir = path.parent.resolve(strict=True)
+        paths = meme_dir.iterdir()
+        for path in paths:
+            if path.name != name:
+                continue
+            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in _MEME_EXTENSIONS:
+                raise ValueError("无效的表情包文件名")
+            path.unlink()
+            clear_home_snapshot_meme(f"/assets/memes/{path.name}")
+            return True
     except FileNotFoundError:
         return False
-    if resolved.parent != meme_dir or not resolved.is_file() or resolved.suffix.lower() not in _MEME_EXTENSIONS:
-        raise ValueError("无效的表情包文件名")
-    resolved.unlink()
-    clear_home_snapshot_meme(f"/assets/memes/{name}")
-    return True
+    return False
 
 
 def ensure_daily_home_snapshot(historical_lows, memes):
